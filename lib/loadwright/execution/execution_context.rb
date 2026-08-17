@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "securerandom"
+
 require "loadwright/capability_profile"
 require "loadwright/capability_timeline"
 require "loadwright/errors"
@@ -65,18 +67,29 @@ module Loadwright
         )
       end
 
+      # Instrumentation is only possible for a server LOADWRIGHT BOOTED, because arming
+      # the collector means getting a secret into the app's process — which
+      # ServerManager does through the child's environment, and which nothing can do
+      # for a target that is already running elsewhere.
+      #
+      # So a remote target gets the External collector and honestly reduced
+      # capability. Same transport, much less confidence: the entire reason capability
+      # is a property of the collector rather than of the mode.
       def self.build_http(config:, lifecycle: nil, guard: nil, stdout: $stdout)
-        server = ServerManager.new(config: config, lifecycle: lifecycle, stdout: stdout)
-        server.start!
+        secret = config.http_target_url ? nil : SecureRandom.hex(32)
 
-        secret = mount_collector(config: config, guard: guard, stdout: stdout)
+        server = ServerManager.new(
+          config: config, lifecycle: lifecycle, stdout: stdout, collector_secret: secret
+        )
+        server.start!
 
         collector =
           if secret
             Collector::Middleware.new(config: config, base_url: server.base_url, secret: secret)
           else
-            # The degraded-remote case. Same transport, much less capability —
-            # which is the entire reason capability is not keyed off the mode.
+            stdout.puts "loadwright: targeting a server Loadwright did not boot, so the collector middleware " \
+                        "cannot be armed. Query-derived findings will be reported as unavailable rather than " \
+                        "as zero."
             Collector::External.new(config: config)
           end
 
@@ -86,24 +99,6 @@ module Loadwright
           collector: collector,
           server: server
         )
-      end
-
-      # Mounting is only possible when the app under test is THIS process (or a
-      # child that loads the gem). Against a remote target it is not, and the
-      # honest answer is External rather than a middleware that silently measures
-      # nothing.
-      def self.mount_collector(config:, guard:, stdout:)
-        return nil unless config.execution_mode == :http # capability-exempt: mount plumbing, not a capability decision
-        return nil if !CollectorMiddleware.respond_to?(:mount!) || config.http_target_url
-
-        tracker = Instrumentation::QueryTracker.new(config: config)
-        tracker.start!
-        CollectorMiddleware.mount!(tracker: tracker, guard: guard)
-      rescue SafetyError => e
-        # A refusal to mount is not a run-stopping error: the run continues with
-        # reduced, honestly-labelled capability.
-        stdout.puts "loadwright: #{e.message}"
-        nil
       end
 
       def initialize(config:, transport:, collector:, server: nil, clock: nil)

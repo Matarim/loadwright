@@ -23,11 +23,13 @@ module Loadwright
 
       attr_reader :port, :host, :pid, :base_url
 
-      def initialize(config: Loadwright.configuration, lifecycle: nil, stdout: $stdout, host: DEFAULT_HOST)
+      def initialize(config: Loadwright.configuration, lifecycle: nil, stdout: $stdout,
+                     host: DEFAULT_HOST, collector_secret: nil)
         @config = config
         @lifecycle = lifecycle
         @stdout = stdout
         @host = host
+        @collector_secret = collector_secret
         @pid = nil
         @port = nil
         @teardown_hook = nil
@@ -110,7 +112,8 @@ module Loadwright
           base_url: @base_url,
           booted_by_loadwright: !external_target?,
           pid: @pid,
-          port: @port
+          port: @port,
+          collector_armed: !@collector_secret.nil?
         }
       end
 
@@ -119,6 +122,11 @@ module Loadwright
       def spawn_server
         command = @config.http_server_command || default_command
         env = { "PORT" => @port.to_s, "RAILS_ENV" => current_environment, "RACK_ENV" => current_environment }
+
+        # The child arms its own collector middleware from this (see railtie.rb). Passed
+        # in the environment because the harness cannot reach into another process to
+        # mount it, and without it the run is transported but not instrumented.
+        env["LOADWRIGHT_COLLECTOR_SECRET"] = @collector_secret if @collector_secret
 
         @stdout.puts "loadwright: booting #{command} on #{@base_url}"
         @pid = Process.spawn(env, command, out: :out, err: :err, pgroup: true)

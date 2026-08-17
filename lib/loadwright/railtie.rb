@@ -38,6 +38,45 @@ module Loadwright
       app.middleware.use Execution::CollectorMiddleware
     end
 
+    # ARMING THE MIDDLEWARE IN A BOOTED CHILD PROCESS.
+    #
+    # In :http mode the app under test is a DIFFERENT process, so nothing in the
+    # harness can call CollectorMiddleware.mount! there — and without that the
+    # middleware stays dormant, the collector degrades to External, and every
+    # query-derived finding comes back unavailable. The run would work and say almost
+    # nothing.
+    #
+    # So ServerManager passes the per-run secret to the child in its environment, and
+    # the child arms itself here. Note what this is NOT: the secret's presence is not
+    # authorisation. mount! still asks the guard, and still refuses in a
+    # production-adjacent environment regardless of what the environment variable says
+    # — which matters, because an environment variable is exactly the kind of thing
+    # that gets left set.
+    initializer "loadwright.arm_collector" do
+      secret = ENV.fetch("LOADWRIGHT_COLLECTOR_SECRET", nil)
+
+      unless secret.to_s.empty?
+        config.after_initialize do
+          tracker = Instrumentation::QueryTracker.new(config: Loadwright.configuration)
+          tracker.start!
+
+          begin
+            Execution::CollectorMiddleware.mount!(
+              tracker: tracker,
+              guard: Safety::EnvironmentGuard.new(config: Loadwright.configuration),
+              secret: secret
+            )
+          rescue SafetyError => e
+            # Not fatal for the app under test: it simply serves requests without
+            # instrumentation, and the harness sees the missing correlation headers and
+            # degrades its own capability honestly.
+            warn "loadwright: not arming the collector middleware — #{e.message}"
+            tracker.stop!
+          end
+        end
+      end
+    end
+
     generators do
       require "generators/loadwright/install_generator"
     end

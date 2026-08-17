@@ -180,6 +180,50 @@ RSpec.describe Loadwright::Seeding::FactoryBotSeeder, :sample_app do
       expect(Post.first.id).to eq(survivor.id)
     end
 
+    # THE ROWS create_list NEVER RETURNED. A factory does not only build the record it
+    # is named after: `factory :post` creates an Author, `:with_comments` creates
+    # Comments, and callbacks create whatever they create. Tracking only create_list's
+    # return value left every associated row behind — 90 authors and 270 comments per
+    # end-to-end run, which is exactly the litter this class exists not to leave.
+    it "deletes rows the factory created indirectly, not just the ones it returned" do
+      seeder.seed!(5)
+      expect([Post.count, Author.count, Comment.count]).to eq([5, 5, 15])
+
+      seeder.cleanup!
+
+      expect([Post.count, Author.count, Comment.count]).to eq([0, 0, 0])
+    end
+
+    it "records which tables it wrote to, so the sweep is bounded and auditable" do
+      seeder.seed!(2)
+
+      expect(seeder.to_h[:tables_written]).to include("posts", "authors", "comments")
+    end
+
+    # The associated-row sweep is bounded by an id watermark taken before seeding, so it
+    # is incapable of touching a row that was already there.
+    it "leaves pre-existing associated rows alone" do
+      survivor = FactoryBot.create(:author, name: "I was here first")
+      old_comment = FactoryBot.create(:comment)
+      seeder.seed!(4)
+
+      seeder.cleanup!
+
+      expect(Author.pluck(:id)).to include(survivor.id)
+      expect(Comment.exists?(old_comment.id)).to be(true)
+      # The comment's own post survives too: it predates the watermark.
+      expect(Post.count).to eq(1)
+    end
+
+    it "does not sweep a table it never wrote to" do
+      FactoryBot.create_list(:unique_tag, 3)
+      seeder.seed!(2)
+
+      seeder.cleanup!
+
+      expect(Tag.count).to eq(3)
+    end
+
     # Asserted on the SQL actually executed, so a future well-meaning "faster
     # cleanup" change cannot quietly introduce one.
     it "issues no TRUNCATE, ever" do

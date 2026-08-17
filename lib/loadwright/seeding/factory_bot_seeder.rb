@@ -63,6 +63,8 @@ module Loadwright
         @warnings = []
         @created_ids = {}
         @models = {}
+        @inserted_tables = []
+        @watermarks = nil
         @cleanup_hook = nil
         @cleaned = false
       end
@@ -100,9 +102,12 @@ module Loadwright
 
         load_factories!
         register_cleanup
+        take_watermarks!
 
-        @config.factory_map.each do |resource, spec|
-          seed_resource(resource.to_s, normalize(spec), scale_factor)
+        watch_inserts do
+          @config.factory_map.each do |resource, spec|
+            seed_resource(resource.to_s, normalize(spec), scale_factor)
+          end
         end
 
         created_ids
@@ -143,6 +148,7 @@ module Loadwright
           strategy: @config.seed_cleanup_strategy,
           created: @created_ids.transform_values(&:length),
           total_created: total_created,
+          tables_written: @inserted_tables,
           failures: @failures.map(&:to_h),
           warnings: @warnings,
           cleaned_up: @cleaned
@@ -217,6 +223,64 @@ module Loadwright
       end
 
       def model_for(resource) = @models[resource]
+
+      # One SELECT MAX(id) per table, once per run. Cheap enough not to matter (a large
+       # app has dozens to low hundreds of tables and these are index-only lookups), and
+      # it is the only way to bound the associated-row cleanup by id rather than by
+      # table.
+      def take_watermarks!
+        return if @watermarks
+
+        @watermarks = {}
+        return unless defined?(::ActiveRecord::Base)
+
+        connection = ::ActiveRecord::Base.connection
+        connection.tables.each do |table|
+          next unless connection.columns(table).any? { |column| column.name == "id" }
+
+          @watermarks[table] = connection.select_value("SELECT MAX(id) FROM #{connection.quote_table_name(table)}").to_i
+        rescue StandardError
+          # A table without a readable integer id is simply not eligible for the
+          # associated-row sweep; the tracked-id path still covers what create_list
+          # returned.
+          next
+        end
+      rescue StandardError => e
+        @warnings << "could not take id watermarks (#{e.class}); rows created indirectly by factories " \
+                     "may be left behind"
+        @watermarks ||= {}
+      end
+
+      # Which tables actually received an INSERT. Scoped to the seeding block, so this
+      # is not the run-scoped subscriber QueryTracker owns and there is no correlation
+      # question to get wrong — nothing else is issuing queries while seeding runs.
+      def watch_inserts
+        return yield unless defined?(::ActiveSupport::Notifications)
+
+        subscriber = ::ActiveSupport::Notifications.subscribe("sql.active_record") do |*args|
+          sql = ::ActiveSupport::Notifications::Event.new(*args).payload[:sql].to_s
+          table = sql[/\AINSERT\s+INTO\s+[`"']?([A-Za-z0-9_]+)/i, 1]
+          @inserted_tables << table if table && !@inserted_tables.include?(table)
+        end
+
+        yield
+      ensure
+        ::ActiveSupport::Notifications.unsubscribe(subscriber) if subscriber
+      end
+
+      def model_for_table(table)
+        return nil unless defined?(::ActiveRecord::Base)
+
+        @models_by_table ||= {}
+        return @models_by_table[table] if @models_by_table.key?(table)
+
+        ::ActiveRecord::Base.descendants.each { |klass| klass.name } # force autoload names
+        @models_by_table[table] = ::ActiveRecord::Base.descendants.find do |klass|
+          !klass.abstract_class? && klass.table_name == table
+        end
+      rescue StandardError
+        nil
+      end
 
       def model_for_factory(factory)
         return nil unless defined?(::FactoryBot)
@@ -337,21 +401,65 @@ module Loadwright
       end
 
       def delete_created_rows!
-        return if @created_ids.empty?
+        return if @created_ids.empty? && @inserted_tables.empty?
 
         with_cleanup_timeout do
-          # Reverse insertion order so children go before parents and a foreign key
-          # cannot block the delete.
-          @created_ids.keys.reverse_each do |resource|
-            ids = @created_ids[resource]
-            next if ids.empty?
+          delete_tracked_rows!
+          delete_associated_rows!
+        end
+      end
 
-            model = model_for(resource)
-            next @warnings << "cannot clean up #{resource}: model class unknown" if model.nil?
+      def delete_tracked_rows!
+        # Reverse insertion order so children go before parents and a foreign key
+        # cannot block the delete.
+        @created_ids.keys.reverse_each do |resource|
+          ids = @created_ids[resource]
+          next if ids.empty?
 
-            deleted = delete_in_batches(model, ids)
-            @stdout.puts "loadwright: deleted #{deleted} seeded #{resource} row(s)"
-          end
+          model = model_for(resource)
+          next @warnings << "cannot clean up #{resource}: model class unknown" if model.nil?
+
+          deleted = delete_in_batches(model, ids)
+          @stdout.puts "loadwright: deleted #{deleted} seeded #{resource} row(s)"
+        end
+      end
+
+      # THE ROWS create_list NEVER RETURNED.
+      #
+      # A factory does not only build the record it is named after. `factory :post` with
+      # `author` creates an Author; a `:with_comments` trait creates Comments; callbacks,
+      # counter caches and search-index hooks create whatever they create. create_list
+      # returns the posts and nothing else — so tracking only its return value leaves
+      # every associated row behind. Against the fixture app that was 90 authors and 270
+      # comments per run, in a developer's database, from a tool whose central promise is
+      # that it leaves nothing behind.
+      #
+      # So: a watermark per table taken BEFORE seeding, plus the set of tables that
+      # actually received an INSERT while seeding ran. Cleanup deletes rows above the
+      # watermark in exactly those tables. Precise, bounded, still strictly id-based,
+      # still never a TRUNCATE, and incapable of touching a row that existed first.
+      def delete_associated_rows!
+        return if @inserted_tables.empty?
+
+        already = @created_ids.values.flatten
+        tracked_tables = @created_ids.keys.filter_map { |resource| model_for(resource)&.table_name }
+
+        # Reverse first-insert order: children are inserted after their parents, so
+        # undoing in reverse means no foreign key is ever holding a row we are deleting.
+        @inserted_tables.reverse_each do |table|
+          watermark = @watermarks[table]
+          next if watermark.nil?
+
+          model = model_for_table(table)
+          next if model.nil?
+
+          scope = model.where(model.arel_table[:id].gt(watermark))
+          scope = scope.where.not(id: already) if tracked_tables.include?(table) && already.any?
+
+          deleted = scope.delete_all
+          @stdout.puts "loadwright: deleted #{deleted} associated #{table} row(s)" if deleted.positive?
+        rescue StandardError => e
+          @warnings << "could not clean up associated rows in #{table}: #{e.class}: #{e.message}"
         end
       end
 

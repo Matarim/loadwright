@@ -32,6 +32,13 @@ require "logger"
 require "active_record/railtie"
 require "action_controller/railtie"
 
+# A host app loads the gem through Bundler.require from its :development, :test
+# group. This fixture has no Gemfile of its own, so it requires it directly — and it
+# must, because the railtie is what mounts the identity endpoint. Without it, the
+# :http health probe 404s and Loadwright waits out the whole http_boot_timeout before
+# reporting a boot failure. (That is exactly how this was found.)
+require "loadwright"
+
 module SampleApp
   class Application < ::Rails::Application
     config.load_defaults 7.0 if config.respond_to?(:load_defaults)

@@ -63,6 +63,22 @@ module Loadwright
 
       def key = [path, verb]
 
+      # The resource this endpoint is about, from the last static path segment.
+      # `/api/v1/posts` and `/api/v1/posts/{id}` are both "post".
+      #
+      # Used to ask the seeder how many rows exist FOR THIS ENDPOINT. Passing a global
+      # seeded count instead produces a specific false positive: an endpoint whose
+      # resource was never in factory_map returns an empty collection quite correctly,
+      # and gets reported as "data was seeded but nothing came back — your scope is
+      # wrong". A false positive of that shape is worse than no signal, because the
+      # developer goes looking for a scoping bug that does not exist.
+      def resource_name
+        segment = path.split("/").reject { |part| part.empty? || part.start_with?("{") }.last
+        return nil if segment.nil?
+
+        singularize(segment)
+      end
+
       def to_s = "#{verb.to_s.upcase} #{path}"
 
       def mutating? = !SAFE_VERBS.include?(verb)
@@ -136,6 +152,19 @@ module Loadwright
       def deep_merge_recorded(other)
         (recorded_path_values.keys | other.recorded_path_values.keys).to_h do |param|
           [param, (Array(recorded_path_values[param]) | Array(other.recorded_path_values[param]))]
+        end
+      end
+
+      # Deliberately naive, and deliberately not ActiveSupport#singularize: that applies
+      # the host app's inflections, which are right for its class names and wrong for a
+      # URL segment. PathParamResolver uses the same rule, and factory_map is the escape
+      # hatch when a URL segment and a factory name genuinely diverge.
+      def singularize(word)
+        case word
+        when /ies\z/ then word.sub(/ies\z/, "y")
+        when /(ss|sh|ch|x|z)es\z/ then word.sub(/es\z/, "")
+        when /s\z/ then word.sub(/s\z/, "")
+        else word
         end
       end
 

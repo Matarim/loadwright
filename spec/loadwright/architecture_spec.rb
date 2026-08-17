@@ -19,6 +19,10 @@ RSpec.describe "architecture invariants" do
       File.readlines(path).each_with_index.filter_map do |line, index|
         next unless line.include?("config.execution_mode")
         next if line.include?(EXEMPTION_MARKER)
+        # Comment lines are skipped: these files STATE the rule in a comment, and the
+        # statement of a prohibition is not a violation of it. Without this the check
+        # punishes documenting the invariant, which is the opposite of what it wants.
+        next if line.strip.start_with?("#")
 
         "#{path.sub("#{SpecPaths::ROOT}/", '')}:#{index + 1}: #{line.strip}"
       end
@@ -63,21 +67,35 @@ RSpec.describe "architecture invariants" do
   end
 
   describe "the contention guard" do
-    # resource-contention.md: Loadwright observes contention and retreats from
-    # it. It never tries to resolve it. This asserts on source text at M0; once
-    # the guard is implemented the real assertion is on SQL actually executed,
-    # so a future well-meaning change cannot quietly introduce one.
-    it "never mentions terminating, cancelling or killing a session" do
-      forbidden = /pg_terminate_backend|pg_cancel_backend|UNLOCK\s+TABLES|\bKILL\s+\d/i
+    # resource-contention.md: Loadwright observes contention and retreats from it. It
+    # never tries to resolve it.
+    #
+    # This is the whole-library sweep. It checks CODE, with comment lines and the
+    # guard's own FORBIDDEN_STATEMENTS pattern removed — the earlier version exempted
+    # any file containing the phrase "ABSOLUTE RULE", which meant a file could opt
+    # itself out of the check by describing the rule it was breaking.
+    #
+    # The complementary assertion, on the SQL the guard ACTUALLY EXECUTED at runtime,
+    # lives in resource_guard_spec.rb. Both are wanted: this one catches a statement
+    # added to a code path no spec happens to drive.
+    it "never issues a statement that terminates, cancels or kills a session" do
+      forbidden = /pg_terminate_backend|pg_cancel_backend|UNLOCK\s+TABLES|\bKILL\s+(?:\d|CONNECTION|QUERY)/i
 
-      offenders = Dir[File.join(SpecPaths::LIB, "**", "*.rb")].select do |path|
-        source = File.read(path)
-        # The prohibition is stated in comments in the guard itself; those are
-        # the rule, not a violation of it.
-        source.match?(forbidden) && !source.match?(/ABSOLUTE RULE|never terminate/i)
+      offenders = Dir[File.join(SpecPaths::LIB, "**", "*.rb")].filter_map do |path|
+        code = File.readlines(path).reject do |line|
+          stripped = line.strip
+          stripped.start_with?("#") ||
+            # The guard names these in order to assert on them; the definition of the
+            # prohibition is not a violation of it.
+            stripped.start_with?("FORBIDDEN_STATEMENTS")
+        end.join
+
+        path.sub("#{SpecPaths::ROOT}/", "") if code.match?(forbidden)
       end
 
-      expect(offenders).to be_empty
+      expect(offenders).to be_empty,
+                           "these files contain a statement that resolves contention rather than " \
+                           "retreating from it: #{offenders.join(', ')}"
     end
   end
 end
