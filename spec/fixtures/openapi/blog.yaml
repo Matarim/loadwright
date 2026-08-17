@@ -1,0 +1,101 @@
+openapi: 3.0.3
+info:
+  title: Blog API
+  version: "1.0"
+paths:
+  /api/v1/posts:
+    get:
+      operationId: listPosts
+      summary: List posts
+      parameters:
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 25
+        - name: published
+          in: query
+          required: true
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Post'
+    post:
+      operationId: createPost
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostInput'
+            example:
+              title: A real example
+              body: from the document
+      responses:
+        '201':
+          description: created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+  /api/v1/posts/{id}/comments:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      operationId: listComments
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+    post:
+      operationId: createComment
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body:
+                  type: string
+                rating:
+                  type: integer
+      responses:
+        '201':
+          description: created
+components:
+  schemas:
+    Post:
+      type: object
+      required: [id, title]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        comment_count:
+          type: integer
+    PostInput:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+        body:
+          type: string

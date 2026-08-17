@@ -1,0 +1,11 @@
+/.bundle/
+/pkg/
+/tmp/
+/spec/examples.txt
+/Gemfile.lock
+.DS_Store
+.idea/
+.vscode/
+
+# Loadwright's own output, when running it against examples/sample_app.
+/tmp/loadwright/

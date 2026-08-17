@@ -1,0 +1,4009 @@
+{
+  "metadata": {
+    "loadwright_version": "0.0.1",
+    "started_at": "2026-08-26T16:58:30.427368-04:00",
+    "finished_at": "2026-08-26T16:58:32.396547-04:00",
+    "duration_seconds": 1.97,
+    "git_sha": "428c452",
+    "execution_mode": "in_process",
+    "transport": "in_process",
+    "collector": "direct",
+    "capabilities": {
+      "degraded": false,
+      "lost_signals": [],
+      "epochs": [
+        {
+          "index": 0,
+          "cause": null,
+          "started_at": "2026-08-26 16:58:30 -0400",
+          "capabilities": {
+            "n_plus_one_pattern_match": {
+              "status": "available",
+              "reason": null
+            },
+            "n_plus_one_slope": {
+              "status": "available",
+              "reason": null
+            },
+            "queries_per_returned_record": {
+              "status": "available",
+              "reason": null
+            },
+            "over_fetch_hint": {
+              "status": "available",
+              "reason": null
+            },
+            "payload_growth_pagination": {
+              "status": "available",
+              "reason": null
+            },
+            "response_validity_gate": {
+              "status": "available",
+              "reason": null
+            },
+            "time_breakdown_db_view_gc": {
+              "status": "available",
+              "reason": null
+            },
+            "explain_index_analysis": {
+              "status": "available",
+              "reason": null
+            },
+            "cold_vs_warm_cache": {
+              "status": "available",
+              "reason": null
+            },
+            "latency_under_concurrency": {
+              "status": "unavailable",
+              "reason": "in-process execution has no server thread pool; use execution_mode = :http"
+            },
+            "connection_pool_exhaustion": {
+              "status": "unavailable",
+              "reason": "in-process execution has no server thread pool; use execution_mode = :http"
+            },
+            "pool_vs_threads_static_check": {
+              "status": "partial",
+              "reason": "static config comparison only; no observed pool contention in :in_process"
+            },
+            "true_client_latency": {
+              "status": "unavailable",
+              "reason": "in-process execution has no server thread pool; use execution_mode = :http"
+            },
+            "clean_memory_attribution": {
+              "status": "unavailable",
+              "reason": "harness shares the app's process; use execution_mode = :http"
+            }
+          }
+        }
+      ]
+    },
+    "sweeps": {
+      "seed_scale": {
+        "varies": "scale_factors",
+        "holds_fixed": "the app's own default page size (no page-size parameter is sent)",
+        "observed_page_size": {
+          "GET /api/v1/authors": 25,
+          "GET /api/v1/posts": 90,
+          "GET /api/v1/posts/{post_id}/comments": 3,
+          "GET /api/v1/tags": 0
+        },
+        "scale_factors": [
+          30,
+          90
+        ]
+      },
+      "page_size": {
+        "varies": "page_size_sweep",
+        "holds_fixed": "seed scale, and concurrency at 1",
+        "page_size_sweep": [
+          5,
+          25,
+          50
+        ],
+        "concurrency": 1
+      }
+    },
+    "config_fingerprint": "42543eec23b52c2d",
+    "config": {
+      "execution_mode": {
+        "value": "in_process",
+        "from": "explicit"
+      },
+      "allow_in_process_threading": {
+        "value": false,
+        "from": "default"
+      },
+      "http_server_command": {
+        "value": null,
+        "from": "default"
+      },
+      "http_boot_timeout": {
+        "value": 30,
+        "from": "default"
+      },
+      "http_target_url": {
+        "value": null,
+        "from": "default"
+      },
+      "allow_remote_http_target": {
+        "value": false,
+        "from": "default"
+      },
+      "enabled_environments": {
+        "value": [
+          "development",
+          "test"
+        ],
+        "from": "default"
+      },
+      "production_hostname_patterns": {
+        "value": [
+          "(?-mix:\\.rds\\.amazonaws\\.com\\z)",
+          "(?-mix:^prod-)",
+          "(?-mix:\\.internal\\z)"
+        ],
+        "from": "default"
+      },
+      "allow_production": {
+        "value": false,
+        "from": "default"
+      },
+      "confirmation_phrase": {
+        "value": "SampleApp",
+        "from": "default"
+      },
+      "allow_mutating_requests": {
+        "value": false,
+        "from": "default"
+      },
+      "max_error_rate_before_abort": {
+        "value": 0.2,
+        "from": "default"
+      },
+      "long_run_confirmation_threshold_minutes": {
+        "value": 10,
+        "from": "default"
+      },
+      "suppress_mail_delivery": {
+        "value": true,
+        "from": "default"
+      },
+      "suppress_background_jobs": {
+        "value": true,
+        "from": "default"
+      },
+      "block_outbound_http": {
+        "value": true,
+        "from": "default"
+      },
+      "outbound_http_allowlist": {
+        "value": [
+          "localhost",
+          "127.0.0.1"
+        ],
+        "from": "default"
+      },
+      "abort_if_containment_unavailable": {
+        "value": true,
+        "from": "default"
+      },
+      "require_successful_response": {
+        "value": true,
+        "from": "default"
+      },
+      "require_schema_valid_response": {
+        "value": true,
+        "from": "default"
+      },
+      "warn_on_empty_response_with_seeded_data": {
+        "value": true,
+        "from": "default"
+      },
+      "page_size_parameters": {
+        "value": [
+          "per_page",
+          "limit",
+          "page[size]",
+          "pageSize"
+        ],
+        "from": "default"
+      },
+      "page_size_sweep": {
+        "value": [
+          5,
+          25,
+          50
+        ],
+        "from": "explicit"
+      },
+      "detect_overfetching": {
+        "value": true,
+        "from": "default"
+      },
+      "max_response_bytes_warning": {
+        "value": 1048576,
+        "from": "default"
+      },
+      "payload_growth_correlation_threshold": {
+        "value": 0.8,
+        "from": "default"
+      },
+      "serializer_attribution": {
+        "value": true,
+        "from": "default"
+      },
+      "contention_profile": {
+        "value": "balanced",
+        "from": "default"
+      },
+      "lock_timeout_ms": {
+        "value": 3000,
+        "from": "default"
+      },
+      "statement_timeout_ms": {
+        "value": 10000,
+        "from": "default"
+      },
+      "abort_on_unhealthy_baseline": {
+        "value": true,
+        "from": "default"
+      },
+      "health_poll_interval_ms": {
+        "value": 500,
+        "from": "default"
+      },
+      "latency_degradation_multiplier": {
+        "value": 4.0,
+        "from": "default"
+      },
+      "degradation_windows_before_backoff": {
+        "value": 3,
+        "from": "default"
+      },
+      "backoff_initial_delay_ms": {
+        "value": 250,
+        "from": "default"
+      },
+      "backoff_multiplier": {
+        "value": 2.0,
+        "from": "default"
+      },
+      "backoff_max_delay_ms": {
+        "value": 15000,
+        "from": "default"
+      },
+      "backoff_jitter": {
+        "value": 0.3,
+        "from": "default"
+      },
+      "max_backoff_attempts": {
+        "value": 4,
+        "from": "default"
+      },
+      "post_quarantine_cooldown_ms": {
+        "value": 5000,
+        "from": "default"
+      },
+      "max_consecutive_quarantines": {
+        "value": 3,
+        "from": "default"
+      },
+      "max_health_check_retries": {
+        "value": 3,
+        "from": "default"
+      },
+      "openapi_spec_paths": {
+        "value": [
+          "/Volumes/MacMiniExternalHD/Users/thepoorman/development/loadwright/examples/sample_app/swagger/v1/swagger.yaml"
+        ],
+        "from": "default"
+      },
+      "integration_spec_paths": {
+        "value": [
+          "/Volumes/MacMiniExternalHD/Users/thepoorman/development/loadwright/examples/sample_app/spec/requests",
+          "/Volumes/MacMiniExternalHD/Users/thepoorman/development/loadwright/examples/sample_app/spec/integration"
+        ],
+        "from": "default"
+      },
+      "route_discovery": {
+        "value": true,
+        "from": "default"
+      },
+      "excluded_paths": {
+        "value": [
+          "(?-mix:^\\/rails\\/)",
+          "(?-mix:^\\/admin\\/)",
+          "(?-mix:^\\/health)"
+        ],
+        "from": "default"
+      },
+      "included_paths": {
+        "value": null,
+        "from": "default"
+      },
+      "path_param_overrides": {
+        "value": {},
+        "from": "default"
+      },
+      "graphql_path": {
+        "value": null,
+        "from": "default"
+      },
+      "graphql_operations": {
+        "value": [],
+        "from": "default"
+      },
+      "graphql_document_paths": {
+        "value": [],
+        "from": "default"
+      },
+      "graphql_page_size_variables": {
+        "value": [
+          "first",
+          "last",
+          "pageSize",
+          "limit"
+        ],
+        "from": "default"
+      },
+      "auth_strategy": {
+        "value": "bearer_token",
+        "from": "default"
+      },
+      "auth_token_provider": "[FILTERED]",
+      "auth_login": {
+        "value": null,
+        "from": "default"
+      },
+      "test_identity_pool_size": {
+        "value": 5,
+        "from": "default"
+      },
+      "default_headers": {
+        "value": {
+          "Accept": "application/json"
+        },
+        "from": "default"
+      },
+      "factory_bot_enabled": {
+        "value": true,
+        "from": "default"
+      },
+      "factory_map": {
+        "value": {
+          "post": {
+            "factory": "post",
+            "trait": "with_comments"
+          }
+        },
+        "from": "explicit"
+      },
+      "scale_factors": {
+        "value": [
+          30,
+          90
+        ],
+        "from": "explicit"
+      },
+      "seed_batch_size": {
+        "value": 50,
+        "from": "default"
+      },
+      "seed_cleanup_strategy": {
+        "value": "delete_created_rows",
+        "from": "default"
+      },
+      "cleanup_request_created_rows": {
+        "value": true,
+        "from": "default"
+      },
+      "unique_field_generator": {
+        "value": null,
+        "from": "default"
+      },
+      "concurrency_levels": {
+        "value": [
+          1
+        ],
+        "from": "explicit"
+      },
+      "requests_per_endpoint_per_level": {
+        "value": 20,
+        "from": "explicit"
+      },
+      "request_timeout": {
+        "value": 5,
+        "from": "default"
+      },
+      "warmup_requests": {
+        "value": 1,
+        "from": "explicit"
+      },
+      "detect_n_plus_one": {
+        "value": true,
+        "from": "default"
+      },
+      "track_memory_allocations": {
+        "value": true,
+        "from": "default"
+      },
+      "track_connection_pool": {
+        "value": true,
+        "from": "default"
+      },
+      "disable_query_cache_during_run": {
+        "value": true,
+        "from": "default"
+      },
+      "track_time_breakdown": {
+        "value": true,
+        "from": "default"
+      },
+      "track_gc_stats": {
+        "value": true,
+        "from": "default"
+      },
+      "run_explain_on_slow_queries": {
+        "value": true,
+        "from": "default"
+      },
+      "explain_top_n_queries": {
+        "value": 5,
+        "from": "default"
+      },
+      "seq_scan_row_threshold": {
+        "value": 10000,
+        "from": "default"
+      },
+      "measure_cold_cache": {
+        "value": true,
+        "from": "default"
+      },
+      "track_pg_stat_statements": {
+        "value": true,
+        "from": "default"
+      },
+      "slow_query_threshold_ms": {
+        "value": 0,
+        "from": "explicit"
+      },
+      "min_samples_for_percentiles": {
+        "value": {
+          "p50": 20,
+          "p95": 100,
+          "p99": 500
+        },
+        "from": "default"
+      },
+      "check_pool_vs_server_threads": {
+        "value": true,
+        "from": "default"
+      },
+      "jobs_enqueued_warning_threshold": {
+        "value": 10,
+        "from": "default"
+      },
+      "run_history_dir": {
+        "value": "/Volumes/MacMiniExternalHD/Users/thepoorman/development/loadwright/examples/sample_app/tmp/loadwright/runs",
+        "from": "default"
+      },
+      "run_history_limit": {
+        "value": 50,
+        "from": "default"
+      },
+      "regression_threshold_pct": {
+        "value": 20,
+        "from": "default"
+      },
+      "fail_on_regression": {
+        "value": false,
+        "from": "default"
+      },
+      "honor_rails_filter_parameters": {
+        "value": true,
+        "from": "default"
+      },
+      "redact_header_patterns": {
+        "value": [
+          "(?i-mx:authorization)",
+          "(?i-mx:cookie)",
+          "(?i-mx:api[-_]?key)",
+          "(?i-mx:auth)",
+          "(?i-mx:token)",
+          "(?i-mx:secret)",
+          "(?i-mx:credential)",
+          "(?i-mx:session)",
+          "(?i-mx:signature)",
+          "(?i-mx:\\Ax-.*-key\\z)"
+        ],
+        "from": "default"
+      },
+      "redact_sql_bind_values": {
+        "value": true,
+        "from": "default"
+      },
+      "include_response_bodies": {
+        "value": false,
+        "from": "default"
+      },
+      "redact_additional_patterns": {
+        "value": [],
+        "from": "default"
+      },
+      "fail_on_n_plus_one": {
+        "value": false,
+        "from": "default"
+      },
+      "p95_latency_budget_ms": {
+        "value": {
+          "default": 500
+        },
+        "from": "default"
+      },
+      "report_formats": {
+        "value": [
+          "html",
+          "markdown",
+          "json"
+        ],
+        "from": "explicit"
+      },
+      "report_output_dir": {
+        "value": "/var/folders/pg/1qrltmxs1w1fmqj26h7_cfpm0000gp/T/cli-e2e-20260826-74192-xc99t9/reports-20260826-74192-y4tvx4",
+        "from": "explicit"
+      },
+      "report_filename_pattern": {
+        "value": "%Y%m%d-%H%M%S-report",
+        "from": "default"
+      },
+      "write_partial_report_on_abort": {
+        "value": true,
+        "from": "default"
+      },
+      "slack_webhook_url": {
+        "value": null,
+        "from": "default"
+      }
+    },
+    "safety": {
+      "approved": true,
+      "environment": "test",
+      "environment_allowlisted": true,
+      "production_adjacent": false,
+      "adjacency_reasons": [],
+      "heuristic_matches": [],
+      "platform_signals": [],
+      "remote_target": null,
+      "dry_run": false,
+      "mutating_requests_allowed": false,
+      "production_opt_in_used": false,
+      "conditions_cleared": []
+    },
+    "containment": {
+      "measures": [
+        {
+          "name": "mail",
+          "requested": true,
+          "enforced": true,
+          "detail": "ActionMailer::Base.delivery_method forced to :test (was :smtp)"
+        },
+        {
+          "name": "background_jobs",
+          "requested": true,
+          "enforced": true,
+          "detail": "ActiveJob queue adapter forced to :test (was ActiveJob::QueueAdapters::TestAdapter)"
+        },
+        {
+          "name": "outbound_http",
+          "requested": true,
+          "enforced": true,
+          "detail": "outbound HTTP blocked except localhost, 127.0.0.1"
+        }
+      ],
+      "all_requested_enforced": true
+    },
+    "containment_disclosure": {
+      "skewed": true,
+      "headline": "Contained run: these figures are lower than production reality.",
+      "summary": "These latency figures are lower than production reality: mail was captured rather than delivered, so SMTP time is absent from these figures. background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead. outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`.",
+      "notes": [
+        {
+          "measure": "mail",
+          "enforced": true,
+          "note": "mail was captured rather than delivered, so SMTP time is absent from these figures."
+        },
+        {
+          "measure": "background_jobs",
+          "enforced": true,
+          "note": "background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead."
+        },
+        {
+          "measure": "outbound_http",
+          "enforced": true,
+          "note": "outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`."
+        }
+      ]
+    },
+    "discovery": {
+      "endpoint_count": 9,
+      "by_source": {
+        "route": 13
+      },
+      "skipped": [
+        {
+          "endpoint": "POST /api/v1/posts",
+          "reason": "no_example_available"
+        },
+        {
+          "endpoint": "POST /api/v1/login",
+          "reason": "no_example_available"
+        },
+        {
+          "endpoint": "POST /api/v1/graphql",
+          "reason": "no_example_available"
+        },
+        {
+          "endpoint": "POST /api/v1/gql",
+          "reason": "no_example_available"
+        }
+      ]
+    },
+    "seeding": {
+      "strategy": "delete_created_rows",
+      "created": {
+        "post": 90
+      },
+      "total_created": 90,
+      "tables_written": [
+        "authors",
+        "posts",
+        "comments"
+      ],
+      "tables_written_by_requests": [],
+      "failures": [],
+      "warnings": [],
+      "cleaned_up": false
+    },
+    "identities": {
+      "strategy": "bearer_token",
+      "identities": 0,
+      "configured": false,
+      "warnings": []
+    },
+    "circuit_breaker": {
+      "threshold": 0.2,
+      "quarantined_endpoints": [],
+      "observations": 700,
+      "errors": 0,
+      "error_rate": 0.0,
+      "contention_events": 0,
+      "contention_excluded_from_error_rate": true,
+      "tripped": false,
+      "trip_reason": null
+    },
+    "contention": {
+      "baseline": null,
+      "poller": {
+        "available": true,
+        "out_of_pool": true,
+        "marker": "loadwright-858e591b",
+        "interval_ms": 500,
+        "samples_taken": 1,
+        "latest": {
+          "at": "2026-08-26 16:58:30 -0400",
+          "adapter": "SQLite",
+          "healthy": true,
+          "contended": false,
+          "pool": {
+            "size": 5,
+            "busy": 0,
+            "waiting": 0
+          },
+          "blocking_sessions": [],
+          "degraded_reason": "SQLite has no lock introspection Loadwright can read; contention detection is limited to connection-pool pressure, request-path exceptions, and latency degradation"
+        }
+      },
+      "events": [],
+      "event_count": 0,
+      "findings": [],
+      "quarantined": [],
+      "consecutive_quarantines": 0,
+      "backoff_budget": {
+        "delays_ms": [
+          250,
+          500,
+          1000,
+          2000
+        ],
+        "per_contention_event_ms": 3750,
+        "post_quarantine_cooldown_ms": 5000,
+        "worst_case_before_abort_ms": 26250,
+        "jitter": 0.3,
+        "worst_case_with_jitter_ms": 34125
+      },
+      "endpoint_baselines_ms": {
+        "GET /api/v1/admin/stats": 23.293000042438507,
+        "GET /api/v1/authors": 8.340999960899353,
+        "GET /api/v1/me": 1.1950000524520874,
+        "GET /api/v1/posts": 4.912000000476837,
+        "GET /api/v1/posts/{id}": 0.9580000042915344,
+        "GET /api/v1/posts/{post_id}/comments": 1.159999966621399,
+        "GET /api/v1/tags": 2.6709999442100525
+      }
+    },
+    "pool_sizing": {
+      "pool_size": {
+        "value": 5
+      },
+      "server_threads": {
+        "unavailable": "no http_server_command is configured, so the server's threads cannot be read. In :in_process mode there is no server; set execution_mode = :http to check this."
+      },
+      "server_workers": {
+        "unavailable": "no http_server_command is configured, so the server's workers cannot be read. In :in_process mode there is no server; set execution_mode = :http to check this."
+      },
+      "max_concurrent_demand": {
+        "unavailable": "no http_server_command is configured, so the server's threads cannot be read. In :in_process mode there is no server; set execution_mode = :http to check this."
+      },
+      "peak_busy": {
+        "unavailable": "in-process execution has no server thread pool; use execution_mode = :http"
+      },
+      "peak_waiting": {
+        "unavailable": "in-process execution has no server thread pool; use execution_mode = :http"
+      },
+      "findings": []
+    },
+    "aborted": false,
+    "warnings": [
+      "no OpenAPI document at the default location /Volumes/MacMiniExternalHD/Users/thepoorman/development/loadwright/examples/sample_app/swagger/v1/swagger.yaml; skipping OpenAPI discovery"
+    ],
+    "run_id": "20260826-165832-8d35ae",
+    "git": {
+      "sha": "428c452",
+      "branch": "main",
+      "dirty": false
+    },
+    "machine": {
+      "cpu_count": 14,
+      "memory_bytes": 68719476736,
+      "os": "darwin24",
+      "ruby_version": "4.0.1",
+      "database": "SQLite 3.53.2"
+    }
+  },
+  "summary": {
+    "endpoints": 9,
+    "healthy": 3,
+    "has_findings": 2,
+    "inconclusive": 4,
+    "quarantined": 0,
+    "externally_blocked": 0,
+    "skipped": 0,
+    "findings": 4
+  },
+  "endpoints": [
+    {
+      "endpoint": "GET /api/v1/authors/by-slug/{slug}",
+      "state": "inconclusive",
+      "reason": "path_params_unresolved",
+      "explanation": "path parameters could not be resolved to real records (could not resolve {slug})",
+      "findings": [],
+      "capability_epoch": 0,
+      "coverage": {
+        "complete": true,
+        "covered": [],
+        "uncovered": [],
+        "unanswered": [],
+        "not_applicable": [
+          "n_plus_one",
+          "missing_pagination",
+          "over_fetch",
+          "index_scan",
+          "latency"
+        ],
+        "description": "not checked: N+1, pagination, over-fetch, index analysis, latency percentiles",
+        "detectors": [
+          {
+            "detector": "pattern_match",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "slope",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "payload_growth",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "query_response_comparison",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "explain",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "percentiles",
+            "state": "not_applicable"
+          }
+        ]
+      },
+      "latency": [
+        {
+          "label": "seed_scale scale=30 page=default concurrency=1",
+          "sample_count": 0,
+          "coefficient_of_variation": {
+            "unavailable": "dispersion needs at least 3 samples; have 0"
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "unavailable": "insufficient samples for p50 (need 20, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 0); raise requests_per_endpoint_per_level"
+            }
+          }
+        },
+        {
+          "label": "seed_scale scale=90 page=default concurrency=1",
+          "sample_count": 0,
+          "coefficient_of_variation": {
+            "unavailable": "dispersion needs at least 3 samples; have 0"
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "unavailable": "insufficient samples for p50 (need 20, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 0); raise requests_per_endpoint_per_level"
+            }
+          }
+        },
+        {
+          "label": "page_size scale=90 page=5 concurrency=1",
+          "sample_count": 0,
+          "coefficient_of_variation": {
+            "unavailable": "dispersion needs at least 3 samples; have 0"
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "unavailable": "insufficient samples for p50 (need 20, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 0); raise requests_per_endpoint_per_level"
+            }
+          }
+        },
+        {
+          "label": "page_size scale=90 page=25 concurrency=1",
+          "sample_count": 0,
+          "coefficient_of_variation": {
+            "unavailable": "dispersion needs at least 3 samples; have 0"
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "unavailable": "insufficient samples for p50 (need 20, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 0); raise requests_per_endpoint_per_level"
+            }
+          }
+        },
+        {
+          "label": "page_size scale=90 page=50 concurrency=1",
+          "sample_count": 0,
+          "coefficient_of_variation": {
+            "unavailable": "dispersion needs at least 3 samples; have 0"
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "unavailable": "insufficient samples for p50 (need 20, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 0); raise requests_per_endpoint_per_level"
+            }
+          }
+        }
+      ],
+      "explain": {
+        "queries_explained": 0,
+        "queries_failed": 0,
+        "statements_executed": 0,
+        "findings": [],
+        "detector_state": "unavailable",
+        "detector_reason": "no query data was collected for this endpoint, so there were no statements to explain (see the collector in run metadata)"
+      }
+    },
+    {
+      "endpoint": "GET /api/v1/authors/{id}",
+      "state": "inconclusive",
+      "reason": "path_params_unresolved",
+      "explanation": "path parameters could not be resolved to real records (could not resolve {id})",
+      "findings": [],
+      "capability_epoch": 0,
+      "coverage": {
+        "complete": true,
+        "covered": [],
+        "uncovered": [],
+        "unanswered": [],
+        "not_applicable": [
+          "n_plus_one",
+          "missing_pagination",
+          "over_fetch",
+          "index_scan",
+          "latency"
+        ],
+        "description": "not checked: N+1, pagination, over-fetch, index analysis, latency percentiles",
+        "detectors": [
+          {
+            "detector": "pattern_match",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "slope",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "payload_growth",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "query_response_comparison",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "explain",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "percentiles",
+            "state": "not_applicable"
+          }
+        ]
+      },
+      "latency": [
+        {
+          "label": "seed_scale scale=30 page=default concurrency=1",
+          "sample_count": 0,
+          "coefficient_of_variation": {
+            "unavailable": "dispersion needs at least 3 samples; have 0"
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "unavailable": "insufficient samples for p50 (need 20, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 0); raise requests_per_endpoint_per_level"
+            }
+          }
+        },
+        {
+          "label": "seed_scale scale=90 page=default concurrency=1",
+          "sample_count": 0,
+          "coefficient_of_variation": {
+            "unavailable": "dispersion needs at least 3 samples; have 0"
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "unavailable": "insufficient samples for p50 (need 20, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 0); raise requests_per_endpoint_per_level"
+            }
+          }
+        },
+        {
+          "label": "page_size scale=90 page=5 concurrency=1",
+          "sample_count": 0,
+          "coefficient_of_variation": {
+            "unavailable": "dispersion needs at least 3 samples; have 0"
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "unavailable": "insufficient samples for p50 (need 20, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 0); raise requests_per_endpoint_per_level"
+            }
+          }
+        },
+        {
+          "label": "page_size scale=90 page=25 concurrency=1",
+          "sample_count": 0,
+          "coefficient_of_variation": {
+            "unavailable": "dispersion needs at least 3 samples; have 0"
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "unavailable": "insufficient samples for p50 (need 20, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 0); raise requests_per_endpoint_per_level"
+            }
+          }
+        },
+        {
+          "label": "page_size scale=90 page=50 concurrency=1",
+          "sample_count": 0,
+          "coefficient_of_variation": {
+            "unavailable": "dispersion needs at least 3 samples; have 0"
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "unavailable": "insufficient samples for p50 (need 20, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 0); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 0); raise requests_per_endpoint_per_level"
+            }
+          }
+        }
+      ],
+      "explain": {
+        "queries_explained": 0,
+        "queries_failed": 0,
+        "statements_executed": 0,
+        "findings": [],
+        "detector_state": "unavailable",
+        "detector_reason": "no query data was collected for this endpoint, so there were no statements to explain (see the collector in run metadata)"
+      }
+    },
+    {
+      "endpoint": "GET /api/v1/admin/stats",
+      "state": "inconclusive",
+      "reason": "unsuccessful_status",
+      "explanation": "endpoint returned an error status; an error path was measured, not the endpoint (returned HTTP 403 (expected 200). An error path was measured, not the endpoint. A uniform 401/403 across endpoints usually means auth_token_provider is unset or returning an invalid token. If it is every endpoint including public ones, check config.hosts too: Rails' host guard answers 403 before the request reaches your app.)",
+      "findings": [],
+      "capability_epoch": 0,
+      "coverage": {
+        "complete": true,
+        "covered": [],
+        "uncovered": [],
+        "unanswered": [],
+        "not_applicable": [
+          "n_plus_one",
+          "missing_pagination",
+          "over_fetch",
+          "index_scan",
+          "latency"
+        ],
+        "description": "not checked: N+1, pagination, over-fetch, index analysis, latency percentiles",
+        "detectors": [
+          {
+            "detector": "pattern_match",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "slope",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "payload_growth",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "query_response_comparison",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "explain",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "percentiles",
+            "state": "not_applicable"
+          }
+        ]
+      },
+      "latency": [
+        {
+          "label": "seed_scale scale=30 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.391,
+          "median_ms": 0.414,
+          "max_ms": 0.736,
+          "mean_ms": 0.434,
+          "stddev_ms": 0.074,
+          "coefficient_of_variation": {
+            "value": 0.17012213615427318
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.413500040769577
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "seed_scale scale=90 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.406,
+          "median_ms": 0.415,
+          "max_ms": 0.48,
+          "mean_ms": 0.42,
+          "stddev_ms": 0.018,
+          "coefficient_of_variation": {
+            "value": 0.04251689310798497
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.41499999165534973
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=5 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.41,
+          "median_ms": 0.427,
+          "max_ms": 0.475,
+          "mean_ms": 0.43,
+          "stddev_ms": 0.015,
+          "coefficient_of_variation": {
+            "value": 0.034412936575909624
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.4274999797344208
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=25 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.412,
+          "median_ms": 0.428,
+          "max_ms": 0.442,
+          "mean_ms": 0.427,
+          "stddev_ms": 0.01,
+          "coefficient_of_variation": {
+            "value": 0.023217753023823066
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.4280000329017639
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=50 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.409,
+          "median_ms": 0.423,
+          "max_ms": 1.054,
+          "mean_ms": 0.463,
+          "stddev_ms": 0.145,
+          "coefficient_of_variation": {
+            "value": 0.3136682619127308
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.4230000078678131
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        }
+      ],
+      "explain": {
+        "adapter": "SQLite",
+        "queries_explained": 0,
+        "queries_failed": 0,
+        "statements_executed": 0,
+        "findings": [],
+        "detector_state": "available"
+      },
+      "time_breakdown": {
+        "total_ms": 0.422,
+        "db_ms": 0.0,
+        "view_ms": 0.013,
+        "other_ms": 0.409,
+        "dominant": "other",
+        "containment": {
+          "skewed": true,
+          "headline": "Contained run: these figures are lower than production reality.",
+          "summary": "These latency figures are lower than production reality: mail was captured rather than delivered, so SMTP time is absent from these figures. background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead. outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`.",
+          "notes": [
+            {
+              "measure": "mail",
+              "enforced": true,
+              "note": "mail was captured rather than delivered, so SMTP time is absent from these figures."
+            },
+            {
+              "measure": "background_jobs",
+              "enforced": true,
+              "note": "background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead."
+            },
+            {
+              "measure": "outbound_http",
+              "enforced": true,
+              "note": "outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`."
+            }
+          ]
+        }
+      },
+      "cold_warm": {
+        "label": "application-cache cold",
+        "cold_ms": 0.509,
+        "warm_ms": 0.413,
+        "delta_ms": 0.096,
+        "ratio": 1.23,
+        "application_cache_cleared": false,
+        "cache_store": "ActiveSupport::Cache::FileStore",
+        "caveat": "the application cache was NOT cleared: ActiveSupport::Cache::FileStore is shared with other processes, and clearing it would affect them. This is a first-request figure, not a cold one."
+      }
+    },
+    {
+      "endpoint": "GET /api/v1/authors",
+      "state": "has_findings",
+      "findings": [
+        {
+          "kind": "n_plus_one_pattern_match",
+          "confidence": "high",
+          "detail": "the same query ran 130 times in a single request: SELECT COUNT(*) FROM \"posts\" WHERE \"posts\".\"author_id\" = ? — originates in controller app/controllers/api/v1/authors_controller.rb#index:30",
+          "evidence": {
+            "fingerprint": "SELECT COUNT(*) FROM \"posts\" WHERE \"posts\".\"author_id\" = ?",
+            "occurrences": 130,
+            "call_site": {
+              "path": "/Volumes/MacMiniExternalHD/Users/thepoorman/development/loadwright/examples/sample_app/app/controllers/api/v1/authors_controller.rb",
+              "line": 30,
+              "label": "block in Api::V1::AuthorsController#index"
+            }
+          },
+          "suggestion": "One COUNT per record. `includes` will NOT remove this — a preloaded association is still counted with a query unless the code stops counting. Either add a counter cache (`belongs_to :author, counter_cache: true` on the posts model, plus a `posts_count` column), or preload posts and use `.size` on the loaded collection instead of `.count`."
+        },
+        {
+          "kind": "n_plus_one_slope",
+          "confidence": "high",
+          "detail": "query count grows with the number of records returned (1.0 extra queries per additional record). This is the signature pagination hides from a seeded-scale measurement.",
+          "evidence": [
+            {
+              "records": 5,
+              "queries": 6,
+              "page_size": 5
+            },
+            {
+              "records": 25,
+              "queries": 26,
+              "page_size": 25
+            },
+            {
+              "records": 50,
+              "queries": 51,
+              "page_size": 50
+            }
+          ]
+        }
+      ],
+      "capability_epoch": 0,
+      "coverage": {
+        "complete": true,
+        "covered": [
+          "n_plus_one",
+          "missing_pagination",
+          "over_fetch",
+          "index_scan",
+          "latency"
+        ],
+        "uncovered": [],
+        "unanswered": [],
+        "not_applicable": [],
+        "description": "checked: N+1, pagination, over-fetch, index analysis, latency percentiles",
+        "detectors": [
+          {
+            "detector": "pattern_match",
+            "state": "available"
+          },
+          {
+            "detector": "slope",
+            "state": "available"
+          },
+          {
+            "detector": "payload_growth",
+            "state": "available"
+          },
+          {
+            "detector": "query_response_comparison",
+            "state": "available"
+          },
+          {
+            "detector": "explain",
+            "state": "available"
+          },
+          {
+            "detector": "percentiles",
+            "state": "available"
+          }
+        ]
+      },
+      "correlation": {
+        "queries_per_returned_record": {
+          "value": 1.068
+        },
+        "n_plus_one_slope": {
+          "value": 1.0
+        },
+        "payload_growth_correlation": {
+          "value": 0.0364
+        },
+        "observations": [
+          {
+            "label": "seed_scale/30/default",
+            "records": 25,
+            "queries": 26,
+            "bytes": 1083,
+            "seeded": 30,
+            "page_size": null
+          },
+          {
+            "label": "seed_scale/90/default",
+            "records": 25,
+            "queries": 26,
+            "bytes": 1083,
+            "seeded": 90,
+            "page_size": null
+          },
+          {
+            "label": "page_size/90/5",
+            "records": 5,
+            "queries": 6,
+            "bytes": 211,
+            "seeded": 90,
+            "page_size": 5
+          },
+          {
+            "label": "page_size/90/25",
+            "records": 25,
+            "queries": 26,
+            "bytes": 1083,
+            "seeded": 90,
+            "page_size": 25
+          },
+          {
+            "label": "page_size/90/50",
+            "records": 50,
+            "queries": 51,
+            "bytes": 2183,
+            "seeded": 90,
+            "page_size": 50
+          }
+        ]
+      },
+      "latency": [
+        {
+          "label": "seed_scale scale=30 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 3.4,
+          "median_ms": 3.531,
+          "max_ms": 8.7,
+          "mean_ms": 3.984,
+          "stddev_ms": 1.367,
+          "coefficient_of_variation": {
+            "value": 0.34322412975032207
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 3.531499981880188
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "seed_scale scale=90 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 3.398,
+          "median_ms": 3.471,
+          "max_ms": 3.891,
+          "mean_ms": 3.528,
+          "stddev_ms": 0.148,
+          "coefficient_of_variation": {
+            "value": 0.042074965738721416
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 3.470999985933304
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=5 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 1.102,
+          "median_ms": 1.169,
+          "max_ms": 1.442,
+          "mean_ms": 1.184,
+          "stddev_ms": 0.085,
+          "coefficient_of_variation": {
+            "value": 0.07178740488332508
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 1.168500006198883
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=25 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 3.2,
+          "median_ms": 3.42,
+          "max_ms": 4.071,
+          "mean_ms": 3.461,
+          "stddev_ms": 0.175,
+          "coefficient_of_variation": {
+            "value": 0.05056642930907057
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 3.419500023126602
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=50 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 6.209,
+          "median_ms": 6.368,
+          "max_ms": 7.289,
+          "mean_ms": 6.448,
+          "stddev_ms": 0.273,
+          "coefficient_of_variation": {
+            "value": 0.042396436206681376
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 6.367999970912933
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        }
+      ],
+      "explain": {
+        "adapter": "SQLite",
+        "queries_explained": 2,
+        "queries_failed": 0,
+        "statements_executed": 0,
+        "findings": [],
+        "detector_state": "available"
+      },
+      "time_breakdown": {
+        "total_ms": 3.471,
+        "db_ms": 0.315,
+        "view_ms": 0.017,
+        "other_ms": 3.139,
+        "dominant": "other",
+        "containment": {
+          "skewed": true,
+          "headline": "Contained run: these figures are lower than production reality.",
+          "summary": "These latency figures are lower than production reality: mail was captured rather than delivered, so SMTP time is absent from these figures. background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead. outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`.",
+          "notes": [
+            {
+              "measure": "mail",
+              "enforced": true,
+              "note": "mail was captured rather than delivered, so SMTP time is absent from these figures."
+            },
+            {
+              "measure": "background_jobs",
+              "enforced": true,
+              "note": "background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead."
+            },
+            {
+              "measure": "outbound_http",
+              "enforced": true,
+              "note": "outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`."
+            }
+          ]
+        }
+      },
+      "cold_warm": {
+        "label": "application-cache cold",
+        "cold_ms": 3.748,
+        "warm_ms": 3.528,
+        "delta_ms": 0.22,
+        "ratio": 1.06,
+        "application_cache_cleared": false,
+        "cache_store": "ActiveSupport::Cache::FileStore",
+        "caveat": "the application cache was NOT cleared: ActiveSupport::Cache::FileStore is shared with other processes, and clearing it would affect them. This is a first-request figure, not a cold one."
+      }
+    },
+    {
+      "endpoint": "GET /api/v1/me",
+      "state": "inconclusive",
+      "reason": "unsuccessful_status",
+      "explanation": "endpoint returned an error status; an error path was measured, not the endpoint (returned HTTP 401 (expected 200). An error path was measured, not the endpoint. A uniform 401/403 across endpoints usually means auth_token_provider is unset or returning an invalid token. If it is every endpoint including public ones, check config.hosts too: Rails' host guard answers 403 before the request reaches your app.)",
+      "findings": [],
+      "capability_epoch": 0,
+      "coverage": {
+        "complete": true,
+        "covered": [],
+        "uncovered": [],
+        "unanswered": [],
+        "not_applicable": [
+          "n_plus_one",
+          "missing_pagination",
+          "over_fetch",
+          "index_scan",
+          "latency"
+        ],
+        "description": "not checked: N+1, pagination, over-fetch, index analysis, latency percentiles",
+        "detectors": [
+          {
+            "detector": "pattern_match",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "slope",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "payload_growth",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "query_response_comparison",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "explain",
+            "state": "not_applicable"
+          },
+          {
+            "detector": "percentiles",
+            "state": "not_applicable"
+          }
+        ]
+      },
+      "latency": [
+        {
+          "label": "seed_scale scale=30 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.405,
+          "median_ms": 0.412,
+          "max_ms": 0.424,
+          "mean_ms": 0.414,
+          "stddev_ms": 0.006,
+          "coefficient_of_variation": {
+            "value": 0.013862510183239472
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.41199997067451477
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "seed_scale scale=90 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.402,
+          "median_ms": 0.41,
+          "max_ms": 0.657,
+          "mean_ms": 0.422,
+          "stddev_ms": 0.055,
+          "coefficient_of_variation": {
+            "value": 0.13159342799708246
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.4100000262260437
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=5 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.414,
+          "median_ms": 0.424,
+          "max_ms": 0.487,
+          "mean_ms": 0.434,
+          "stddev_ms": 0.022,
+          "coefficient_of_variation": {
+            "value": 0.04962683485282246
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.42399999499320984
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=25 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.411,
+          "median_ms": 0.416,
+          "max_ms": 0.428,
+          "mean_ms": 0.417,
+          "stddev_ms": 0.005,
+          "coefficient_of_variation": {
+            "value": 0.010997999029750037
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.41600000858306885
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=50 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.387,
+          "median_ms": 0.415,
+          "max_ms": 0.497,
+          "mean_ms": 0.415,
+          "stddev_ms": 0.024,
+          "coefficient_of_variation": {
+            "value": 0.05885988060196087
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.4154999852180481
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        }
+      ],
+      "explain": {
+        "adapter": "SQLite",
+        "queries_explained": 0,
+        "queries_failed": 0,
+        "statements_executed": 0,
+        "findings": [],
+        "detector_state": "available"
+      },
+      "time_breakdown": {
+        "total_ms": 0.415,
+        "db_ms": 0.0,
+        "view_ms": 0.013,
+        "other_ms": 0.402,
+        "dominant": "other",
+        "containment": {
+          "skewed": true,
+          "headline": "Contained run: these figures are lower than production reality.",
+          "summary": "These latency figures are lower than production reality: mail was captured rather than delivered, so SMTP time is absent from these figures. background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead. outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`.",
+          "notes": [
+            {
+              "measure": "mail",
+              "enforced": true,
+              "note": "mail was captured rather than delivered, so SMTP time is absent from these figures."
+            },
+            {
+              "measure": "background_jobs",
+              "enforced": true,
+              "note": "background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead."
+            },
+            {
+              "measure": "outbound_http",
+              "enforced": true,
+              "note": "outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`."
+            }
+          ]
+        }
+      },
+      "cold_warm": {
+        "label": "application-cache cold",
+        "cold_ms": 0.456,
+        "warm_ms": 0.411,
+        "delta_ms": 0.045,
+        "ratio": 1.11,
+        "application_cache_cleared": false,
+        "cache_store": "ActiveSupport::Cache::FileStore",
+        "caveat": "the application cache was NOT cleared: ActiveSupport::Cache::FileStore is shared with other processes, and clearing it would affect them. This is a first-request figure, not a cold one."
+      }
+    },
+    {
+      "endpoint": "GET /api/v1/posts",
+      "state": "has_findings",
+      "findings": [
+        {
+          "kind": "n_plus_one_pattern_match",
+          "confidence": "high",
+          "detail": "the same query ran 390 times in a single request: SELECT COUNT(*) FROM \"comments\" WHERE \"comments\".\"post_id\" = ? — originates in controller app/controllers/api/v1/posts_controller.rb#index:26",
+          "evidence": {
+            "fingerprint": "SELECT COUNT(*) FROM \"comments\" WHERE \"comments\".\"post_id\" = ?",
+            "occurrences": 390,
+            "call_site": {
+              "path": "/Volumes/MacMiniExternalHD/Users/thepoorman/development/loadwright/examples/sample_app/app/controllers/api/v1/posts_controller.rb",
+              "line": 26,
+              "label": "block in Api::V1::PostsController#index"
+            }
+          },
+          "suggestion": "One COUNT per record. `includes` will NOT remove this — a preloaded association is still counted with a query unless the code stops counting. Either add a counter cache (`belongs_to :post, counter_cache: true` on the comments model, plus a `comments_count` column), or preload comments and use `.size` on the loaded collection instead of `.count`."
+        },
+        {
+          "kind": "missing_pagination",
+          "confidence": "high",
+          "detail": "response size grows with the number of rows in the table (correlation 1.0 against seeded scale). The endpoint returns an unbounded collection. Note the query count may be perfectly flat — one query can load ten thousand rows.",
+          "evidence": [
+            {
+              "seeded": 30,
+              "bytes": 1363,
+              "records": 30
+            },
+            {
+              "seeded": 90,
+              "bytes": 4123,
+              "records": 90
+            }
+          ]
+        }
+      ],
+      "capability_epoch": 0,
+      "coverage": {
+        "complete": true,
+        "covered": [
+          "n_plus_one",
+          "missing_pagination",
+          "over_fetch",
+          "index_scan",
+          "latency"
+        ],
+        "uncovered": [],
+        "unanswered": [],
+        "not_applicable": [],
+        "description": "checked: N+1 (pattern), pagination, over-fetch, index analysis, latency percentiles",
+        "detectors": [
+          {
+            "detector": "pattern_match",
+            "state": "available"
+          },
+          {
+            "detector": "slope",
+            "state": "unavailable",
+            "reason": "unable to vary result size — every cell returned 90 record(s) regardless of seeding and page-size parameters, so the N+1 slope is not measurable. This is NOT a flat/healthy result. Check that config.page_size_parameters matches the parameter this endpoint actually accepts, or that the collection is large enough to paginate."
+          },
+          {
+            "detector": "payload_growth",
+            "state": "available"
+          },
+          {
+            "detector": "query_response_comparison",
+            "state": "available"
+          },
+          {
+            "detector": "explain",
+            "state": "available"
+          },
+          {
+            "detector": "percentiles",
+            "state": "available"
+          }
+        ]
+      },
+      "correlation": {
+        "queries_per_returned_record": {
+          "value": 1.016
+        },
+        "n_plus_one_slope": {
+          "value": 1.0
+        },
+        "payload_growth_correlation": {
+          "value": 1.0
+        },
+        "observations": [
+          {
+            "label": "seed_scale/30/default",
+            "records": 30,
+            "queries": 31,
+            "bytes": 1363,
+            "seeded": 30,
+            "page_size": null
+          },
+          {
+            "label": "seed_scale/90/default",
+            "records": 90,
+            "queries": 91,
+            "bytes": 4123,
+            "seeded": 90,
+            "page_size": null
+          },
+          {
+            "label": "page_size/90/5",
+            "records": 90,
+            "queries": 91,
+            "bytes": 4123,
+            "seeded": 90,
+            "page_size": 5
+          },
+          {
+            "label": "page_size/90/25",
+            "records": 90,
+            "queries": 91,
+            "bytes": 4123,
+            "seeded": 90,
+            "page_size": 25
+          },
+          {
+            "label": "page_size/90/50",
+            "records": 90,
+            "queries": 91,
+            "bytes": 4123,
+            "seeded": 90,
+            "page_size": 50
+          }
+        ]
+      },
+      "latency": [
+        {
+          "label": "seed_scale scale=30 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 3.913,
+          "median_ms": 4.04,
+          "max_ms": 6.964,
+          "mean_ms": 4.302,
+          "stddev_ms": 0.704,
+          "coefficient_of_variation": {
+            "value": 0.16353857188331983
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 4.03999999165535
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "seed_scale scale=90 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 10.688,
+          "median_ms": 11.109,
+          "max_ms": 25.199,
+          "mean_ms": 11.872,
+          "stddev_ms": 3.155,
+          "coefficient_of_variation": {
+            "value": 0.2657272248696215
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 11.108999997377396
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=5 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 10.833,
+          "median_ms": 11.105,
+          "max_ms": 12.516,
+          "mean_ms": 11.294,
+          "stddev_ms": 0.477,
+          "coefficient_of_variation": {
+            "value": 0.04219054381701758
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 11.105000019073486
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=25 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 10.852,
+          "median_ms": 11.185,
+          "max_ms": 12.23,
+          "mean_ms": 11.322,
+          "stddev_ms": 0.407,
+          "coefficient_of_variation": {
+            "value": 0.035946187997281664
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 11.184999972581863
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=50 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 10.657,
+          "median_ms": 11.125,
+          "max_ms": 25.657,
+          "mean_ms": 11.896,
+          "stddev_ms": 3.266,
+          "coefficient_of_variation": {
+            "value": 0.2745734820117305
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 11.125499993562698
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        }
+      ],
+      "explain": {
+        "adapter": "SQLite",
+        "queries_explained": 2,
+        "queries_failed": 0,
+        "statements_executed": 0,
+        "findings": [],
+        "detector_state": "available"
+      },
+      "time_breakdown": {
+        "total_ms": 11.03,
+        "db_ms": 1.093,
+        "view_ms": 0.027,
+        "other_ms": 9.91,
+        "dominant": "other",
+        "containment": {
+          "skewed": true,
+          "headline": "Contained run: these figures are lower than production reality.",
+          "summary": "These latency figures are lower than production reality: mail was captured rather than delivered, so SMTP time is absent from these figures. background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead. outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`.",
+          "notes": [
+            {
+              "measure": "mail",
+              "enforced": true,
+              "note": "mail was captured rather than delivered, so SMTP time is absent from these figures."
+            },
+            {
+              "measure": "background_jobs",
+              "enforced": true,
+              "note": "background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead."
+            },
+            {
+              "measure": "outbound_http",
+              "enforced": true,
+              "note": "outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`."
+            }
+          ]
+        }
+      },
+      "cold_warm": {
+        "label": "application-cache cold",
+        "cold_ms": 4.181,
+        "warm_ms": 4.031,
+        "delta_ms": 0.15,
+        "ratio": 1.04,
+        "application_cache_cleared": false,
+        "cache_store": "ActiveSupport::Cache::FileStore",
+        "caveat": "the application cache was NOT cleared: ActiveSupport::Cache::FileStore is shared with other processes, and clearing it would affect them. This is a first-request figure, not a cold one."
+      }
+    },
+    {
+      "endpoint": "GET /api/v1/posts/{id}",
+      "state": "healthy",
+      "findings": [],
+      "capability_epoch": 0,
+      "coverage": {
+        "complete": true,
+        "covered": [
+          "n_plus_one",
+          "missing_pagination",
+          "over_fetch",
+          "index_scan",
+          "latency"
+        ],
+        "uncovered": [],
+        "unanswered": [],
+        "not_applicable": [],
+        "description": "checked: N+1 (pattern), pagination, over-fetch, index analysis, latency percentiles",
+        "detectors": [
+          {
+            "detector": "pattern_match",
+            "state": "available"
+          },
+          {
+            "detector": "slope",
+            "state": "unavailable",
+            "reason": "no cell produced both a record count and a query count"
+          },
+          {
+            "detector": "payload_growth",
+            "state": "available"
+          },
+          {
+            "detector": "query_response_comparison",
+            "state": "available"
+          },
+          {
+            "detector": "explain",
+            "state": "available"
+          },
+          {
+            "detector": "percentiles",
+            "state": "available"
+          }
+        ]
+      },
+      "correlation": {
+        "queries_per_returned_record": {
+          "unavailable": "no cell returned any records, so there is nothing to divide by"
+        },
+        "n_plus_one_slope": {
+          "unavailable": "no cell produced both a record count and a query count"
+        },
+        "payload_growth_correlation": {
+          "value": 0.0
+        },
+        "observations": [
+          {
+            "label": "seed_scale/30/default",
+            "records": null,
+            "queries": 1,
+            "bytes": 109,
+            "seeded": 30,
+            "page_size": null
+          },
+          {
+            "label": "seed_scale/90/default",
+            "records": null,
+            "queries": 1,
+            "bytes": 109,
+            "seeded": 90,
+            "page_size": null
+          },
+          {
+            "label": "page_size/90/5",
+            "records": null,
+            "queries": 1,
+            "bytes": 109,
+            "seeded": 90,
+            "page_size": 5
+          },
+          {
+            "label": "page_size/90/25",
+            "records": null,
+            "queries": 1,
+            "bytes": 109,
+            "seeded": 90,
+            "page_size": 25
+          },
+          {
+            "label": "page_size/90/50",
+            "records": null,
+            "queries": 1,
+            "bytes": 109,
+            "seeded": 90,
+            "page_size": 50
+          }
+        ]
+      },
+      "latency": [
+        {
+          "label": "seed_scale scale=30 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.488,
+          "median_ms": 0.496,
+          "max_ms": 0.619,
+          "mean_ms": 0.514,
+          "stddev_ms": 0.039,
+          "coefficient_of_variation": {
+            "value": 0.07556354944700851
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.4964999854564667
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "seed_scale scale=90 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.489,
+          "median_ms": 0.502,
+          "max_ms": 0.52,
+          "mean_ms": 0.502,
+          "stddev_ms": 0.009,
+          "coefficient_of_variation": {
+            "value": 0.018238005403679435
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.5015000104904175
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=5 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.499,
+          "median_ms": 0.508,
+          "max_ms": 0.65,
+          "mean_ms": 0.528,
+          "stddev_ms": 0.045,
+          "coefficient_of_variation": {
+            "value": 0.08559156244863825
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.5080000162124634
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=25 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.499,
+          "median_ms": 0.504,
+          "max_ms": 0.555,
+          "mean_ms": 0.509,
+          "stddev_ms": 0.013,
+          "coefficient_of_variation": {
+            "value": 0.02577673034486199
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.5040000081062317
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=50 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.501,
+          "median_ms": 0.511,
+          "max_ms": 0.591,
+          "mean_ms": 0.521,
+          "stddev_ms": 0.024,
+          "coefficient_of_variation": {
+            "value": 0.04599286261272134
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.5105000138282776
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        }
+      ],
+      "explain": {
+        "adapter": "SQLite",
+        "queries_explained": 1,
+        "queries_failed": 0,
+        "statements_executed": 0,
+        "findings": [],
+        "detector_state": "available"
+      },
+      "time_breakdown": {
+        "total_ms": 0.505,
+        "db_ms": 0.014,
+        "view_ms": 0.013,
+        "other_ms": 0.478,
+        "dominant": "other",
+        "containment": {
+          "skewed": true,
+          "headline": "Contained run: these figures are lower than production reality.",
+          "summary": "These latency figures are lower than production reality: mail was captured rather than delivered, so SMTP time is absent from these figures. background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead. outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`.",
+          "notes": [
+            {
+              "measure": "mail",
+              "enforced": true,
+              "note": "mail was captured rather than delivered, so SMTP time is absent from these figures."
+            },
+            {
+              "measure": "background_jobs",
+              "enforced": true,
+              "note": "background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead."
+            },
+            {
+              "measure": "outbound_http",
+              "enforced": true,
+              "note": "outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`."
+            }
+          ]
+        }
+      },
+      "cold_warm": {
+        "label": "application-cache cold",
+        "cold_ms": 0.59,
+        "warm_ms": 0.494,
+        "delta_ms": 0.096,
+        "ratio": 1.19,
+        "application_cache_cleared": false,
+        "cache_store": "ActiveSupport::Cache::FileStore",
+        "caveat": "the application cache was NOT cleared: ActiveSupport::Cache::FileStore is shared with other processes, and clearing it would affect them. This is a first-request figure, not a cold one."
+      }
+    },
+    {
+      "endpoint": "GET /api/v1/posts/{post_id}/comments",
+      "state": "healthy",
+      "findings": [],
+      "capability_epoch": 0,
+      "coverage": {
+        "complete": true,
+        "covered": [
+          "n_plus_one",
+          "missing_pagination",
+          "over_fetch",
+          "index_scan",
+          "latency"
+        ],
+        "uncovered": [],
+        "unanswered": [],
+        "not_applicable": [],
+        "description": "checked: N+1 (pattern), pagination, over-fetch, index analysis, latency percentiles",
+        "detectors": [
+          {
+            "detector": "pattern_match",
+            "state": "available"
+          },
+          {
+            "detector": "slope",
+            "state": "unavailable",
+            "reason": "unable to vary result size — every cell returned 3 record(s) regardless of seeding and page-size parameters, so the N+1 slope is not measurable. This is NOT a flat/healthy result. Check that config.page_size_parameters matches the parameter this endpoint actually accepts, or that the collection is large enough to paginate."
+          },
+          {
+            "detector": "payload_growth",
+            "state": "available"
+          },
+          {
+            "detector": "query_response_comparison",
+            "state": "available"
+          },
+          {
+            "detector": "explain",
+            "state": "available"
+          },
+          {
+            "detector": "percentiles",
+            "state": "available"
+          }
+        ]
+      },
+      "correlation": {
+        "queries_per_returned_record": {
+          "value": 0.667
+        },
+        "n_plus_one_slope": {
+          "unavailable": "unable to vary result size — every cell returned 3 record(s) regardless of seeding and page-size parameters, so the N+1 slope is not measurable. This is NOT a flat/healthy result. Check that config.page_size_parameters matches the parameter this endpoint actually accepts, or that the collection is large enough to paginate."
+        },
+        "payload_growth_correlation": {
+          "value": 0.0
+        },
+        "observations": [
+          {
+            "label": "seed_scale/30/default",
+            "records": 3,
+            "queries": 2,
+            "bytes": 172,
+            "seeded": 30,
+            "page_size": null
+          },
+          {
+            "label": "seed_scale/90/default",
+            "records": 3,
+            "queries": 2,
+            "bytes": 172,
+            "seeded": 90,
+            "page_size": null
+          },
+          {
+            "label": "page_size/90/5",
+            "records": 3,
+            "queries": 2,
+            "bytes": 172,
+            "seeded": 90,
+            "page_size": 5
+          },
+          {
+            "label": "page_size/90/25",
+            "records": 3,
+            "queries": 2,
+            "bytes": 172,
+            "seeded": 90,
+            "page_size": 25
+          },
+          {
+            "label": "page_size/90/50",
+            "records": 3,
+            "queries": 2,
+            "bytes": 172,
+            "seeded": 90,
+            "page_size": 50
+          }
+        ]
+      },
+      "latency": [
+        {
+          "label": "seed_scale scale=30 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.648,
+          "median_ms": 0.662,
+          "max_ms": 0.694,
+          "mean_ms": 0.667,
+          "stddev_ms": 0.013,
+          "coefficient_of_variation": {
+            "value": 0.01993756000116873
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.6624999940395355
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "seed_scale scale=90 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.63,
+          "median_ms": 0.665,
+          "max_ms": 0.69,
+          "mean_ms": 0.664,
+          "stddev_ms": 0.016,
+          "coefficient_of_variation": {
+            "value": 0.023504583958089135
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.6654999852180481
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=5 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.667,
+          "median_ms": 0.676,
+          "max_ms": 0.717,
+          "mean_ms": 0.679,
+          "stddev_ms": 0.012,
+          "coefficient_of_variation": {
+            "value": 0.01711200307959785
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.6759999990463257
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=25 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.664,
+          "median_ms": 0.673,
+          "max_ms": 0.685,
+          "mean_ms": 0.674,
+          "stddev_ms": 0.006,
+          "coefficient_of_variation": {
+            "value": 0.00897740615508576
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.6730000078678131
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=50 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.662,
+          "median_ms": 0.674,
+          "max_ms": 0.81,
+          "mean_ms": 0.708,
+          "stddev_ms": 0.058,
+          "coefficient_of_variation": {
+            "value": 0.08252500836251302
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.6744999587535858
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        }
+      ],
+      "explain": {
+        "adapter": "SQLite",
+        "queries_explained": 2,
+        "queries_failed": 0,
+        "statements_executed": 0,
+        "findings": [],
+        "detector_state": "available"
+      },
+      "time_breakdown": {
+        "total_ms": 0.672,
+        "db_ms": 0.03,
+        "view_ms": 0.013,
+        "other_ms": 0.629,
+        "dominant": "other",
+        "containment": {
+          "skewed": true,
+          "headline": "Contained run: these figures are lower than production reality.",
+          "summary": "These latency figures are lower than production reality: mail was captured rather than delivered, so SMTP time is absent from these figures. background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead. outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`.",
+          "notes": [
+            {
+              "measure": "mail",
+              "enforced": true,
+              "note": "mail was captured rather than delivered, so SMTP time is absent from these figures."
+            },
+            {
+              "measure": "background_jobs",
+              "enforced": true,
+              "note": "background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead."
+            },
+            {
+              "measure": "outbound_http",
+              "enforced": true,
+              "note": "outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`."
+            }
+          ]
+        }
+      },
+      "cold_warm": {
+        "label": "application-cache cold",
+        "cold_ms": 0.753,
+        "warm_ms": 0.662,
+        "delta_ms": 0.091,
+        "ratio": 1.14,
+        "application_cache_cleared": false,
+        "cache_store": "ActiveSupport::Cache::FileStore",
+        "caveat": "the application cache was NOT cleared: ActiveSupport::Cache::FileStore is shared with other processes, and clearing it would affect them. This is a first-request figure, not a cold one."
+      }
+    },
+    {
+      "endpoint": "GET /api/v1/tags",
+      "state": "healthy",
+      "findings": [],
+      "capability_epoch": 0,
+      "coverage": {
+        "complete": true,
+        "covered": [
+          "n_plus_one",
+          "missing_pagination",
+          "over_fetch",
+          "index_scan",
+          "latency"
+        ],
+        "uncovered": [],
+        "unanswered": [],
+        "not_applicable": [],
+        "description": "checked: N+1 (pattern), pagination, over-fetch, index analysis, latency percentiles",
+        "detectors": [
+          {
+            "detector": "pattern_match",
+            "state": "available"
+          },
+          {
+            "detector": "slope",
+            "state": "unavailable",
+            "reason": "unable to vary result size — every cell returned 0 record(s) regardless of seeding and page-size parameters, so the N+1 slope is not measurable. This is NOT a flat/healthy result. Check that config.page_size_parameters matches the parameter this endpoint actually accepts, or that the collection is large enough to paginate."
+          },
+          {
+            "detector": "payload_growth",
+            "state": "available"
+          },
+          {
+            "detector": "query_response_comparison",
+            "state": "available"
+          },
+          {
+            "detector": "explain",
+            "state": "available"
+          },
+          {
+            "detector": "percentiles",
+            "state": "available"
+          }
+        ]
+      },
+      "correlation": {
+        "queries_per_returned_record": {
+          "unavailable": "no cell returned any records, so there is nothing to divide by"
+        },
+        "n_plus_one_slope": {
+          "unavailable": "unable to vary result size — every cell returned 0 record(s) regardless of seeding and page-size parameters, so the N+1 slope is not measurable. This is NOT a flat/healthy result. Check that config.page_size_parameters matches the parameter this endpoint actually accepts, or that the collection is large enough to paginate."
+        },
+        "payload_growth_correlation": {
+          "value": 0.0
+        },
+        "observations": [
+          {
+            "label": "seed_scale/30/default",
+            "records": 0,
+            "queries": 1,
+            "bytes": 2,
+            "seeded": 30,
+            "page_size": null
+          },
+          {
+            "label": "seed_scale/90/default",
+            "records": 0,
+            "queries": 1,
+            "bytes": 2,
+            "seeded": 90,
+            "page_size": null
+          },
+          {
+            "label": "page_size/90/5",
+            "records": 0,
+            "queries": 1,
+            "bytes": 2,
+            "seeded": 90,
+            "page_size": 5
+          },
+          {
+            "label": "page_size/90/25",
+            "records": 0,
+            "queries": 1,
+            "bytes": 2,
+            "seeded": 90,
+            "page_size": 25
+          },
+          {
+            "label": "page_size/90/50",
+            "records": 0,
+            "queries": 1,
+            "bytes": 2,
+            "seeded": 90,
+            "page_size": 50
+          }
+        ]
+      },
+      "latency": [
+        {
+          "label": "seed_scale scale=30 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.497,
+          "median_ms": 0.504,
+          "max_ms": 0.585,
+          "mean_ms": 0.508,
+          "stddev_ms": 0.019,
+          "coefficient_of_variation": {
+            "value": 0.037010227028926874
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.5040000081062317
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "seed_scale scale=90 page=default concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.493,
+          "median_ms": 0.515,
+          "max_ms": 0.566,
+          "mean_ms": 0.517,
+          "stddev_ms": 0.017,
+          "coefficient_of_variation": {
+            "value": 0.03263694726244315
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.5150000154972076
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=5 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.506,
+          "median_ms": 0.518,
+          "max_ms": 0.729,
+          "mean_ms": 0.551,
+          "stddev_ms": 0.067,
+          "coefficient_of_variation": {
+            "value": 0.12246947441551441
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.5175000131130219
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=25 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.507,
+          "median_ms": 0.517,
+          "max_ms": 0.568,
+          "mean_ms": 0.524,
+          "stddev_ms": 0.022,
+          "coefficient_of_variation": {
+            "value": 0.041535665135217954
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.5165000259876251
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        },
+        {
+          "label": "page_size scale=90 page=50 concurrency=1",
+          "sample_count": 20,
+          "min_ms": 0.51,
+          "median_ms": 0.515,
+          "max_ms": 0.59,
+          "mean_ms": 0.525,
+          "stddev_ms": 0.024,
+          "coefficient_of_variation": {
+            "value": 0.0450214202337694
+          },
+          "high_variance": false,
+          "percentiles": {
+            "p50": {
+              "value": 0.5154999792575836
+            },
+            "p95": {
+              "unavailable": "insufficient samples for p95 (need 100, have 20); raise requests_per_endpoint_per_level"
+            },
+            "p99": {
+              "unavailable": "insufficient samples for p99 (need 500, have 20); raise requests_per_endpoint_per_level"
+            }
+          },
+          "best_supported": "p50"
+        }
+      ],
+      "explain": {
+        "adapter": "SQLite",
+        "queries_explained": 1,
+        "queries_failed": 0,
+        "statements_executed": 0,
+        "findings": [],
+        "detector_state": "available"
+      },
+      "time_breakdown": {
+        "total_ms": 0.514,
+        "db_ms": 0.012,
+        "view_ms": 0.013,
+        "other_ms": 0.489,
+        "dominant": "other",
+        "containment": {
+          "skewed": true,
+          "headline": "Contained run: these figures are lower than production reality.",
+          "summary": "These latency figures are lower than production reality: mail was captured rather than delivered, so SMTP time is absent from these figures. background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead. outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`.",
+          "notes": [
+            {
+              "measure": "mail",
+              "enforced": true,
+              "note": "mail was captured rather than delivered, so SMTP time is absent from these figures."
+            },
+            {
+              "measure": "background_jobs",
+              "enforced": true,
+              "note": "background jobs were recorded rather than performed, so the work they represent is not in these figures. Jobs enqueued per request is reported separately and is the signal to read instead."
+            },
+            {
+              "measure": "outbound_http",
+              "enforced": true,
+              "note": "outbound HTTP was blocked, so any time the app would have spent calling a third party is absent from these figures entirely -- real-world latency will be higher. The missing time appears in no component, not even `other`."
+            }
+          ]
+        }
+      },
+      "cold_warm": {
+        "label": "application-cache cold",
+        "cold_ms": 0.563,
+        "warm_ms": 0.504,
+        "delta_ms": 0.059,
+        "ratio": 1.12,
+        "application_cache_cleared": false,
+        "cache_store": "ActiveSupport::Cache::FileStore",
+        "caveat": "the application cache was NOT cleared: ActiveSupport::Cache::FileStore is shared with other processes, and clearing it would affect them. This is a first-request figure, not a cold one."
+      }
+    }
+  ],
+  "cells": [
+    {
+      "endpoint": "GET /api/v1/admin/stats",
+      "sweep": "seed_scale",
+      "scale_factor": 30,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.4140000343322754,
+        "min": 0.390999972820282,
+        "max": 0.7360000014305115
+      },
+      "queries": 0,
+      "bytes": 21,
+      "statuses": {
+        "403": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(error)"
+    },
+    {
+      "endpoint": "GET /api/v1/authors",
+      "sweep": "seed_scale",
+      "scale_factor": 30,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 3.534999966621399,
+        "min": 3.399999976158142,
+        "max": 8.699999988079071
+      },
+      "records": 25,
+      "queries": 26,
+      "bytes": 1083,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(id,name,post_count)"
+    },
+    {
+      "endpoint": "GET /api/v1/authors/by-slug/{slug}",
+      "sweep": "seed_scale",
+      "scale_factor": 30,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": null,
+        "min": null,
+        "max": null
+      },
+      "statuses": {},
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0
+    },
+    {
+      "endpoint": "GET /api/v1/authors/{id}",
+      "sweep": "seed_scale",
+      "scale_factor": 30,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": null,
+        "min": null,
+        "max": null
+      },
+      "statuses": {},
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0
+    },
+    {
+      "endpoint": "GET /api/v1/me",
+      "sweep": "seed_scale",
+      "scale_factor": 30,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.4129999876022339,
+        "min": 0.4050000309944153,
+        "max": 0.42399996519088745
+      },
+      "queries": 0,
+      "bytes": 24,
+      "statuses": {
+        "401": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(error)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts",
+      "sweep": "seed_scale",
+      "scale_factor": 30,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 4.0489999651908875,
+        "min": 3.9130000472068787,
+        "max": 6.96399998664856
+      },
+      "records": 30,
+      "queries": 31,
+      "bytes": 1363,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(comment_count,id,title)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts/{id}",
+      "sweep": "seed_scale",
+      "scale_factor": 30,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.4989999532699585,
+        "min": 0.48799997568130493,
+        "max": 0.6190000176429749
+      },
+      "queries": 1,
+      "bytes": 109,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(author_id,body,id,title)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts/{post_id}/comments",
+      "sweep": "seed_scale",
+      "scale_factor": 30,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.6629999876022339,
+        "min": 0.6480000019073486,
+        "max": 0.6940000057220459
+      },
+      "records": 3,
+      "queries": 2,
+      "bytes": 172,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(author_name,body,id)"
+    },
+    {
+      "endpoint": "GET /api/v1/tags",
+      "sweep": "seed_scale",
+      "scale_factor": 30,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.5040000081062317,
+        "min": 0.4970000386238098,
+        "max": 0.5849999785423279
+      },
+      "records": 0,
+      "queries": 1,
+      "bytes": 2,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(empty)"
+    },
+    {
+      "endpoint": "GET /api/v1/admin/stats",
+      "sweep": "seed_scale",
+      "scale_factor": 90,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.4169999957084656,
+        "min": 0.406000018119812,
+        "max": 0.47999995946884155
+      },
+      "queries": 0,
+      "bytes": 21,
+      "statuses": {
+        "403": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(error)"
+    },
+    {
+      "endpoint": "GET /api/v1/authors",
+      "sweep": "seed_scale",
+      "scale_factor": 90,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 3.471000015735626,
+        "min": 3.3980000019073486,
+        "max": 3.890999972820282
+      },
+      "records": 25,
+      "queries": 26,
+      "bytes": 1083,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(id,name,post_count)"
+    },
+    {
+      "endpoint": "GET /api/v1/authors/by-slug/{slug}",
+      "sweep": "seed_scale",
+      "scale_factor": 90,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": null,
+        "min": null,
+        "max": null
+      },
+      "statuses": {},
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0
+    },
+    {
+      "endpoint": "GET /api/v1/authors/{id}",
+      "sweep": "seed_scale",
+      "scale_factor": 90,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": null,
+        "min": null,
+        "max": null
+      },
+      "statuses": {},
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0
+    },
+    {
+      "endpoint": "GET /api/v1/me",
+      "sweep": "seed_scale",
+      "scale_factor": 90,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.4100000262260437,
+        "min": 0.4020000100135803,
+        "max": 0.6570000052452087
+      },
+      "queries": 0,
+      "bytes": 24,
+      "statuses": {
+        "401": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(error)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts",
+      "sweep": "seed_scale",
+      "scale_factor": 90,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 11.183999955654144,
+        "min": 10.687999963760376,
+        "max": 25.199000000953674
+      },
+      "records": 90,
+      "queries": 91,
+      "bytes": 4123,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(comment_count,id,title)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts/{id}",
+      "sweep": "seed_scale",
+      "scale_factor": 90,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.5020000338554382,
+        "min": 0.48900002241134644,
+        "max": 0.5200000405311584
+      },
+      "queries": 1,
+      "bytes": 109,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(author_id,body,id,title)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts/{post_id}/comments",
+      "sweep": "seed_scale",
+      "scale_factor": 90,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.6669999957084656,
+        "min": 0.6299999952316284,
+        "max": 0.6899999976158142
+      },
+      "records": 3,
+      "queries": 2,
+      "bytes": 172,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(author_name,body,id)"
+    },
+    {
+      "endpoint": "GET /api/v1/tags",
+      "sweep": "seed_scale",
+      "scale_factor": 90,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.5160000324249268,
+        "min": 0.4930000305175781,
+        "max": 0.5660000443458557
+      },
+      "records": 0,
+      "queries": 1,
+      "bytes": 2,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(empty)"
+    },
+    {
+      "endpoint": "GET /api/v1/admin/stats",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 5,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.42799997329711914,
+        "min": 0.4100000262260437,
+        "max": 0.47499996423721313
+      },
+      "queries": 0,
+      "bytes": 21,
+      "statuses": {
+        "403": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(error)"
+    },
+    {
+      "endpoint": "GET /api/v1/admin/stats",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 25,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.42900002002716064,
+        "min": 0.41200000047683716,
+        "max": 0.44200003147125244
+      },
+      "queries": 0,
+      "bytes": 21,
+      "statuses": {
+        "403": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(error)"
+    },
+    {
+      "endpoint": "GET /api/v1/admin/stats",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 50,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.4230000376701355,
+        "min": 0.409000039100647,
+        "max": 1.0540000200271606
+      },
+      "queries": 0,
+      "bytes": 21,
+      "statuses": {
+        "403": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(error)"
+    },
+    {
+      "endpoint": "GET /api/v1/authors",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 5,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 1.1700000166893005,
+        "min": 1.1019999980926514,
+        "max": 1.4419999718666077
+      },
+      "records": 5,
+      "queries": 6,
+      "bytes": 211,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(id,name,post_count)"
+    },
+    {
+      "endpoint": "GET /api/v1/authors",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 25,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 3.4240000247955322,
+        "min": 3.199999988079071,
+        "max": 4.070999979972839
+      },
+      "records": 25,
+      "queries": 26,
+      "bytes": 1083,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(id,name,post_count)"
+    },
+    {
+      "endpoint": "GET /api/v1/authors",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 50,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 6.380999982357025,
+        "min": 6.209000051021576,
+        "max": 7.289000034332275
+      },
+      "records": 50,
+      "queries": 51,
+      "bytes": 2183,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(id,name,post_count)"
+    },
+    {
+      "endpoint": "GET /api/v1/authors/by-slug/{slug}",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 5,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": null,
+        "min": null,
+        "max": null
+      },
+      "statuses": {},
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0
+    },
+    {
+      "endpoint": "GET /api/v1/authors/by-slug/{slug}",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 25,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": null,
+        "min": null,
+        "max": null
+      },
+      "statuses": {},
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0
+    },
+    {
+      "endpoint": "GET /api/v1/authors/by-slug/{slug}",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 50,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": null,
+        "min": null,
+        "max": null
+      },
+      "statuses": {},
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0
+    },
+    {
+      "endpoint": "GET /api/v1/authors/{id}",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 5,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": null,
+        "min": null,
+        "max": null
+      },
+      "statuses": {},
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0
+    },
+    {
+      "endpoint": "GET /api/v1/authors/{id}",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 25,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": null,
+        "min": null,
+        "max": null
+      },
+      "statuses": {},
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0
+    },
+    {
+      "endpoint": "GET /api/v1/authors/{id}",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 50,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": null,
+        "min": null,
+        "max": null
+      },
+      "statuses": {},
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0
+    },
+    {
+      "endpoint": "GET /api/v1/me",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 5,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.4259999990463257,
+        "min": 0.4140000343322754,
+        "max": 0.487000048160553
+      },
+      "queries": 0,
+      "bytes": 24,
+      "statuses": {
+        "401": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(error)"
+    },
+    {
+      "endpoint": "GET /api/v1/me",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 25,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.41600000858306885,
+        "min": 0.41100001335144043,
+        "max": 0.4280000329017639
+      },
+      "queries": 0,
+      "bytes": 24,
+      "statuses": {
+        "401": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(error)"
+    },
+    {
+      "endpoint": "GET /api/v1/me",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 50,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.41599994897842407,
+        "min": 0.38700002431869507,
+        "max": 0.4970000386238098
+      },
+      "queries": 0,
+      "bytes": 24,
+      "statuses": {
+        "401": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(error)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 5,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 11.120999991893768,
+        "min": 10.833000004291534,
+        "max": 12.516000032424927
+      },
+      "records": 90,
+      "queries": 91,
+      "bytes": 4123,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(comment_count,id,title)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 25,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 11.188999950885773,
+        "min": 10.851999998092651,
+        "max": 12.230000019073486
+      },
+      "records": 90,
+      "queries": 91,
+      "bytes": 4123,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(comment_count,id,title)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 50,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 11.129999995231628,
+        "min": 10.657000005245209,
+        "max": 25.65700000524521
+      },
+      "records": 90,
+      "queries": 91,
+      "bytes": 4123,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(comment_count,id,title)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts/{id}",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 5,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.5080000162124634,
+        "min": 0.4989999532699585,
+        "max": 0.6500000357627869
+      },
+      "queries": 1,
+      "bytes": 109,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(author_id,body,id,title)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts/{id}",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 25,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.5040000081062317,
+        "min": 0.49900001287460327,
+        "max": 0.5550000071525574
+      },
+      "queries": 1,
+      "bytes": 109,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(author_id,body,id,title)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts/{id}",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 50,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.5110000371932983,
+        "min": 0.5010000467300415,
+        "max": 0.590999960899353
+      },
+      "queries": 1,
+      "bytes": 109,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "object(author_id,body,id,title)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts/{post_id}/comments",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 5,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.6759999990463257,
+        "min": 0.6669999957084656,
+        "max": 0.7170000076293945
+      },
+      "records": 3,
+      "queries": 2,
+      "bytes": 172,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(author_name,body,id)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts/{post_id}/comments",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 25,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.6739999651908875,
+        "min": 0.6639999747276306,
+        "max": 0.6850000023841858
+      },
+      "records": 3,
+      "queries": 2,
+      "bytes": 172,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(author_name,body,id)"
+    },
+    {
+      "endpoint": "GET /api/v1/posts/{post_id}/comments",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 50,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.6749999523162842,
+        "min": 0.6620000004768372,
+        "max": 0.8100000023841858
+      },
+      "records": 3,
+      "queries": 2,
+      "bytes": 172,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(author_name,body,id)"
+    },
+    {
+      "endpoint": "GET /api/v1/tags",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 5,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.5180000066757202,
+        "min": 0.5059999823570251,
+        "max": 0.7290000319480896
+      },
+      "records": 0,
+      "queries": 1,
+      "bytes": 2,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(empty)"
+    },
+    {
+      "endpoint": "GET /api/v1/tags",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 25,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.5170000195503235,
+        "min": 0.5069999694824219,
+        "max": 0.5680000185966492
+      },
+      "records": 0,
+      "queries": 1,
+      "bytes": 2,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(empty)"
+    },
+    {
+      "endpoint": "GET /api/v1/tags",
+      "sweep": "page_size",
+      "scale_factor": 90,
+      "page_size": 50,
+      "requested_concurrency": 1,
+      "actual_concurrency": 1,
+      "stepped_down": false,
+      "requests": 20,
+      "latency_ms": {
+        "p50": 0.515999972820282,
+        "min": 0.5099999904632568,
+        "max": 0.5899999737739563
+      },
+      "records": 0,
+      "queries": 1,
+      "bytes": 2,
+      "statuses": {
+        "200": 20
+      },
+      "errors": 0,
+      "contention_events": 0,
+      "capability_epoch": 0,
+      "shape": "array(empty)"
+    }
+  ]
+}

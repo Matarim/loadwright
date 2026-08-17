@@ -1,0 +1,23 @@
+openapi: 3.1.0
+info:
+  title: Modern API
+  version: "1.0"
+webhooks:
+  postCreated:
+    post:
+      responses:
+        '200':
+          description: ok
+paths:
+  /api/v1/posts:
+    get:
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nickname:
+                    type: [string, "null"]

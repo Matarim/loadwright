@@ -1,0 +1,13 @@
+{
+  "document": "/Volumes/MacMiniExternalHD/Users/thepoorman/development/loadwright/spec/fixtures/openapi/openapi_31.yaml",
+  "error_count": 2,
+  "paths_total": 1,
+  "paths_affected": 1,
+  "affected_paths": [
+    "/api/v1/posts"
+  ],
+  "errors": [
+    "Unexpected fields: webhooks — at #/",
+    "Invalid type. Expected String — at #/paths//api/v1/posts/get/responses/200/content/application/json/schema/properties/nickname/type"
+  ]
+}

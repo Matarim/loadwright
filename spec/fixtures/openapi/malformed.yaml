@@ -1,0 +1,7 @@
+openapi: 3.0.3
+info:
+  title: Broken
+paths:
+  /api/v1/posts:
+    get:
+      responses: {}

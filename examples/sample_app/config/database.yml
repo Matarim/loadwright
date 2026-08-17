@@ -1,0 +1,15 @@
+# A real database.yml, because ActiveRecord's railtie expects one — and the railtie
+# is what puts `db_runtime` on the process_action payload, which Loadwright's time
+# breakdown reads. See config/application.rb.
+default: &default
+  adapter: sqlite3
+  pool: <%= ENV.fetch("SAMPLE_APP_POOL", 5) %>
+  timeout: 5000
+
+development:
+  <<: *default
+  database: <%= ENV.fetch("SAMPLE_APP_DATABASE") { "db/development.sqlite3" } %>
+
+test:
+  <<: *default
+  database: <%= ENV.fetch("SAMPLE_APP_DATABASE") { "db/test.sqlite3" } %>
