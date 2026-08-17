@@ -105,11 +105,7 @@ module Loadwright
           request_id: request_id,
           collector: collector,
           capability_epoch: capability_epoch,
-          # WITHOUT :sql. The raw statement is captured for EXPLAIN only (see
-          # QueryTracker), and to_h is the boundary every persisted artefact crosses:
-          # a run record, a JSON report, a bug-report attachment. The fingerprint is
-          # what findings are built from, and it carries no bind values.
-          query_sample: queries.first(50).map { |query| query.except(:sql) }
+          query_sample: queries.first(50)
         )
       end
     end

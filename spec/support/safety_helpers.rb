@@ -72,14 +72,21 @@ module SafetyHelpers
     )
   end
 
-  # A guard wired entirely from injected collaborators — no Rails, no sockets,
-  # no real ENV.
-  def build_guard(config:, env: {}, hostname: "macbook.local", confirmation: nil, identifier: nil, stdout: nil)
+  # A guard wired entirely from injected collaborators — no Rails, no sockets, no
+  # real ENV.
+  #
+  # `rails_env: nil` is what makes the injected `env:` actually take effect. Without
+  # it these specs read ::Rails.env, which examples/sample_app sets to "test" — so
+  # every "refuses to run in production" example would silently be running in test
+  # and passing for the wrong reason. It did, until this repo grew a fixture app.
+  def build_guard(config:, env: {}, rails_env: nil, hostname: "macbook.local",
+                  confirmation: nil, identifier: nil, stdout: nil)
     Loadwright::Safety::EnvironmentGuard.new(
       config: config,
       confirmation: confirmation || RefusingConfirmation.new,
       identifier: identifier || ScriptedIdentifier.new(raises: "identifier should not have been consulted"),
       env: env,
+      rails_env: rails_env,
       hostname: hostname,
       stdout: stdout || StringIO.new
     )

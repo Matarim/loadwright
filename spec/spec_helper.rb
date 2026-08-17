@@ -30,4 +30,13 @@ RSpec.configure do |config|
 
   # Configuration is global state; no example may leak into another.
   config.before { Loadwright.reset_configuration! }
+
+  # So is the current request id. An example that opens a request without closing it
+  # leaves this fiber marked as belonging to that request, and the NEXT example's
+  # instrumented events get attributed to it — which shows up as an unrelated spec
+  # failing under some seeds and not others. (The production equivalent of this leak
+  # is fixed in ExecutionContext#issue and CollectorMiddleware, both with an
+  # `ensure`; this hook keeps the suite from depending on those being called.)
+  config.before { Loadwright::Instrumentation::CurrentRequest.clear! }
+  config.after { Loadwright::Instrumentation::CurrentRequest.clear! }
 end

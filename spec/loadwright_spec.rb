@@ -18,10 +18,11 @@ RSpec.describe Loadwright do
       .to be(true)
   end
 
-  # The in-process half: Rails may be loaded without an application being
-  # initialised, which is the state the gem's own suite runs in.
+  # The in-process half: every Rails-dependent default degrades rather than raising.
+  # Rails is hidden explicitly rather than assumed absent — examples/sample_app boots
+  # a real application, so whether `Rails` is defined here depends on spec order.
   it "resolves every configuration default with no Rails application initialised" do
-    expect(defined?(Rails) && Rails.respond_to?(:application) && Rails.application).to be_falsey
+    hide_const("Rails")
 
     config = Loadwright::Configuration.new
 

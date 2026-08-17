@@ -62,6 +62,12 @@ Gem::Specification.new do |spec|
   spec.add_dependency "activesupport", ">= 7.0"
   spec.add_dependency "railties", ">= 7.0"
 
+  # :in_process execution drives ActionDispatch::Integration::Session directly.
+  # railties already pulls actionpack in, but the dependency is direct and load
+  # order matters (action_dispatch/testing/integration needs action_controller
+  # loaded first), so it is declared rather than assumed.
+  spec.add_dependency "actionpack", ">= 7.0"
+
   # OpenAPI discovery. discovery-and-load-engine.md is explicit that we must not
   # hand-roll YAML/JSON schema walking.
   spec.add_dependency "openapi3_parser", "~> 0.10"

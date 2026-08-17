@@ -71,16 +71,33 @@ module Loadwright
         end
       end
 
+      # Sentinel for "ask Rails". Distinguished from nil, which means "there is no
+      # Rails; fall back to the environment variables" — a distinction the specs
+      # need in order to exercise both branches on purpose.
+      DETECT = Object.new.freeze
+
+      # `rails_env` exists because environment detection was otherwise untestable in
+      # any process where Rails is loaded — which is every real host app. With
+      # detection reading ::Rails.env directly, an injected `env:` was silently
+      # ignored, and a spec claiming to run "in production" was actually running in
+      # whatever the loaded application's environment happened to be. It passed for
+      # the wrong reason, and only started failing when this repo grew a fixture app.
+      #
+      # Note this is NOT a bypass: there is no config key for it and nothing in the
+      # user-facing surface can set it. It is exactly as injectable as `confirmation`
+      # already is, and both are constructed by Loadwright's own runner.
       def initialize(config: Loadwright.configuration,
                      confirmation: nil,
                      identifier: nil,
                      env: ENV,
+                     rails_env: DETECT,
                      hostname: nil,
                      stdout: $stdout)
         @config = config
         @confirmation = confirmation || Confirmation.new
         @identifier = identifier || RemoteTargetIdentifier.new(config: config)
         @env = env
+        @rails_env = rails_env
         @hostname = hostname
         @stdout = stdout
       end
@@ -157,12 +174,17 @@ module Loadwright
       # the default allowlist — so a deploy setup that loses RAILS_ENV fails
       # closed rather than defaulting to development.
       def detect_environment
-        if defined?(::Rails) && ::Rails.respond_to?(:env) && ::Rails.env
-          return ::Rails.env.to_s
-        end
+        resolved = @rails_env.equal?(DETECT) ? rails_environment : @rails_env
+        return resolved.to_s unless resolved.nil?
 
         value = @env["RAILS_ENV"] || @env["RACK_ENV"]
         value.to_s.strip.empty? ? "unknown" : value.to_s
+      end
+
+      def rails_environment
+        return nil unless defined?(::Rails) && ::Rails.respond_to?(:env)
+
+        ::Rails.env
       end
 
       def allowlisted?(environment)

@@ -79,6 +79,44 @@ RSpec.describe Loadwright::Safety::EnvironmentGuard do
 
       expect(guard.approve!.production_adjacent).to be(false)
     end
+
+    # The production code path, tested on purpose rather than by accident. Every
+    # example above injects rails_env explicitly so that the ENV fallback is what is
+    # under test; these two cover the branch a real host app actually takes.
+    describe "where the environment name comes from" do
+      it "prefers Rails.env over the environment variables when Rails is present" do
+        rails = Module.new
+        rails.define_singleton_method(:respond_to?) { |name, *| name == :env }
+        rails.define_singleton_method(:env) { "production" }
+        stub_const("Rails", rails)
+
+        # RAILS_ENV says development; the loaded application says production. The
+        # application wins, because it is what is actually running.
+        guard = Loadwright::Safety::EnvironmentGuard.new(
+          config: config,
+          confirmation: SafetyHelpers::RefusingConfirmation.new,
+          env: { "RAILS_ENV" => "development" },
+          hostname: "macbook.local",
+          stdout: StringIO.new
+        )
+
+        expect { guard.approve! }.to raise_error(Loadwright::SafetyError, /"production"/)
+      end
+
+      it "falls back to the environment variables when there is no Rails" do
+        hide_const("Rails")
+
+        guard = Loadwright::Safety::EnvironmentGuard.new(
+          config: config,
+          confirmation: SafetyHelpers::RefusingConfirmation.new,
+          env: { "RACK_ENV" => "staging" },
+          hostname: "macbook.local",
+          stdout: StringIO.new
+        )
+
+        expect { guard.approve! }.to raise_error(Loadwright::SafetyError, /"staging"/)
+      end
+    end
   end
 
   describe "Layer 2 — heuristic production detection" do
@@ -260,6 +298,8 @@ RSpec.describe Loadwright::Safety::EnvironmentGuard do
     end
 
     it "is nil rather than a fallback string when there is no Rails application" do
+      hide_const("Rails")
+
       expect(Loadwright::Configuration.new.confirmation_phrase).to be_nil
     end
   end

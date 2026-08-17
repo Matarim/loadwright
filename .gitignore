@@ -9,3 +9,6 @@
 
 # Loadwright's own output, when running it against examples/sample_app.
 /tmp/loadwright/
+
+# examples/sample_app is a live fixture; its SQLite databases are generated.
+examples/sample_app/db/*.sqlite3

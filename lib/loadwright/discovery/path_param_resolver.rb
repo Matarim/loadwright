@@ -1,21 +1,182 @@
 # frozen_string_literal: true
 
 require "loadwright/errors"
+require "loadwright/discovery/endpoint"
 
 module Loadwright
   module Discovery
-    # Resolves {id} to a real record: seeded ids, then recorded ids, then
-    # path_param_overrides, then the OpenAPI example last. Unresolvable means skip
-    # the endpoint and name the param — never send a placeholder and report the 404
-    # as a performance result. Rotates ids so one hot row does not distort cache and
-    # lock behaviour.
+    # Turns `/api/v1/posts/{id}/comments` into `/api/v1/posts/4271/comments`.
     #
-    # Specified in references/discovery-and-load-engine.md
+    # WHY THIS IS REQUIRED RATHER THAN NICE TO HAVE. OpenAPI examples carry
+    # placeholder ids — `1`, `"string"`, `abc-123` — which 404 against a
+    # freshly-seeded database. Without resolution most nested endpoints fail the
+    # response validity gate, the whole run comes back `inconclusive`, and that is
+    # the single most likely way a first real-world run produces nothing useful.
     #
-    # STATUS: stub. Implemented in a later session per CLAUDE.md section 4.
+    # Resolution order, per discovery-and-load-engine.md:
+    #
+    #   1. A seeded record's real id — the primary path, and the only source that is
+    #      guaranteed to exist right now.
+    #   2. An id captured during integration-spec recording — those requests
+    #      demonstrably worked, though against a different database state.
+    #   3. An explicit config.path_param_overrides entry — for slugs, UUIDs,
+    #      composite keys, and external identifiers nothing can infer.
+    #   4. The OpenAPI example, last, because it is least likely to correspond to
+    #      real data.
+    #
+    # If none resolve, the endpoint is SKIPPED and named. Sending a placeholder id
+    # and then reporting the resulting 404 as a performance result is the specific
+    # thing this class exists to prevent.
     class PathParamResolver
-      def resolve(*, **, &)
-        raise NotImplementedError, "Loadwright::Discovery::PathParamResolver#resolve is not implemented yet"
+      Resolution = Struct.new(:path, :values, :sources, keyword_init: true) do
+        def to_h = { path: path, values: values, sources: sources }
+      end
+
+      Unresolved = Struct.new(:endpoint, :params, keyword_init: true) do
+        def detail
+          "could not resolve #{params.map { |p| "{#{p}}" }.join(', ')}"
+        end
+      end
+
+      SOURCE_ORDER = %i[seeded recorded override example].freeze
+
+      def initialize(config: Loadwright.configuration, seeded_ids: {})
+        @config = config
+        # { "post" => [1, 2, 3] } — resource name to ids the seeder just created.
+        @seeded_ids = seeded_ids
+        @cursors = {}
+      end
+
+      def seeded_ids=(mapping)
+        @seeded_ids = mapping
+        @cursors = {}
+      end
+
+      # Returns a Resolution, or an Unresolved. Deliberately not nil: an unresolved
+      # endpoint carries WHICH param failed, which is what makes the report
+      # actionable ("add post to factory_map") rather than a shrug.
+      def resolve(endpoint, index: 0)
+        return Resolution.new(path: endpoint.path, values: {}, sources: {}) unless endpoint.path_params?
+
+        values = {}
+        sources = {}
+        missing = []
+
+        endpoint.path_params.each do |param|
+          candidate, source = candidates_for(endpoint, param, index)
+
+          if candidate.nil?
+            missing << param
+          else
+            values[param] = candidate
+            sources[param] = source
+          end
+        end
+
+        return Unresolved.new(endpoint: endpoint, params: missing) if missing.any?
+
+        Resolution.new(path: substitute(endpoint.path, values), values: values, sources: sources)
+      end
+
+      def to_h
+        {
+          seeded_resources: @seeded_ids.keys,
+          overrides: @config.path_param_overrides.keys
+        }
+      end
+
+      private
+
+      def candidates_for(endpoint, param, index)
+        SOURCE_ORDER.each do |source|
+          value = send(:"from_#{source}", endpoint, param, index)
+          return [value, source] unless value.nil?
+        end
+
+        [nil, nil]
+      end
+
+      # `/api/v1/posts/{id}/comments` with param :id resolves against the "post"
+      # resource — the segment immediately preceding the parameter, singularised.
+      # `{post_id}` resolves against "post" directly.
+      def from_seeded(endpoint, param, index)
+        resource = resource_for(endpoint, param)
+        return nil if resource.nil?
+
+        ids = Array(@seeded_ids[resource] || @seeded_ids[resource.to_sym])
+        return nil if ids.empty?
+
+        # Rotated rather than always the first. A single hot row produces
+        # unrealistic cache behaviour and can create row-lock contention that does
+        # not reflect real traffic.
+        ids[index % ids.length]
+      end
+
+      def from_recorded(endpoint, param, index)
+        recorded = Array(endpoint.recorded_path_values[param])
+        return nil if recorded.empty?
+
+        recorded[index % recorded.length]
+      end
+
+      def from_override(endpoint, param, _index)
+        overrides = @config.path_param_overrides
+        by_template = overrides[endpoint.path] || overrides[endpoint.to_s]
+        value = by_template.is_a?(Hash) ? (by_template[param] || by_template[param.to_s]) : nil
+        value ||= overrides[param] if overrides[param] && !overrides[param].is_a?(Hash)
+
+        return value unless value.respond_to?(:call)
+
+        # A callable, so an override can look up a slug or a composite key at run
+        # time instead of being frozen into the initializer. A raising override is
+        # treated as "did not resolve" rather than taking the run down — the
+        # endpoint is then reported as unresolved, naming the param.
+        begin
+          value.call
+        rescue StandardError
+          nil
+        end
+      end
+
+      def from_example(endpoint, param, _index)
+        endpoint.query_params.find { |q| q[:name].to_s == param.to_s }&.dig(:example)
+      end
+
+      def resource_for(endpoint, param)
+        name = param.to_s
+
+        # {post_id} -> post
+        return singularize(name.delete_suffix("_id")) if name.end_with?("_id")
+
+        # /posts/{id} -> the segment before the parameter
+        segments = endpoint.path.split("/").reject(&:empty?)
+        position = segments.index("{#{name}}")
+        return nil if position.nil? || position.zero?
+
+        preceding = segments[position - 1]
+        return nil if preceding.start_with?("{")
+
+        singularize(preceding)
+      end
+
+      # Deliberately naive, and deliberately not ActiveSupport#singularize: that
+      # applies the host app's inflections, which is right for the app's own class
+      # names and wrong here, where the input is a URL segment. The seeder keys its
+      # ids by factory name, and factory_map is the escape hatch when a URL segment
+      # and a factory name genuinely diverge.
+      def singularize(word)
+        case word
+        when /ies\z/ then word.sub(/ies\z/, "y")
+        when /(ss|sh|ch|x|z)es\z/ then word.sub(/es\z/, "")
+        when /s\z/ then word.sub(/s\z/, "")
+        else word
+        end
+      end
+
+      def substitute(template, values)
+        values.reduce(template) do |path, (param, value)|
+          path.gsub("{#{param}}", value.to_s)
+        end
       end
     end
   end

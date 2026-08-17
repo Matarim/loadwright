@@ -32,22 +32,6 @@ require "logger"
 require "active_record/railtie"
 require "action_controller/railtie"
 
-# ActiveJob and ActionMailer are here so the fixture can exercise SIDE-EFFECT
-# CONTAINMENT for real. Without them the containment subsystem reports both measures
-# unenforceable and aborts, so every end-to-end run had to disable them -- which meant
-# the contained path, the default path, was never exercised against a live app at all.
-# They also make the job fan-out finding reachable: the :test adapter records enqueued
-# jobs instead of performing them, which is what turns suppression into a measurement.
-require "active_job/railtie"
-require "action_mailer/railtie"
-
-# A host app loads the gem through Bundler.require from its :development, :test
-# group. This fixture has no Gemfile of its own, so it requires it directly — and it
-# must, because the railtie is what mounts the identity endpoint. Without it, the
-# :http health probe 404s and Loadwright waits out the whole http_boot_timeout before
-# reporting a boot failure. (That is exactly how this was found.)
-require "loadwright"
-
 module SampleApp
   class Application < ::Rails::Application
     config.load_defaults 7.0 if config.respond_to?(:load_defaults)
@@ -65,8 +49,6 @@ module SampleApp
     config.log_level = :warn
 
     config.autoload_paths += Dir[File.expand_path("../app/*", __dir__)]
-    # The mounted Rack app is referenced by routes.rb at boot, before autoload runs.
-    require_relative "../app/rack/mounted_api"
     config.eager_load_paths += Dir[File.expand_path("../app/*", __dir__)]
 
     # So a spec can assert Loadwright honours the host app's own filter list

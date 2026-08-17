@@ -120,8 +120,13 @@ RSpec.describe Loadwright::Configuration do
   end
 
   describe "lazily-resolved defaults" do
-    # The gem's own suite has no Rails application. Eager evaluation would
-    # either raise on load or freeze a wrong value.
+    # Rails is hidden explicitly rather than assumed absent. examples/sample_app
+    # boots a real Rails application in this process, so whether `Rails` is defined
+    # here depends on spec ORDER — and a premise that depends on order is worse
+    # than no premise at all.
+    before { hide_const("Rails") }
+
+    # Eager evaluation would either raise on load or freeze a wrong value.
     it "resolves Rails-dependent defaults without a Rails application present" do
       expect { config.run_history_dir }.not_to raise_error
       expect(config.openapi_spec_paths).to eq([])
@@ -139,6 +144,21 @@ RSpec.describe Loadwright::Configuration do
     it "still allows an explicit confirmation phrase" do
       config.confirmation_phrase = "MyApp"
       expect(config.confirmation_phrase).to eq("MyApp")
+    end
+  end
+
+  describe "confirmation_phrase against a real Rails application", :sample_app do
+    # The documented default: the host application's module name, so the phrase is
+    # specific to the app and cannot be guessed generically. Derived by splitting
+    # the class name rather than via ActiveSupport's Module#module_parent_name,
+    # which comes from a core_ext this gem does not require.
+    it "is the application's module name" do
+      expect(Loadwright::Configuration.new.confirmation_phrase).to eq("SampleApp")
+    end
+
+    it "resolves Rails-rooted paths under the application root" do
+      expect(Loadwright::Configuration.new.report_output_dir.to_s)
+        .to eq(Rails.root.join("tmp/loadwright").to_s)
     end
   end
 

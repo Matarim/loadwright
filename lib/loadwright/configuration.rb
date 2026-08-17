@@ -83,13 +83,25 @@ module Loadwright
     # is defined but does not respond to #application, the guard expression is
     # `false`, and `false&.class` is FalseClass — which has no
     # #module_parent_name. Safe navigation short-circuits on nil only.
+    #
+    # The module name is derived here rather than via ActiveSupport's
+    # Module#module_parent_name. That method comes from a core_ext this gem does
+    # not require, so calling it works only when the host happens to have loaded
+    # it — and the failure is a NoMethodError while resolving config, which takes
+    # down a run for a reason unrelated to what the user was doing. Splitting the
+    # class name gives the same answer for the shape that matters
+    # (Acme::Application -> "Acme") and nil for an anonymous class, which is the
+    # unresolvable case the guard already handles by refusing.
     setting :confirmation_phrase, section: :safety, lazy: lambda {
       next nil unless defined?(::Rails) && ::Rails.respond_to?(:application)
 
       app = ::Rails.application
       next nil if app.nil?
 
-      app.class.module_parent_name
+      name = app.class.name
+      next nil if name.nil? || !name.include?("::")
+
+      name.split("::").first
     }
 
     setting :allow_mutating_requests, false, section: :safety
