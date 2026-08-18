@@ -103,6 +103,7 @@ module Loadwright
           transport: @context&.transport&.name,
           collector: @context&.collector&.collector_name,
           capabilities: @context&.to_h&.dig(:capabilities),
+          sweeps: sweeps,
           config_fingerprint: config.comparability_fingerprint,
           config: config.snapshot,
           safety: safety_decision&.to_h,
@@ -125,6 +126,44 @@ module Loadwright
           endpoints: outcomes.map { |outcome| endpoint_to_h(outcome) },
           cells: cells.map(&:to_h)
         }
+      end
+
+      # What each sweep held fixed, including the app's OWN default page size.
+      #
+      # The seed-scale sweep deliberately sends no page-size parameter, so the axis it
+      # holds fixed is whatever the app defaults to — a property of the APP, not of the
+      # run, and therefore invisible in the config fingerprint. Two runs against apps
+      # with different defaults are not comparing the same thing, so the observed value
+      # is recorded here for the comparability gate to check.
+      #
+      # Observed rather than configured, because Loadwright never told the app what page
+      # size to use: it is read back from the record count at the largest seed scale,
+      # where a paginated endpoint has filled its default page.
+      def sweeps
+        {
+          seed_scale: {
+            varies: :scale_factors,
+            holds_fixed: "the app's own default page size (no page-size parameter is sent)",
+            observed_page_size: observed_default_page_size,
+            scale_factors: config.scale_factors
+          },
+          page_size: {
+            varies: :page_size_sweep,
+            holds_fixed: "seed scale, and concurrency at 1",
+            page_size_sweep: config.page_size_sweep,
+            concurrency: 1
+          }
+        }
+      end
+
+      # Per endpoint, so an app with different defaults per collection is visible rather
+      # than averaged into one misleading number.
+      def observed_default_page_size
+        largest = config.scale_factors.max
+
+        cells.select { |cell| cell.sweep == :seed_scale && cell.scale_factor == largest }
+             .reject { |cell| cell.median_records.nil? }
+             .to_h { |cell| [cell.endpoint_key, cell.median_records] }
       end
 
       private

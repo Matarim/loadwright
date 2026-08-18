@@ -107,11 +107,24 @@ module Loadwright
         document = Openapi3Parser.load_file(path)
         return if document.valid?
 
-        raise DiscoveryError, parse_failure_message(path, raw, document.errors.to_a.map(&:to_s))
+        raise DiscoveryError, parse_failure_message(path, raw, document.errors.to_a.map { |e| describe_error(e) })
       rescue Openapi3Parser::Error => e
         # The parser raises rather than reporting for some malformed documents,
         # which is the same outcome by a different route.
         raise DiscoveryError, parse_failure_message(path, raw, [e.message])
+      end
+
+      # WITH THE LOCATION, not just the message. `Validation::Error#to_s` returns only
+      # the message, so a whole document's worth of problems came back as
+      # "Invalid type. Expected String" with nothing to point at — which in a
+      # four-hundred-line document is close to useless, and makes a loud failure
+      # undiagnosable. The context is a JSON pointer, unescaped here so it reads as the
+      # path the author actually wrote.
+      def describe_error(error)
+        location = error.context.to_s if error.respond_to?(:context)
+        return error.message if location.nil? || location.empty?
+
+        "#{error.message} — at #{location.gsub('~1', '/').gsub('~0', '~')}"
       end
 
       def parse_failure_message(path, raw, errors)

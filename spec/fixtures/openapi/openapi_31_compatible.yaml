@@ -1,0 +1,19 @@
+# A 3.1 version string with entirely 3.0-compatible content. Verifies that the version
+# string alone is not what openapi3_parser rejects — so the diagnostic message must not
+# claim otherwise.
+openapi: 3.1.0
+info:
+  title: Modern but compatible
+  version: "1.0"
+paths:
+  /api/v1/posts:
+    get:
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object

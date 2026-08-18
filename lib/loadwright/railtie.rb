@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "rails/railtie"
+require "loadwright/execution/server_manager"
 require "loadwright/execution/collector_middleware"
 require "loadwright/execution/identity_endpoint"
 
@@ -46,14 +47,20 @@ module Loadwright
     # query-derived finding comes back unavailable. The run would work and say almost
     # nothing.
     #
-    # So ServerManager passes the per-run secret to the child in its environment, and
-    # the child arms itself here. Note what this is NOT: the secret's presence is not
-    # authorisation. mount! still asks the guard, and still refuses in a
-    # production-adjacent environment regardless of what the environment variable says
-    # — which matters, because an environment variable is exactly the kind of thing
-    # that gets left set.
+    # So ServerManager writes the per-run secret to a mode-0600 file and passes the
+    # PATH in the child's environment; the child reads it here. The secret itself never
+    # travels in an environment variable, because an environment block is readable by
+    # any local user through `ps` and lands in crash dumps and spawn logs — and this
+    # secret guards an endpoint serving SQL and call sites from the app under test.
+    #
+    # Note what the file's presence is NOT: authorisation. mount! still asks the guard
+    # and still refuses in a production-adjacent environment regardless of what is on
+    # disk — which matters, because a path in an environment variable is exactly the
+    # kind of thing that gets left set.
     initializer "loadwright.arm_collector" do
-      secret = ENV.fetch("LOADWRIGHT_COLLECTOR_SECRET", nil)
+      secret = Execution::ServerManager.read_secret_file(
+        ENV.fetch(Execution::ServerManager::SECRET_FILE_VARIABLE, nil)
+      )
 
       unless secret.to_s.empty?
         config.after_initialize do

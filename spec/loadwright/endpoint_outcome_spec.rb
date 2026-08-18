@@ -105,3 +105,104 @@ RSpec.describe Loadwright::EndpointOutcome do
     expect(described_class.healthy(endpoint: endpoint)).to be_frozen
   end
 end
+
+# The coverage-derived state rule. Added when `has_findings` with
+# `confidence: :none` was retired as a category error — see response-analysis.md,
+# "Outcome state is derived from coverage".
+RSpec.describe Loadwright::EndpointOutcome, ".derive" do
+  let(:endpoint) { "GET /api/v1/posts" }
+
+  def coverage(**detectors) = Loadwright::Coverage.new(detectors)
+
+  def full_coverage
+    coverage(pattern_match: :available, slope: :available, payload_growth: :available,
+             query_response_comparison: :available)
+  end
+
+  # THE WORKED CASE the rule exists to settle. The slope could not be measured, but
+  # the pattern-match detector ran and came back clean — so the N+1 class WAS covered,
+  # just with one detector instead of two. That is healthy, not inconclusive.
+  it "is healthy when a class is covered by one of its two detectors" do
+    outcome = described_class.derive(
+      endpoint: endpoint,
+      coverage: coverage(pattern_match: :available,
+                         slope: [:unavailable, "result size could not be varied"],
+                         payload_growth: :available, query_response_comparison: :available)
+    )
+
+    expect(outcome).to be_healthy
+    expect(outcome.coverage.describe).to include("N+1 (pattern)")
+  end
+
+  it "is healthy when every applicable class is covered and nothing was found" do
+    expect(described_class.derive(endpoint: endpoint, coverage: full_coverage)).to be_healthy
+  end
+
+  # If BOTH N+1 detectors failed, an N+1 cannot be ruled out.
+  it "is inconclusive when a class has no coverage at all, naming the class" do
+    outcome = described_class.derive(
+      endpoint: endpoint,
+      coverage: coverage(pattern_match: [:unavailable, "no query data was collected"],
+                         slope: [:unavailable, "result size could not be varied"],
+                         payload_growth: :available)
+    )
+
+    expect(outcome).to be_inconclusive
+    expect(outcome.reason).to eq(:incomplete_coverage)
+    expect(outcome).to be_incomplete_coverage
+    expect(outcome.detail).to include("N+1")
+    expect(outcome.detail).to include("no query data was collected")
+  end
+
+  # Findings take precedence over a coverage gap: a concrete defect is the most
+  # actionable thing we can say, and the gap stays visible because coverage is
+  # attached regardless.
+  it "is has_findings when something was found, even with a coverage gap" do
+    outcome = described_class.derive(
+      endpoint: endpoint,
+      findings: [:an_n_plus_one],
+      coverage: coverage(pattern_match: [:unavailable, "no query data"], slope: [:unavailable, "no variance"])
+    )
+
+    expect(outcome).to be_has_findings
+    expect(outcome.coverage.uncovered_classes).to include(:n_plus_one)
+  end
+
+  # An unmeasurable signal must never inflate the finding count.
+  it "counts no finding for a coverage gap" do
+    outcome = described_class.derive(
+      endpoint: endpoint,
+      coverage: coverage(pattern_match: [:unavailable, "no query data"], slope: [:unavailable, "no variance"])
+    )
+
+    expect(outcome.findings).to be_empty
+  end
+
+  # Reported on every endpoint regardless of state, so reporting renders it rather
+  # than recomputing it.
+  it "attaches coverage to every state" do
+    [
+      described_class.derive(endpoint: endpoint, coverage: full_coverage),
+      described_class.derive(endpoint: endpoint, findings: [:x], coverage: full_coverage),
+      described_class.inconclusive(endpoint: endpoint, reason: :unsuccessful_status, coverage: full_coverage)
+    ].each do |outcome|
+      expect(outcome.coverage).to eq(full_coverage)
+      expect(outcome.to_h[:coverage][:description]).to be_a(String)
+    end
+  end
+
+  it "defaults to no coverage rather than nil, so callers never branch on absence" do
+    expect(described_class.healthy(endpoint: endpoint).coverage).to eq(Loadwright::Coverage.none)
+  end
+
+  # An incomplete-coverage endpoint is still not clean — that is the whole point of
+  # not calling it healthy.
+  it "is never countable as clean when coverage is incomplete" do
+    outcome = described_class.derive(
+      endpoint: endpoint,
+      coverage: coverage(pattern_match: [:unavailable, "no query data"], slope: [:unavailable, "no variance"])
+    )
+
+    expect(outcome).not_to be_countable_as_clean
+  end
+end

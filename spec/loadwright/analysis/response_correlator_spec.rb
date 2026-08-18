@@ -70,14 +70,27 @@ RSpec.describe Loadwright::Analysis::ResponseCorrelator do
       expect(finding.detail).to include("pagination hides")
     end
 
-    # The crucial negative: the seeded sweep must not emit a clean verdict. It emits a
-    # distinct "not measurable" finding so the report can tell "measured, and flat"
-    # apart from "could not measure".
-    it "emits a not-measurable finding rather than silence for the seeded sweep" do
+    # The crucial negative: the seeded sweep must not emit a clean slope verdict.
+    #
+    # It also must not emit a FINDING. An earlier version emitted a
+    # `confidence: :none` "not measurable" finding, which was a category error —
+    # "finding" says something is wrong with the app, when what is true is that a
+    # detector could not answer. Unavailability lives in the Measurement (which carries
+    # the reason) and in Coverage, which is what the outcome state is derived from.
+    it "emits no finding at all for an unmeasurable slope" do
       findings = correlator.findings(observations: seed_scale_sweep)
 
-      expect(findings.map(&:kind)).to include(:n_plus_one_slope_not_measurable)
       expect(findings.map(&:kind)).not_to include(:n_plus_one_slope)
+      expect(findings.map(&:confidence)).not_to include(:none)
+    end
+
+    it "reports the unmeasurable slope through Coverage instead" do
+      states = correlator.detector_states(observations: seed_scale_sweep, query_data: true)
+
+      expect(states[:slope].first).to eq(:unavailable)
+      expect(states[:slope].last).to include("unable to vary result size")
+      # And the class is still COVERED, because the pattern-match detector answered.
+      expect(Loadwright::Coverage.new(states)).to be_covered(:n_plus_one)
     end
   end
 

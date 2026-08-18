@@ -21,7 +21,45 @@ module Loadwright
     class ServerManager
       DEFAULT_HOST = "127.0.0.1"
 
+      # The child is told WHERE the secret is, never what it is.
+      #
+      # An environment variable carrying the secret itself is readable by any local
+      # user through `ps` on most systems, and environment blocks land in crash dumps,
+      # process listings, and anything that logs a spawn. The secret guards an endpoint
+      # that serves SQL and call sites from the app under test, so that is a real
+      # exposure and not a theoretical one — a per-run lifetime shortens the window but
+      # does not close it.
+      #
+      # A mode-0600 file closes it: only the running user can read it, nothing prints
+      # its contents, and the path is uninteresting on its own. Chosen over handing the
+      # secret over stdin because the child is an arbitrary `http_server_command` — Puma
+      # does not read a secret from stdin, and a scheme that depends on the server
+      # cooperating would break the moment someone configures a different one.
+      SECRET_FILE_VARIABLE = "LOADWRIGHT_COLLECTOR_SECRET_FILE"
+
       attr_reader :port, :host, :pid, :base_url
+
+      # Read by the child's railtie. Refuses anything that is not a private regular
+      # file: a world-readable secret file has already failed at its one job, and
+      # proceeding would arm the endpoint while pretending the secret was protected.
+      def self.read_secret_file(path)
+        return nil if path.to_s.empty?
+        return nil unless File.file?(path)
+
+        mode = File.stat(path).mode & 0o777
+        if mode & 0o077 != 0
+          warn "loadwright: refusing to read the collector secret from #{path}: mode is " \
+               "#{format('%<mode>04o', mode: mode)}, which is readable by other users"
+          return nil
+        end
+
+        secret = File.read(path).strip
+        secret.empty? ? nil : secret
+      rescue StandardError => e
+        warn "loadwright: could not read the collector secret file (#{e.class}); " \
+             "the collector middleware will not be armed"
+        nil
+      end
 
       def initialize(config: Loadwright.configuration, lifecycle: nil, stdout: $stdout,
                      host: DEFAULT_HOST, collector_secret: nil)
@@ -72,6 +110,7 @@ module Loadwright
         reaped?(pid, timeout: 2)
         self
       ensure
+        remove_secret_file!
         @lifecycle&.unregister(@teardown_hook) if @teardown_hook
         @teardown_hook = nil
       end
@@ -123,15 +162,39 @@ module Loadwright
         command = @config.http_server_command || default_command
         env = { "PORT" => @port.to_s, "RAILS_ENV" => current_environment, "RACK_ENV" => current_environment }
 
-        # The child arms its own collector middleware from this (see railtie.rb). Passed
-        # in the environment because the harness cannot reach into another process to
-        # mount it, and without it the run is transported but not instrumented.
-        env["LOADWRIGHT_COLLECTOR_SECRET"] = @collector_secret if @collector_secret
+        # The child arms its own collector middleware from this (see railtie.rb). The
+        # PATH travels in the environment; the secret itself never does.
+        env[SECRET_FILE_VARIABLE] = write_secret_file! if @collector_secret
 
         @stdout.puts "loadwright: booting #{command} on #{@base_url}"
         @pid = Process.spawn(env, command, out: :out, err: :err, pgroup: true)
       rescue StandardError => e
         raise ServerError, "could not boot the app under test with #{command.inspect}: #{e.class}: #{e.message}"
+      end
+
+      # Written 0600 before the child is spawned, and removed by the Lifecycle teardown
+      # that already tears down the server — so an interrupted run does not leave it
+      # behind either.
+      def write_secret_file!
+        require "tempfile"
+
+        file = Tempfile.new(["loadwright-collector", ".secret"])
+        file.chmod(0o600)
+        file.write(@collector_secret)
+        file.flush
+        @secret_file = file
+        file.path
+      end
+
+      def remove_secret_file!
+        return if @secret_file.nil?
+
+        @secret_file.close
+        @secret_file.unlink
+      rescue StandardError
+        nil
+      ensure
+        @secret_file = nil
       end
 
       def default_command = "bundle exec puma -p #{@port} -e #{current_environment} --threads 1:5"

@@ -398,6 +398,83 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     end
   end
 
+  # =========================================================================
+  # REGRESSION: a clean endpoint must not be reported as having no coverage.
+  #
+  # The bug this guards against, in full, because the shape of it is the point and a
+  # future "simplification" would reintroduce it in one line:
+  #
+  # Over-fetch coverage needs the set of tables the endpoint queried. That set was
+  # sourced from the DUPLICATE query fingerprints — the same structure the N+1
+  # pattern-match detector reads. But a clean endpoint has NO duplicate fingerprints by
+  # definition. So a healthy endpoint looked as though it had queried no tables at all,
+  # over-fetch came back uncovered, and the endpoint went `inconclusive`.
+  #
+  # The healthiest endpoints in an API would have been the ones reported as unmeasurable
+  # — an inverted signal, which is precisely the failure the three-state model exists to
+  # prevent. Tables are recorded from EVERY query, not just the repeated ones.
+  #
+  # WHICH ASSERTION BELOW IS LOAD-BEARING: the coverage one. Over-fetch later became
+  # an ADVISORY class, which independently stops an over-fetch gap escalating to
+  # `inconclusive` — so reintroducing this bug today corrupts the reported coverage
+  # without changing the state. Verified by reintroducing it: only `be_covered` fails.
+  # The healthy expectation is kept as documentation of the original harm, but the
+  # coverage expectation is what would catch a regression now.
+  # =========================================================================
+  describe "over-fetch coverage on an endpoint with no duplicate queries" do
+    before do
+      config.scale_factors = [10, 100]
+      config.page_size_sweep = [5]
+      config.requests_per_endpoint_per_level = 2
+      config.warmup_requests = 0
+    end
+
+    # Distinct fingerprints only: nothing repeats, so `duplicates` stays empty while
+    # three real tables were queried.
+    def clean_metrics
+      Loadwright::Execution::RequestMetrics.new(
+        request_id: "r", collector: :direct,
+        queries: [
+          { fingerprint: 'SELECT "posts".* FROM "posts" WHERE "posts"."id" = ?' },
+          { fingerprint: 'SELECT "authors".* FROM "authors" WHERE "authors"."id" = ?' },
+          { fingerprint: 'SELECT COUNT(*) FROM "comments" WHERE "comments"."post_id" = ?' }
+        ],
+        query_count: Loadwright::Measurement.value(3),
+        distinct_query_count: Loadwright::Measurement.value(3)
+      )
+    end
+
+    let(:result) do
+      responder = ->(_) { { status: 200, body: JSON.generate([{ "id" => 1 }]) } }
+      context = build_context(responder: responder, metrics: clean_metrics)
+
+      runner(context: context).run(endpoints: [endpoint])
+    end
+
+    it "records every queried table, not only the repeated ones" do
+      cell = result.cells_for("GET /api/v1/posts").find { |c| c.sweep == :seed_scale }
+
+      expect(cell.duplicates).to be_empty, "premise: this endpoint has no duplicate fingerprints"
+      expect(cell.tables).to contain_exactly("posts", "authors", "comments")
+    end
+
+    it "covers the over-fetch class rather than reporting it unanswered" do
+      coverage = result.outcomes.first.coverage
+
+      expect(coverage).to be_covered(:over_fetch)
+      expect(coverage).not_to be_unanswered(:over_fetch)
+    end
+
+    # The consequence, stated as its own expectation so the failure names the harm.
+    it "reports the clean endpoint as healthy, NOT as inconclusive" do
+      outcome = result.outcomes.first
+
+      expect(outcome).to be_healthy,
+                         "a clean endpoint was reported #{outcome.state} " \
+                         "(#{outcome.detail}) — the inverted-signal regression is back"
+    end
+  end
+
   describe "the RunResult data shape" do
     it "separates the three states rather than collapsing them" do
       responder = lambda do |request|

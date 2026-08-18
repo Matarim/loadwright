@@ -70,7 +70,18 @@ Gem::Specification.new do |spec|
 
   # OpenAPI discovery. discovery-and-load-engine.md is explicit that we must not
   # hand-roll YAML/JSON schema walking.
-  spec.add_dependency "openapi3_parser", "~> 0.10"
+  #
+  # PINNED CONSERVATIVELY, and deliberately tighter than the usual floor-only rule
+  # applied above. Loadwright uses this gem for VALIDATION and then reads schemas out
+  # of the RAW parsed hash, because Node::Schema#to_h is shallow and injects
+  # additionalProperties: false — validating a real response against that would reject
+  # any payload carrying a field the document did not enumerate. That is the right call
+  # (see SchemaRef), but it means the code also depends on two things that are not
+  # public API: Validation::Error responding to #context, and the raw hash shape.
+  # A minor bump could change either silently, so the constraint stops at 0.10.x and
+  # spec/loadwright/discovery/openapi_parser_contract_spec.rb fails loudly if the
+  # assumptions stop holding.
+  spec.add_dependency "openapi3_parser", ">= 0.10", "< 0.11"
 
   # Response validity gate. json_schemer supports JSON Schema 2020-12, which is
   # the dialect OpenAPI 3.1 uses; json-schema centres on draft-04/06/07.

@@ -9,6 +9,7 @@ require "loadwright/errors"
 require "loadwright/measurement"
 require "loadwright/capability_profile"
 require "loadwright/capability_timeline"
+require "loadwright/coverage"
 require "loadwright/endpoint_outcome"
 require "loadwright/configuration"
 

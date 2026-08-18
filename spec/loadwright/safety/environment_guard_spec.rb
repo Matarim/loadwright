@@ -534,3 +534,108 @@ RSpec.describe Loadwright::Safety::EnvironmentGuard do
     end
   end
 end
+
+# THE FENCE around the rails_env injection.
+#
+# The injection is justified: without it, environment detection is untestable in any
+# process where Rails is loaded, and its absence silently disabled 22 of this file's
+# examples — including every "refuses to run in production" case. That is precisely the
+# kind of thing that must never sit undetected in this subsystem.
+#
+# But an injection point ON THE ENVIRONMENT GUARD is also exactly what a careless
+# future change would reach for to bypass the gate. A comment saying "test only" is not
+# a fence. These examples are the fence: they assert the injection is unreachable from
+# every surface a user or a CLI flag can touch, so it can only ever be supplied by code
+# constructing the guard directly.
+RSpec.describe Loadwright::Safety::EnvironmentGuard, "the rails_env injection is test-only" do
+  it "is not a configuration key, so no initializer can set it" do
+    %i[rails_env environment detected_environment force_environment].each do |candidate|
+      expect(Loadwright::Configuration.keys).not_to include(candidate)
+      expect(Loadwright::Configuration.new).not_to respond_to(candidate)
+      expect(Loadwright::Configuration.new).not_to respond_to(:"#{candidate}=")
+    end
+  end
+
+  it "is not documented in the generated initializer, so nobody discovers it there" do
+    template = SpecPaths.read(SpecPaths::INITIALIZER_TT)
+
+    expect(template).not_to match(/config\.rails_env/)
+    expect(template).not_to match(/rails_env\s*=/)
+  end
+
+  # The guard reads ENV only for RAILS_ENV/RACK_ENV, which are the real environment.
+  # There must be no Loadwright-specific variable that overrides detection — an
+  # environment variable is exactly the kind of thing left set by accident, and one that
+  # could claim "development" would defeat Layer 1 entirely.
+  it "is not readable from any Loadwright-specific environment variable" do
+    source = File.read(File.join(SpecPaths::LIB, "safety", "environment_guard.rb"))
+    env_reads = source.scan(/@env\[["']([A-Z_]+)["']\]/).flatten.uniq
+
+    expect(env_reads).to contain_exactly("RAILS_ENV", "RACK_ENV", "DATABASE_URL")
+    expect(source).not_to match(/LOADWRIGHT_[A-Z_]*ENV/)
+  end
+
+  it "proves the point: a Loadwright-specific variable cannot override detection" do
+    guard = Loadwright::Safety::EnvironmentGuard.new(
+      config: Loadwright::Configuration.new,
+      confirmation: SafetyHelpers::RefusingConfirmation.new,
+      env: { "RAILS_ENV" => "production",
+             "LOADWRIGHT_RAILS_ENV" => "development",
+             "LOADWRIGHT_ENV" => "development",
+             "LOADWRIGHT_FORCE_ENV" => "development" },
+      rails_env: nil,
+      hostname: "macbook.local",
+      stdout: StringIO.new
+    )
+
+    expect { guard.approve! }.to raise_error(Loadwright::SafetyError, /"production"/)
+  end
+
+  # The CLI's whole flag surface is fixed by AGENTS.md section 7. Nothing there may
+  # reach the guard's environment detection.
+  #
+  # Asserted on the FLAGS the parser defines and the option keys it sets, not on the
+  # word "environment" anywhere in the file — `--i-understand-the-risk` legitimately
+  # explains itself in terms of enabled_environments, and a check that punished that
+  # would be deleted the first time it fired.
+  it "defines no CLI flag that could set an environment" do
+    source = File.read(File.join(SpecPaths::LIB, "cli.rb"))
+    flags = source.scan(/o\.on\((?:"|')(--?[a-z-]+)/).flatten
+
+    expect(flags).not_to include("--env", "--rails-env", "--environment")
+    expect(source).not_to match(/@options\[:(?:rails_)?env(?:ironment)?\]/)
+  end
+
+  it "offers no environment override in --help, so it cannot be discovered there" do
+    require "loadwright/cli"
+    output = StringIO.new
+    Loadwright::CLI.start(["--help"], stdout: output, stderr: StringIO.new)
+
+    # The only mention may be the risk flag explaining which environments are allowed.
+    offending = output.string.lines.grep(/env/i).reject { |line| line.include?("--i-understand-the-risk") }
+    expect(offending).to be_empty, "--help mentions an environment override: #{offending.inspect}"
+  end
+
+  # Defaulting to the sentinel rather than to nil is what makes production safe: a
+  # caller that forgets the keyword gets REAL detection, not "no environment".
+  #
+  # Rails is hidden so the detection path is deterministic — examples/sample_app boots a
+  # real application whose env is `test`, which is allowlisted, so without this the
+  # example passes or fails on spec ORDER. (Found by rake spec:seeds, which is what it is
+  # for.) The Rails-present branch is covered by "prefers Rails.env over the environment
+  # variables" above.
+  it "detects the real environment when the keyword is omitted" do
+    hide_const("Rails")
+    expect(described_class::DETECT).not_to be_nil
+
+    guard = described_class.new(
+      config: Loadwright::Configuration.new,
+      confirmation: SafetyHelpers::RefusingConfirmation.new,
+      env: { "RAILS_ENV" => "production" },
+      hostname: "macbook.local",
+      stdout: StringIO.new
+    )
+
+    expect { guard.approve! }.to raise_error(Loadwright::SafetyError, /"production"/)
+  end
+end

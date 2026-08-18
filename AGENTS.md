@@ -644,6 +644,37 @@ DIAG-10c:
   do_not: report this endpoint as merely "unmeasurable" — the repetition is
           itself the finding
 
+DIAG-10d:
+  symptom: "Run aborted on the circuit breaker AND the report shows a high
+            contention count"
+  cause: TWO INDEPENDENT THINGS HAPPENED. Both counts are real and neither
+         caused the other.
+  explanation: >
+    The breaker aborted because endpoints were returning genuine
+    non-contention errors. Separately, the guard was retreating from database
+    pressure. Because Tier 1 contention is excluded from the breaker's
+    numerator, the contention count contributed NOTHING to the abort — the
+    abort is attributable entirely to the errors count.
+    Before the breaker/guard split this arrived as one confusing number and
+    the workaround was to raise the threshold. It is now two numbers, and
+    reading them as one produces the wrong fix.
+  fix: |
+    Read the two counts separately from report metadata. `errors` and
+    `error_rate` are the breaker's; `contention_events` is the guard's, and
+    `contention_excluded_from_error_rate: true` states the relationship.
+    1. Diagnose the abort from the errors alone — usually auth (DIAG-01),
+       a missing route, or 500s. That is what aborted the run.
+    2. Diagnose the contention separately, and only if it was excessive:
+       check whether the blocker was ours or external (DIAG-08), then S12.
+  do_not: >
+    Do not raise max_error_rate_before_abort because the contention count is
+    high. The contention count is not in the rate that tripped.
+  agent_instruction: >
+    When summarizing, report both counts as two findings, not one. "The run
+    aborted because 30% of requests returned 500s; separately, 40 contention
+    events caused the guard to step down twice" is two actionable facts.
+    "The run aborted under load" is neither.
+
 DIAG-11:
   symptom: "p99 missing from report"
   cause: intentional — sample size can't support it
@@ -700,6 +731,124 @@ inconclusive_causes:
 AGENT_RULE: >
   When summarizing for a user, always report the inconclusive count
   separately. "18 endpoints clean" is a lie if 12 of them were inconclusive.
+```
+
+### 9.1a State derivation — where the state comes from
+
+```yaml
+state_derivation:
+  rule: >
+    State is derived from finding-class COVERAGE, not from how many signals
+    produced a number. A class is COVERED if at least one of its detectors was
+    measurable.
+  order:
+    1_validity_gate: >
+      Response failed the gate (bad status, schema mismatch, empty with seeded
+      data, inconsistent shape) -> inconclusive for THAT reason. No coverage
+      question arises.
+    2_findings: any finding -> has_findings
+    3_coverage: >
+      A class with NO covering detector, where at least one detector was
+      ATTEMPTED and failed -> inconclusive(incomplete_coverage), naming the
+      class. A class whose detectors were all not_applicable does NOT escalate,
+      and neither does an advisory class. See 9.1b.
+    4_otherwise: healthy
+  precedence_note: >
+    Findings outrank a coverage gap. A concrete defect is the most actionable
+    thing the tool can say, and the gap is still visible because coverage is
+    reported either way.
+
+  AN_UNMEASURABLE_SIGNAL_IS_NOT_A_FINDING: >
+    It never appears in the finding count. Unavailability lives in the signal's
+    Measurement (which carries the reason) and in the coverage map.
+
+  THE_CONSEQUENCE_AGENTS_GET_WRONG: >
+    Reduced coverage on an otherwise-clean endpoint is NEITHER a finding NOR
+    inconclusive. An endpoint whose N+1 slope was unmeasurable but whose
+    pattern-match detector ran and came back clean is HEALTHY — the N+1 class
+    was covered, with one detector instead of two. Do not report it as a
+    problem, and do not report it as unmeasured. Report it as healthy, and
+    mention the reduced coverage if the user is weighing how much to trust the
+    result.
+```
+
+### 9.1b Coverage map — read this on every endpoint
+
+```yaml
+coverage_map:
+  reported: on EVERY endpoint, whatever its state
+  purpose: >
+    More informative than any single state label. Lets a reader see reduced
+    coverage without inconclusive being overloaded to signal it.
+  shape: |
+    checked:     N+1 (pattern), pagination, over-fetch
+    not checked: index analysis (EXPLAIN not implemented in this version),
+                 latency percentiles
+
+  classes_and_detectors:
+    n_plus_one:         [pattern_match, slope]
+    missing_pagination: [payload_growth]
+    over_fetch:         [query_response_comparison]
+    index_scan:         [explain]
+    latency:            [percentiles]
+
+  detector_states:
+    available:      ran, produced a usable answer -> COVERS its class
+    unavailable:    attempted, could not answer   -> a real coverage GAP
+    not_applicable: never attempted               -> reported, NOT a gap
+
+  THE_DISCRIMINATOR: >
+    WHO PREVENTED THE ANSWER.
+
+    unavailable  = the APP or its data did. We asked and could not find out.
+                   Examples: no query data came back from the target; result
+                   size could not be varied so the slope has one point.
+
+    not_applicable = the RUN was never asked to look. Nothing was attempted, so
+                   nothing failed. Examples: detect_overfetching = false; a
+                   single scale_factors entry, so payload growth has one data
+                   point; a detector whose subsystem is not in the installed
+                   version (EXPLAIN, latency percentiles).
+
+  why_three_states_and_not_two: >
+    Collapsing not_applicable into unavailable would mark EVERY endpoint
+    inconclusive for index analysis until ExplainAnalyzer ships, and every
+    endpoint of a deliberately narrow run inconclusive for pagination. That
+    makes the state meaningless during exactly the period it is most needed.
+
+  DIFFERENT_ADVICE_PER_STATE:
+    unavailable: >
+      Something about the run or the target prevented a real check. This is
+      worth acting on: name what would restore it (run against a locally-booted
+      server so the collector middleware is installed; widen page_size_sweep or
+      seed more so result size can vary).
+    not_applicable: >
+      Nothing went wrong. Either the user turned it off, their config cannot
+      answer that question, or the version does not implement it yet. Say which.
+      NEVER report this as a problem with the app, and never as a failed check.
+  do_not: >
+    Do not conflate the two. "We could not check X" and "you did not ask us to
+    check X" lead to completely different advice, and telling a user their app
+    could not be measured when they simply set scale_factors to one value is a
+    fabricated problem.
+
+  advisory_classes: [over_fetch]
+  advisory_rule: >
+    Over-fetch is a hint that must never fail a build (S9.2), so it must not be
+    able to force inconclusive either — that is a strictly stronger statement
+    than a hint. An over-fetch gap is REPORTED and does not change state, in
+    either direction: an endpoint is never inconclusive because over-fetch could
+    not be checked, and never healthy *because* over-fetch was skipped.
+  advisory_admission: >
+    A class is advisory only if its findings are inherently unfalsifiable from
+    Loadwright's vantage point — correct and incorrect code produce the same
+    observation. "Noisy" and "low confidence" are NOT grounds. If a user asks
+    why some other noisy signal is not advisory, that is the answer.
+
+  agent_instruction: >
+    When citing a clean endpoint, cite its coverage with it. "healthy, checked
+    for N+1 and pagination; index analysis not available in this version" is
+    honest. Bare "healthy" overstates a partial check.
 ```
 
 ### 9.2 Finding types and what to tell the user
@@ -895,7 +1044,9 @@ breaker_vs_guard: |
   numerator by classification. Both counts appear separately in report
   metadata. Do NOT advise raising max_error_rate_before_abort to stop
   contention tripping the breaker — if that is happening it is a bug.
-  See DIAG-10, DIAG-10b, DIAG-10c.
+  A breaker abort and a high contention count in the same run are two
+  independent signals; read them separately (DIAG-10d).
+  See DIAG-10, DIAG-10b, DIAG-10c, DIAG-10d.
 ```
 
 ---

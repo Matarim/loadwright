@@ -208,6 +208,24 @@ RSpec.describe "end-to-end against examples/sample_app", :sample_app do
       expect(result.to_h[:metadata][:capabilities][:degraded]).to be(false)
     end
 
+    # Item 6's other half: the comparability gate needs the app's OWN default page size,
+    # because the seed-scale sweep deliberately sends no page-size parameter and so holds
+    # fixed a property of the APP rather than of the config — invisible in the config
+    # fingerprint, and different between two apps that would otherwise compare cleanly.
+    it "records what each sweep held fixed, including the app's own default page size" do
+      sweeps = result.metadata.fetch(:sweeps)
+
+      expect(sweeps[:seed_scale][:holds_fixed]).to include("no page-size parameter is sent")
+      expect(sweeps[:page_size][:concurrency]).to eq(1)
+
+      # The fixture's authors endpoint defaults to 25 per page; posts is unpaginated and
+      # returns everything seeded. Both are the APP's choice, not ours — which is exactly
+      # why the observed value has to be recorded rather than inferred from config.
+      observed = sweeps[:seed_scale][:observed_page_size]
+      expect(observed["GET /api/v1/authors"]).to eq(25)
+      expect(observed["GET /api/v1/posts"]).to eq(90)
+    end
+
     # execution-modes.md: findings that need real concurrency are marked unavailable,
     # never reported as a number.
     it "marks concurrency-dependent capability unavailable rather than fabricating it" do
@@ -264,3 +282,4 @@ RSpec.describe "end-to-end against examples/sample_app", :sample_app do
     end
   end
 end
+

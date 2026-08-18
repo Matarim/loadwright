@@ -16,8 +16,10 @@ module Loadwright
     #
     # So the N+1 slope is measured against RETURNED RECORD COUNT, and the load engine
     # sweeps page-size parameters to vary it. An endpoint whose returned count cannot
-    # be varied at all is flagged "unable to vary result size — N+1 slope not
-    # measurable", NOT flat/healthy.
+    # be varied at all reports the slope as Measurement.unavailable with that reason —
+    # NEVER as flat/healthy. Whether that costs the endpoint its clean verdict is
+    # decided by Coverage, not here: the slope is one of two N+1 detectors, and losing
+    # one of two is reduced coverage rather than an unanswered question.
     #
     # Every signal here reads capability from CapabilityProfile and emits a
     # Measurement, so an unavailable signal is `unavailable(reason)` rather than absent
@@ -122,6 +124,29 @@ module Loadwright
         results
       end
 
+      # Which detectors could answer, in the shape Coverage consumes. Lives here
+      # because this class owns the measurements — asking the load engine to re-derive
+      # "was the slope available?" from a Measurement it also holds would be two
+      # sources of truth for one fact.
+      #
+      # `explain` and `percentiles` are deliberately absent rather than reported
+      # unavailable: ExplainAnalyzer and Statistics are not in this build, so those
+      # detectors were never ATTEMPTED. Coverage treats an absent detector as
+      # :not_applicable, which is reported but is not a gap this run caused. Reporting
+      # them as unavailable would make every endpoint inconclusive until those
+      # subsystems ship.
+      def detector_states(observations:, query_data:, tables_queried: [], response_keys: [])
+        slope = n_plus_one_slope(observations)
+        growth = payload_growth(observations)
+
+        {
+          pattern_match: pattern_match_state(query_data),
+          slope: slope.available? ? :available : [:unavailable, slope.reason],
+          payload_growth: growth.available? ? :available : [:unavailable, growth.reason],
+          query_response_comparison: over_fetch_state(tables_queried, response_keys)
+        }
+      end
+
       def to_h(observations)
         {
           queries_per_returned_record: measurement_to_h(queries_per_record(observations)),
@@ -132,6 +157,32 @@ module Loadwright
       end
 
       private
+
+      # The pattern-match detector answers whenever query data came back at all: it can
+      # then say "no fingerprint repeated", which is a genuine clean answer and covers
+      # the N+1 class on its own. It only fails to answer when there were no queries to
+      # inspect — an empty duplicates hash means "nothing repeated", not "nothing seen",
+      # and conflating the two is how an uninstrumented run would report itself clean.
+      def pattern_match_state(query_data)
+        return :available if query_data
+
+        [:unavailable,
+         "no query data was collected for this endpoint, so duplicate query fingerprints could not be " \
+         "inspected (see the collector in run metadata)"]
+      end
+
+      def over_fetch_state(tables_queried, response_keys)
+        return nil unless @config.detect_overfetching
+
+        unless available?(:over_fetch_hint)
+          return [:unavailable, @capability.reason_for(:over_fetch_hint) || "over-fetch detection is unavailable"]
+        end
+        if tables_queried.empty?
+          return [:unavailable, "no queried tables were recorded, so nothing could be compared to the response"]
+        end
+
+        :available
+      end
 
       def available?(signal) = @capability.available?(signal) || @capability.partial?(signal)
 
@@ -172,16 +223,14 @@ module Loadwright
                     "This is the signature pagination hides from a seeded-scale measurement.",
             evidence: observations.map { |o| { records: o.records, queries: o.queries, page_size: o.page_size } }
           )
-        elsif slope_measurement.unavailable? && slope_measurement.reason.include?("unable to vary result size")
-          # Explicitly NOT a clean result. Recorded so the report can distinguish
-          # "measured, and flat" from "could not measure".
-          results << Finding.new(
-            kind: :n_plus_one_slope_not_measurable,
-            confidence: :none,
-            detail: slope_measurement.reason,
-            evidence: observations.map { |o| { records: o.records, page_size: o.page_size } }
-          )
         end
+
+        # NOTE: an unmeasurable slope emits NOTHING here, deliberately. It used to emit
+        # a `confidence: :none` finding, which was a category error — "finding" says
+        # something is wrong with the APP, when what is true is that a detector could
+        # not answer. That belongs in the slope's own Measurement (which carries the
+        # reason) and in Coverage, which is what the outcome state is derived from.
+        # See response-analysis.md, "Outcome state is derived from coverage".
 
         results
       end

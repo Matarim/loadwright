@@ -47,7 +47,7 @@ module Loadwright
         :endpoint_key, :sweep, :scale_factor, :page_size, :requested_concurrency,
         :actual_concurrency, :requests, :latencies, :query_counts, :record_counts,
         :bytes, :statuses, :errors, :contention_events, :capability_epoch,
-        :skipped_reason, :duplicates, :shape, :db_runtimes,
+        :skipped_reason, :duplicates, :shape, :db_runtimes, :tables,
         keyword_init: true
       ) do
         def stepped_down? = !actual_concurrency.nil? && actual_concurrency != requested_concurrency
@@ -211,7 +211,7 @@ module Loadwright
               page_size: nil,
               requested_concurrency: concurrency, requests: @config.requests_per_endpoint_per_level,
               latencies: [], query_counts: [], record_counts: [], bytes: [], statuses: [],
-              errors: [], contention_events: 0, db_runtimes: []
+              errors: [], contention_events: 0, db_runtimes: [], duplicates: {}, tables: []
             )
           end
         end
@@ -226,7 +226,7 @@ module Loadwright
             # and varying concurrency here would make the slope unattributable again.
             requested_concurrency: 1, requests: @config.requests_per_endpoint_per_level,
             latencies: [], query_counts: [], record_counts: [], bytes: [], statuses: [],
-            errors: [], contention_events: 0, db_runtimes: [],
+            errors: [], contention_events: 0, db_runtimes: [], duplicates: {}, tables: [],
             skipped_reason: page_size_sweep_measurable? ? nil : page_size_sweep_unmeasurable_reason
           )
         end
@@ -324,7 +324,7 @@ module Loadwright
           requested_concurrency: concurrency, actual_concurrency: actual,
           requests: @config.requests_per_endpoint_per_level,
           latencies: [], query_counts: [], record_counts: [], bytes: [], statuses: [],
-          errors: [], contention_events: 0, db_runtimes: [], duplicates: {},
+          errors: [], contention_events: 0, db_runtimes: [], duplicates: {}, tables: [],
           capability_epoch: @context.capability_epoch
         )
 
@@ -413,6 +413,16 @@ module Loadwright
         metrics.duplicate_fingerprints.each do |fingerprint, occurrences|
           existing = cell.duplicates[fingerprint]
           cell.duplicates[fingerprint] = occurrences if existing.nil? || occurrences.length > existing.length
+        end
+
+        # EVERY queried table, not just the duplicated ones. Sourcing this from
+        # `duplicates` was wrong in a way that inverted the over-fetch signal: a clean
+        # endpoint has no duplicate fingerprints, so it looked as though no tables had
+        # been queried at all, and the over-fetch class came back UNCOVERED — turning
+        # the healthiest endpoints inconclusive.
+        metrics.queries.each do |query|
+          table = table_in(query[:fingerprint])
+          cell.tables << table if table && !cell.tables.include?(table)
         end
 
         verdict = validator.validate(
@@ -528,12 +538,69 @@ module Loadwright
         findings = findings_for(endpoint, cells)
         @correlations[key] = correlator.to_h(observations_for(cells))
 
-        return EndpointOutcome.healthy(endpoint: endpoint, capability_epoch: cells.last.capability_epoch) if
-          findings.empty?
-
-        EndpointOutcome.has_findings(
-          endpoint: endpoint, findings: findings, capability_epoch: cells.last.capability_epoch
+        # The state comes from finding-class COVERAGE, not from how many signals
+        # happened to produce a number. EndpointOutcome.derive owns the precedence so
+        # reporting renders a state rather than recomputing one.
+        EndpointOutcome.derive(
+          endpoint: endpoint,
+          findings: findings,
+          coverage: coverage_for(cells),
+          capability_epoch: cells.last.capability_epoch
         )
+      end
+
+      # Coverage is computed per endpoint from the detectors that actually ran, and is
+      # attached to EVERY outcome regardless of state — a reader can then see that an
+      # otherwise-clean endpoint was checked with one N+1 detector instead of two,
+      # without `inconclusive` having to be overloaded to signal it.
+      def coverage_for(cells)
+        measured = cells.reject(&:skipped?)
+        page_size_cells = measured.select { |cell| cell.sweep == :page_size }
+        seed_scale_cells = measured.select { |cell| cell.sweep == :seed_scale }
+
+        Coverage.new(
+          correlator.detector_states(
+            # The N+1 detectors read the page-size sweep where there is one, since that
+            # is the sweep that varies returned records.
+            observations: observations_for(page_size_cells.empty? ? seed_scale_cells : page_size_cells),
+            query_data: measured.any? { |cell| cell.query_counts.compact.any? },
+            tables_queried: tables_queried(measured)
+          ).merge(
+            payload_growth: payload_growth_state(seed_scale_cells)
+          )
+        )
+      end
+
+      # Payload growth is measured against SEEDED rows, so its coverage comes from the
+      # seed-scale sweep specifically — asking the page-size sweep would report it
+      # unmeasurable on every endpoint, since that sweep holds seed scale fixed by
+      # design.
+      #
+      # A run configured with ONE scale factor is :not_applicable, not :unavailable.
+      # The line between the two is who prevented the answer: :unavailable means the
+      # app or its data did (result size could not be varied, no query data came back),
+      # :not_applicable means the run was never asked to look. A single scale factor is
+      # the user declining to sweep, exactly like detect_overfetching = false — and
+      # treating it as a gap would turn every endpoint of a deliberately-narrow run
+      # inconclusive, which is the flooding the coverage rule exists to prevent.
+      def payload_growth_state(seed_scale_cells)
+        if Array(@config.scale_factors).uniq.length < 2
+          return [:not_applicable,
+                  "only one scale factor is configured (#{Array(@config.scale_factors).join(', ')}), " \
+                  "so payload growth against table size cannot be measured; add a second to " \
+                  "config.scale_factors"]
+        end
+
+        growth = correlator.payload_growth(observations_for(seed_scale_cells))
+
+        growth.available? ? :available : [:unavailable, growth.reason]
+      end
+
+      # The tables recorded during the run, for the over-fetch comparison.
+      def tables_queried(cells) = cells.flat_map { |cell| Array(cell.tables) }.uniq
+
+      def table_in(fingerprint)
+        fingerprint.to_s[/(?:FROM|JOIN)\s+[`"']?([A-Za-z0-9_]+)/i, 1]
       end
 
       def findings_for(endpoint, cells)

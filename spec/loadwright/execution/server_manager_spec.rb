@@ -158,3 +158,107 @@ RSpec.describe Loadwright::Execution::ServerManager do
     false
   end
 end
+
+# The collector secret guards an endpoint that serves SQL and call sites from the app
+# under test. It reaches the child through a mode-0600 FILE, with only the path in the
+# environment — an environment block is readable by any local user through `ps` and
+# lands in crash dumps and spawn logs.
+RSpec.describe Loadwright::Execution::ServerManager, "the collector secret" do
+  let(:config) { Loadwright::Configuration.new }
+  let(:lifecycle) { Loadwright::Lifecycle.new(stderr: StringIO.new) }
+
+  subject(:manager) do
+    described_class.new(config: config, lifecycle: lifecycle, stdout: StringIO.new,
+                        collector_secret: "s3cr3t-per-run")
+  end
+
+  describe "what reaches the child" do
+    it "passes a PATH in the environment, never the secret itself" do
+      captured = nil
+      allow(Process).to receive(:spawn) { |env, *| captured = env; 424_242 }
+      allow(manager).to receive(:wait_for_health!).and_return(true)
+      allow(manager).to receive(:running?).and_return(true)
+
+      manager.start!
+
+      expect(captured.values.join).not_to include("s3cr3t-per-run")
+      path = captured.fetch(described_class::SECRET_FILE_VARIABLE)
+      expect(File.read(path)).to eq("s3cr3t-per-run")
+    end
+
+    it "writes the file readable only by its owner" do
+      allow(Process).to receive(:spawn).and_return(424_242)
+      allow(manager).to receive(:wait_for_health!).and_return(true)
+      allow(manager).to receive(:running?).and_return(true)
+      captured = nil
+      allow(Process).to receive(:spawn) { |env, *| captured = env; 424_242 }
+
+      manager.start!
+
+      mode = File.stat(captured.fetch(described_class::SECRET_FILE_VARIABLE)).mode & 0o777
+      expect(mode & 0o077).to eq(0), format("mode was %<mode>04o", mode: mode)
+    end
+
+    it "removes the file on teardown, so an interrupted run leaves nothing behind" do
+      captured = nil
+      allow(Process).to receive(:spawn) { |env, *| captured = env; 424_242 }
+      allow(manager).to receive(:wait_for_health!).and_return(true)
+      allow(manager).to receive(:running?).and_return(true)
+      allow(manager).to receive(:terminate)
+      allow(manager).to receive(:reaped?).and_return(true)
+      manager.start!
+      path = captured.fetch(described_class::SECRET_FILE_VARIABLE)
+
+      lifecycle.run_teardown!
+
+      expect(File.exist?(path)).to be(false)
+    end
+
+    it "passes nothing when there is no secret to pass (a remote target)" do
+      captured = nil
+      allow(Process).to receive(:spawn) { |env, *| captured = env; 424_242 }
+      plain = described_class.new(config: config, stdout: StringIO.new)
+      allow(plain).to receive(:wait_for_health!).and_return(true)
+      allow(plain).to receive(:running?).and_return(true)
+
+      plain.start!
+
+      expect(captured).not_to have_key(described_class::SECRET_FILE_VARIABLE)
+    end
+  end
+
+  describe ".read_secret_file" do
+    around do |example|
+      Dir.mktmpdir("loadwright-secret") { |dir| @dir = dir; example.run }
+    end
+
+    def write(contents, mode)
+      path = File.join(@dir, "secret")
+      File.write(path, contents)
+      File.chmod(mode, path)
+      path
+    end
+
+    it "reads a private file" do
+      expect(described_class.read_secret_file(write("abc123", 0o600))).to eq("abc123")
+    end
+
+    # A world-readable secret file has already failed at its one job. Arming the
+    # endpoint anyway would pretend the secret was protected when it was not.
+    it "refuses a file other users can read" do
+      expect { expect(described_class.read_secret_file(write("abc123", 0o644))).to be_nil }
+        .to output(/readable by other users/).to_stderr
+    end
+
+    it "refuses a group-readable file too" do
+      expect(described_class.read_secret_file(write("abc123", 0o640))).to be_nil
+    end
+
+    it "is nil for a missing path, an empty path, and an empty file" do
+      expect(described_class.read_secret_file(nil)).to be_nil
+      expect(described_class.read_secret_file("")).to be_nil
+      expect(described_class.read_secret_file(File.join(@dir, "nope"))).to be_nil
+      expect(described_class.read_secret_file(write("   ", 0o600))).to be_nil
+    end
+  end
+end
