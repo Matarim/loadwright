@@ -58,8 +58,11 @@ module Loadwright
     # disk — which matters, because a path in an environment variable is exactly the
     # kind of thing that gets left set.
     initializer "loadwright.arm_collector" do
+      # The run id is checked against the file's contents, so a secret left behind by a
+      # run that was SIGKILLed cannot arm a later process that happens to point at it.
       secret = Execution::ServerManager.read_secret_file(
-        ENV.fetch(Execution::ServerManager::SECRET_FILE_VARIABLE, nil)
+        ENV.fetch(Execution::ServerManager::SECRET_FILE_VARIABLE, nil),
+        ENV.fetch(Execution::ServerManager::SECRET_RUN_ID_VARIABLE, nil)
       )
 
       unless secret.to_s.empty?

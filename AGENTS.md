@@ -109,6 +109,14 @@ INV-11:
     Loadwright retreats from contention by design. If a user asks for a
     "force" or "cleanup" option, the answer is no — reduce load instead.
   violation_severity: critical
+  scope_note: >
+    INV-11 is about DATABASE SESSIONS. It does not conflict with DIAG-10e, where
+    orphan reaping terminates a leftover server process. Two different scopes:
+    Loadwright terminates its OWN orphaned child processes, recorded in its OWN
+    per-run directories, identified by PID + process start time + hostname. It
+    never terminates a database session, never terminates a process it did not
+    spawn, and never kills on a PID match alone. If a user or a diff asks for
+    either of the latter, the answer is still no.
 ```
 
 ---
@@ -674,6 +682,43 @@ DIAG-10d:
     aborted because 30% of requests returned 500s; separately, 40 contention
     events caused the guard to step down twice" is two actionable facts.
     "The run aborted under load" is neither.
+
+DIAG-10e:
+  symptom: >
+    "A Puma process I don't recognise is holding my development database" /
+    "port already in use after a Loadwright run" / "my next run says the database
+    is already contended"
+  cause: >
+    An earlier :http run was killed in a way it could not clean up after — SIGKILL,
+    a closed laptop lid, a power loss, a killed terminal. Loadwright boots a real
+    server in :http mode and tears it down on exit and on SIGINT, but SIGKILL is
+    not trappable, so the server outlives the run and keeps its database
+    connections open.
+  explanation: >
+    This is not something the user did wrong. It is the one teardown path the gem
+    cannot guarantee, which is why the recovery is automatic rather than manual.
+    Each :http run writes a pidfile recording the server's PID AND process start
+    time, plus the harness's, into a per-run temp directory. The next :http run
+    scans for those directories and reaps any server whose harness is gone.
+  fix: |
+    Start another :http run — the reap happens before it boots anything, and it
+    prints what it cleaned up. If the user wants it gone without a run:
+      1. Find it:  ps aux | grep '[p]uma'
+      2. Confirm it is Loadwright's before killing anything: its temp directory is
+         named loadwright-run-*, under the system temp dir.
+      3. kill <pid>   (not -9 first; it stops cleanly)
+  safety_note: >
+    Loadwright never kills on PID alone. A PID gets recycled, so the recorded start
+    time must match too; a record written by a different HOSTNAME is left entirely
+    alone (a shared TMPDIR can expose another machine's directories, where a PID
+    names an unrelated process); and a server whose harness is still alive is
+    treated as a concurrent run and left completely alone. Give the same advice:
+    never kill a PID from a stale file without confirming it is the same process.
+    This is our own child process, not a database session — see INV-11 scope_note.
+  do_not: >
+    Do not tell the user to delete their database, restart Postgres, or reset
+    anything. One stale process is holding connections; killing that process is the
+    whole fix.
 
 DIAG-11:
   symptom: "p99 missing from report"

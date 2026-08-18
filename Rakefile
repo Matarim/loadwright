@@ -33,4 +33,11 @@ namespace :spec do
   end
 end
 
+desc "Break each safety-critical behaviour and confirm its spec goes red"
+task :mutation_audit do
+  # Runs against a throwaway copy of the repository; the working tree is never
+  # modified. See tools/MUTATION_AUDIT.md.
+  abort "mutation audit failed" unless system(RbConfig.ruby, "tools/mutation_audit.rb")
+end
+
 task default: :spec
