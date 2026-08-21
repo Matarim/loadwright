@@ -215,7 +215,11 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       config.scale_factors = [10]
       config.page_size_sweep = [5]
       config.concurrency_levels = [1]
-      config.requests_per_endpoint_per_level = 3
+      # Enough to support p50 (min_samples_for_percentiles defaults to 20). Below it the
+      # latency detector correctly reports that it cannot answer, which makes every
+      # endpoint inconclusive for a reason that has nothing to do with what is under
+      # test here -- so the premise is stated rather than worked around.
+      config.requests_per_endpoint_per_level = 20
       config.warmup_requests = 1
     end
 
@@ -447,6 +451,7 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     let(:result) do
       responder = ->(_) { { status: 200, body: JSON.generate([{ "id" => 1 }]) } }
       context = build_context(responder: responder, metrics: clean_metrics)
+      config.requests_per_endpoint_per_level = 20
 
       runner(context: context).run(endpoints: [endpoint])
     end
@@ -475,6 +480,41 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     end
   end
 
+  # The run-level pattern has to reach the per-endpoint verdict, or the user still gets
+  # a report full of `inconclusive` with the explanation sitting somewhere else.
+  describe "a run where the identity is refused everywhere" do
+    let(:result) do
+      config.scale_factors = [10]
+      config.page_size_sweep = [5]
+      config.requests_per_endpoint_per_level = 5
+      config.warmup_requests = 0
+      responder = ->(_) { { status: 403, body: '{"error":"forbidden"}' } }
+
+      runner(context: build_context(responder: responder)).run(
+        endpoints: [endpoint, endpoint(path: "/api/v1/authors"), endpoint(path: "/api/v1/comments")]
+      )
+    end
+
+    it "diagnoses the token rather than reporting three unexplained failures" do
+      expect(result.traffic.map(&:kind)).to eq([:auth_misconfigured])
+    end
+
+    it "gives each endpoint the reason that names the fix" do
+      expect(result.outcomes.map(&:reason).uniq).to eq([:auth_failed])
+      expect(result.outcomes.first.explanation).to include("auth_token_provider")
+    end
+
+    it "prints the diagnosis during the run, not only into the report" do
+      result
+
+      expect(stdout.string).to include("returned only 401/403")
+    end
+
+    it "carries the diagnosis into run metadata" do
+      expect(result.metadata[:traffic].first[:kind]).to eq(:auth_misconfigured)
+    end
+  end
+
   describe "the RunResult data shape" do
     it "separates the three states rather than collapsing them" do
       responder = lambda do |request|
@@ -482,7 +522,7 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       end
       config.scale_factors = [10]
       config.page_size_sweep = [5]
-      config.requests_per_endpoint_per_level = 2
+      config.requests_per_endpoint_per_level = 20
       config.warmup_requests = 0
 
       result = runner(context: build_context(responder: responder))

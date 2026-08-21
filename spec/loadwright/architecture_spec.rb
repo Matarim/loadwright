@@ -87,7 +87,13 @@ RSpec.describe "architecture invariants" do
           stripped.start_with?("#") ||
             # The guard names these in order to assert on them; the definition of the
             # prohibition is not a violation of it.
-            stripped.start_with?("FORBIDDEN_STATEMENTS")
+            stripped.start_with?("FORBIDDEN_STATEMENTS") ||
+            # Same idea, for a list that has to span lines: the marker is PER LINE and
+            # has to sit on the exact line naming the function, so it stays visible in
+            # review. Deliberately not a file-level phrase -- an earlier version of this
+            # check exempted any file containing "ABSOLUTE RULE", which let a file opt
+            # itself out of the rule it was breaking.
+            stripped.include?("# prohibition-definition")
         end.join
 
         path.sub("#{SpecPaths::ROOT}/", "") if code.match?(forbidden)

@@ -31,7 +31,7 @@ module Loadwright
             request,
             REASON,
             capability_epoch: capability_epoch,
-            except: response_derived(raw_response)
+            except: response_derived(raw_response, request)
           )
         end
       end

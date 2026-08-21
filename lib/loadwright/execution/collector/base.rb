@@ -24,6 +24,10 @@ module Loadwright
 
         def initialize(config: Loadwright.configuration)
           @config = config
+          @side_effects = {}
+          @in_flight = {}
+          @overlapped = {}
+          @side_effect_mutex = Mutex.new
         end
 
         # :direct | :middleware | :external — the symbol CapabilityProfile keys on.
@@ -34,7 +38,9 @@ module Loadwright
         def stop_run! = self
 
         # Called before the request is issued, on the thread that will issue it.
-        def begin_request(_request) = nil
+        def begin_request(request)
+          note_side_effect_baseline(request)
+        end
 
         # Called after. Returns RequestMetrics.
         def collect(_request, _raw_response, capability_epoch: 0)
@@ -70,11 +76,61 @@ module Loadwright
 
         # Response-derived metrics, available to EVERY collector including
         # External, because they need nothing from the app's instrumentation.
-        def response_derived(raw_response)
+        #
+        # Mail and job counts are DELTAS over the request, not the totals the test
+        # adapters have accumulated. The raw totals grow monotonically across a run, so
+        # reporting them per request would show request 500 enqueuing 500 jobs and
+        # request 1 enqueuing one -- a number that rises with nothing but time.
+        def response_derived(raw_response, request = nil)
           {
-            mail_deliveries: mail_count,
-            jobs_enqueued: job_count
+            mail_deliveries: side_effect_delta(request, :mail, mail_count),
+            jobs_enqueued: side_effect_delta(request, :jobs, job_count)
           }.compact.merge(latency_note(raw_response))
+        end
+
+        # THE BASELINE, taken before the request is issued.
+        #
+        # Also records whether anything else was in flight. The counters are
+        # PROCESS-GLOBAL, so when two requests overlap a delta attributes one's jobs to
+        # the other -- and a wrong attribution is worse than an absent one, because
+        # "this endpoint enqueues 200 jobs" is exactly the kind of finding someone acts
+        # on. Overlap is detected rather than inferred from the configured concurrency:
+        # what matters is whether requests ACTUALLY overlapped.
+        def note_side_effect_baseline(request)
+          return if request.nil?
+
+          @side_effect_mutex.synchronize do
+            @side_effects[request.request_id] = { mail: mail_count&.value_or(nil), jobs: job_count&.value_or(nil) }
+
+            if @in_flight.any?
+              @overlapped[request.request_id] = true
+              @in_flight.each_key { |id| @overlapped[id] = true }
+            end
+            @in_flight[request.request_id] = true
+          end
+        end
+
+        def side_effect_delta(request, key, current)
+          return nil if current.nil?
+          return current if request.nil?
+
+          baseline, overlapped = @side_effect_mutex.synchronize do
+            @in_flight.delete(request.request_id)
+            [@side_effects.delete(request.request_id), @overlapped.delete(request.request_id)]
+          end
+
+          if overlapped
+            return Measurement.unavailable(
+              "#{key} counts are process-global, and another request was in flight at the same time; " \
+              "a per-request delta would attribute its #{key} to this one"
+            )
+          end
+
+          before = baseline && baseline[key]
+          return Measurement.unavailable("no baseline #{key} count was taken before this request") if
+            before.nil?
+
+          Measurement.value(current.value - before)
         end
 
         def latency_note(_raw_response) = {}

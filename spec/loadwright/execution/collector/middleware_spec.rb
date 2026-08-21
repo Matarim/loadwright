@@ -126,6 +126,9 @@ RSpec.describe Loadwright::Execution::Collector::Middleware do
       subject = collector
       stub_const("ActionMailer::Base", Class.new { def self.deliveries = [] })
 
+      # begin_request is what takes the baseline the mail/job deltas are measured
+      # against, and the real path always calls it -- ExecutionContext#issue does.
+      subject.begin_request(request)
       metrics = subject.collect(request, response_with({}))
 
       expect(metrics.mail_deliveries).to eq(Loadwright::Measurement.value(0))

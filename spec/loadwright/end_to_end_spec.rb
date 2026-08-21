@@ -35,8 +35,18 @@ RSpec.describe "end-to-end against examples/sample_app", :sample_app do
     config.scale_factors = [30, 90]
     config.page_size_sweep = [5, 25, 50]
     config.concurrency_levels = [1]
-    config.requests_per_endpoint_per_level = 2
+    # Enough to support p50, which min_samples_for_percentiles puts at 20. This is not
+    # padding: below it the latency detector correctly reports that it cannot answer,
+    # every endpoint goes inconclusive for incomplete coverage, and the run stops
+    # testing what this file is about. A fixture that cannot support the tool's own
+    # default statistics is not exercising the real path.
+    config.requests_per_endpoint_per_level = 20
     config.warmup_requests = 1
+    # The fixture's queries all run in well under a millisecond, so at the default
+    # 100ms threshold nothing would ever be explained and the EXPLAIN path would never
+    # execute here. Zero makes every query a candidate, which is what puts a real
+    # EXPLAIN QUERY PLAN through a real adapter in this run.
+    config.slow_query_threshold_ms = 0
     config.factory_map = { "post" => { factory: :post, trait: :with_comments } }
     config
   end
@@ -181,6 +191,49 @@ RSpec.describe "end-to-end against examples/sample_app", :sample_app do
 
     it "deleted every row it created and nothing else" do
       expect(recording.rows_after_cleanup).to eq(posts: 0, comments: 0, authors: 0)
+    end
+
+    # ---------------------------------------------------------------- new detectors
+    #
+    # Both of these classes read `not_applicable` until this session shipped their
+    # detectors. These examples are what stops them silently regressing back to it:
+    # `not_applicable` never escalates, so a broken detector would look like a clean
+    # report rather than a failure.
+
+    it "reports latency percentiles with the sample count behind them" do
+      endpoint = result.to_h[:endpoints].find { |e| e[:endpoint] == "GET /api/v1/posts" }
+      cell = endpoint[:latency].first
+
+      expect(cell[:sample_count]).to eq(20)
+      expect(cell[:percentiles][:p50]).to include(:value)
+    end
+
+    # 20 samples cannot support p95 or p99. Printing them anyway is the failure this
+    # signal exists to prevent, so their ABSENCE is the assertion.
+    it "omits the percentiles 20 samples cannot support, and says what they would need" do
+      endpoint = result.to_h[:endpoints].find { |e| e[:endpoint] == "GET /api/v1/posts" }
+      cell = endpoint[:latency].first
+
+      expect(cell[:percentiles][:p99]).to include(:unavailable)
+      expect(cell[:percentiles][:p99][:unavailable]).to include("need 500", "have 20")
+    end
+
+    it "ran a real EXPLAIN through the fixture's adapter rather than skipping it" do
+      endpoint = result.to_h[:endpoints].find { |e| e[:endpoint] == "GET /api/v1/posts" }
+
+      expect(endpoint[:explain][:detector_state]).to eq(:available)
+      expect(endpoint[:explain][:queries_explained]).to be > 0
+      expect(endpoint[:explain][:adapter]).to match(/SQLite/i)
+    end
+
+    # The two classes this session activated are now genuinely checked, on every
+    # endpoint that was measurable at all.
+    it "covers the index-scan and latency classes it previously never attempted" do
+      outcome = outcome_for(result, "/api/v1/posts/{post_id}/comments")
+
+      expect(outcome.coverage).to be_covered(:index_scan)
+      expect(outcome.coverage).to be_covered(:latency)
+      expect(outcome.coverage.not_applicable_classes).to be_empty
     end
 
     it "produces a serialisable result carrying the three states and the capability record" do

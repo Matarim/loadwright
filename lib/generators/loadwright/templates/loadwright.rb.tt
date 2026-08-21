@@ -363,6 +363,12 @@ if defined?(Loadwright)
     # contention was observed — it's a latent problem worth stating.
     config.check_pool_vs_server_threads = true
 
+    # Jobs enqueued PER REQUEST above which the volume is itself a finding.
+    # Not zero — enqueuing a job from a POST is ordinary. A request fanning
+    # out into 200 jobs is not, and containment is what makes it visible:
+    # the :test adapter records them instead of performing them.
+    config.jobs_enqueued_warning_threshold = 10
+
     # =========================================================================
     # RUN HISTORY & COMPARISON — see references/run-comparison.md
     # =========================================================================

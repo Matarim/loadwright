@@ -55,7 +55,7 @@ module Loadwright
               request,
               "the collector middleware did not respond on this request; query data was not returned",
               capability_epoch: capability_epoch,
-              except: response_derived(raw_response)
+              except: response_derived(raw_response, request)
             )
           end
 
@@ -72,7 +72,7 @@ module Loadwright
             db_runtime_ms: header_measurement(raw_response, CollectorMiddleware::DB_RUNTIME_HEADER),
             view_runtime_ms: header_measurement(raw_response, CollectorMiddleware::VIEW_RUNTIME_HEADER),
             allocations: header_measurement(raw_response, CollectorMiddleware::ALLOCATIONS_HEADER),
-            **response_derived(raw_response)
+            **response_derived(raw_response, request)
           )
         end
 
@@ -150,6 +150,10 @@ module Loadwright
             fingerprint: query["fingerprint"],
             duration_ms: query["duration_ms"],
             name: query["name"],
+            # The exemplar statement, present only when EXPLAIN is enabled. Consumed by
+            # ExplainAnalyzer and stripped from every serialisation -- see the note on
+            # CollectorMiddleware#redact for why this one field crosses the boundary.
+            sql: query["sql"],
             call_site: query["call_site"] && {
               path: query["call_site"]["path"],
               line: query["call_site"]["line"],

@@ -69,7 +69,7 @@ module Loadwright
             db_runtime_ms: sum_query_duration(bucket),
             **process_metrics,
             **pool_metrics,
-            **response_derived(raw_response)
+            **response_derived(raw_response, request)
           )
         end
 

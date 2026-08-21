@@ -6,6 +6,12 @@ require "loadwright/execution/request"
 require "loadwright/analysis/response_correlator"
 require "loadwright/analysis/response_validator"
 require "loadwright/analysis/serializer_attribution"
+require "loadwright/analysis/explain_analyzer"
+require "loadwright/analysis/statistics"
+require "loadwright/analysis/cold_warm"
+require "loadwright/analysis/containment_disclosure"
+require "loadwright/analysis/traffic_diagnosis"
+require "loadwright/analysis/pool_sizing_check"
 require "loadwright/reporting/run_result"
 
 module Loadwright
@@ -48,6 +54,13 @@ module Loadwright
         :actual_concurrency, :requests, :latencies, :query_counts, :record_counts,
         :bytes, :statuses, :errors, :contention_events, :capability_epoch,
         :skipped_reason, :duplicates, :shape, :db_runtimes, :tables,
+        # The warmup pass, KEPT rather than discarded: cold-cache performance is what
+        # users hit right after a deploy, and it is the case nobody measures.
+        :cold_latencies, :jobs_enqueued,
+        # Only the rate-limit headers, not the whole response header set: they are what
+        # names a throttled run, and keeping the rest would put arbitrary header values
+        # into a persisted record for no signal.
+        :rate_limit_headers,
         keyword_init: true
       ) do
         def stepped_down? = !actual_concurrency.nil? && actual_concurrency != requested_concurrency
@@ -104,7 +117,9 @@ module Loadwright
       ASSUMED_LATENCY_MS = 25.0
 
       def initialize(config: Loadwright.configuration, context:, guard: nil, breaker: nil,
-                     seeder: nil, identities: nil, resolver: nil, lifecycle: nil, stdout: $stdout)
+                     seeder: nil, identities: nil, resolver: nil, lifecycle: nil, stdout: $stdout,
+                     explain_analyzer: nil, statistics: nil, containment: nil, pool_tracker: nil,
+                     cold_warm: nil)
         @config = config
         @context = context
         @guard = guard
@@ -114,6 +129,11 @@ module Loadwright
         @resolver = resolver
         @lifecycle = lifecycle
         @stdout = stdout
+        @explain_analyzer = explain_analyzer
+        @statistics = statistics
+        @containment = containment
+        @pool_tracker = pool_tracker
+        @cold_warm_analyzer = cold_warm
         @warnings = []
         reset!
       end
@@ -211,7 +231,8 @@ module Loadwright
               page_size: nil,
               requested_concurrency: concurrency, requests: @config.requests_per_endpoint_per_level,
               latencies: [], query_counts: [], record_counts: [], bytes: [], statuses: [],
-              errors: [], contention_events: 0, db_runtimes: [], duplicates: {}, tables: []
+              errors: [], contention_events: 0, db_runtimes: [], duplicates: {}, tables: [],
+              cold_latencies: [], jobs_enqueued: [], rate_limit_headers: {}
             )
           end
         end
@@ -227,6 +248,7 @@ module Loadwright
             requested_concurrency: 1, requests: @config.requests_per_endpoint_per_level,
             latencies: [], query_counts: [], record_counts: [], bytes: [], statuses: [],
             errors: [], contention_events: 0, db_runtimes: [], duplicates: {}, tables: [],
+            cold_latencies: [], jobs_enqueued: [], rate_limit_headers: {},
             skipped_reason: page_size_sweep_measurable? ? nil : page_size_sweep_unmeasurable_reason
           )
         end
@@ -325,13 +347,25 @@ module Loadwright
           requests: @config.requests_per_endpoint_per_level,
           latencies: [], query_counts: [], record_counts: [], bytes: [], statuses: [],
           errors: [], contention_events: 0, db_runtimes: [], duplicates: {}, tables: [],
+          cold_latencies: [], jobs_enqueued: [], rate_limit_headers: {},
           capability_epoch: @context.capability_epoch
         )
 
-        @config.warmup_requests.times { issue(endpoint, scale: scale, page_size: page_size) }
+        # THE WARMUP PASS IS RECORDED, not discarded. It is still excluded from the
+        # steady-state figures -- that is what warmup is for -- but the first requests
+        # after clearing the application cache are the only cold measurement this run
+        # will ever get, and throwing them away throws away the endpoint's worst case.
+        cleared = prepare_cold_pass(endpoint)
+        @config.warmup_requests.times do
+          outcome = issue(endpoint, scale: scale, page_size: page_size)
+          cell.cold_latencies << outcome.response.latency_ms if outcome
+        end
 
         outcomes = drive(endpoint, page_size: page_size, concurrency: actual, count: cell.requests)
         outcomes.each { |outcome| absorb(cell, endpoint, outcome, actual, seeded) }
+
+        # Compared AFTER the measured requests, since the warm half comes from them.
+        record_cold_warm(endpoint, cell, cleared)
 
         if cell.contention_events.zero?
           @guard&.note_recovery(endpoint.to_s)
@@ -400,11 +434,13 @@ module Loadwright
 
         cell.latencies << response.latency_ms
         cell.statuses << response.status
+        record_rate_limit_headers(cell, response)
         cell.bytes << response.body_bytes
         cell.capability_epoch = outcome.capability_epoch
 
         cell.query_counts << metrics.query_count.value_or(nil)
         cell.db_runtimes << metrics.db_runtime_ms.value_or(nil)
+        cell.jobs_enqueued << metrics.jobs_enqueued.value_or(nil)
 
         # The WORST SINGLE REQUEST, not the total across requests. Concatenating turned
         # "the same query ran 26 times in a single request" into "ran 1170 times",
@@ -423,6 +459,7 @@ module Loadwright
         metrics.queries.each do |query|
           table = table_in(query[:fingerprint])
           cell.tables << table if table && !cell.tables.include?(table)
+          remember_slow_query(endpoint.to_s, query)
         end
 
         verdict = validator.validate(
@@ -497,6 +534,7 @@ module Loadwright
       # ---------------------------------------------------------------- the verdict
 
       def build_result(endpoints, aborted_reason:)
+        run_post_load_analysis(endpoints)
         endpoints.each { |endpoint| @outcomes << outcome_for(endpoint) unless already_decided?(endpoint) }
 
         Reporting::RunResult.new(
@@ -512,8 +550,100 @@ module Loadwright
           seeder: @seeder,
           identities: @identities,
           warnings: @warnings,
-          aborted_reason: aborted_reason
+          aborted_reason: aborted_reason,
+          explain: @explain,
+          latency: @latency,
+          cold_warm: @cold_warm,
+          traffic: @traffic,
+          pool_sizing: pool_sizing,
+          containment_disclosure: containment_disclosure
         )
+      end
+
+      # ------------------------------------------------- the phase AFTER the load
+      #
+      # EXPLAIN runs here and nowhere else. performance-signals.md is explicit that it
+      # must not run during the load phase: it issues real queries on a real
+      # connection, and doing that while measuring latency would make the tool part of
+      # what it is measuring. Latency statistics are computed here for a duller reason
+      # -- every sample is in by now.
+      def run_post_load_analysis(endpoints)
+        # RUN-LEVEL FIRST, because the pattern that explains a report full of
+        # `inconclusive` is only visible across endpoints. One 403 is an admin
+        # endpoint; every endpoint returning 403 is a misconfigured token, and the
+        # per-endpoint reason is chosen from that conclusion below.
+        @traffic = traffic_diagnosis.diagnose(traffic_observations(endpoints.map(&:to_s)))
+        @traffic.each { |diagnosis| @stdout.puts "loadwright: #{diagnosis.message}" }
+
+        endpoints.each do |endpoint|
+          key = endpoint.to_s
+          next if @cells.none? { |cell| cell.endpoint_key == key }
+
+          @latency[key] = latency_summaries(key)
+          @explain[key] = explain_analyzer.analyze(
+            explain_analyzer.candidates_from(@slow_queries.fetch(key, {}).values, endpoint_key: key),
+            query_data: query_data_for?(key)
+          )
+        end
+      ensure
+        explain_analyzer.close!
+      end
+
+      # One summary per CELL, never one per endpoint. A cell holds one scale factor,
+      # one page size and one concurrency level, so its latencies are draws from a
+      # single distribution; pooling concurrency 1 with concurrency 20 would produce a
+      # median describing neither, and the resulting spread would read as noise.
+      # One entry per endpoint that was actually exercised. Statuses are pooled across
+      # its cells: a 429 anywhere is a 429, and "every response was 401/403" is a
+      # property of the endpoint rather than of one cell.
+      def traffic_observations(endpoint_keys)
+        endpoint_keys.to_h do |key|
+          cells = @cells.select { |cell| cell.endpoint_key == key && !cell.skipped? }
+
+          [key, {
+            statuses: cells.flat_map { |cell| Array(cell.statuses) }.compact,
+            rate_limit_headers: cells.each_with_object({}) { |cell, out| out.merge!(cell.rate_limit_headers || {}) }
+          }]
+        end.reject { |_, observation| observation[:statuses].empty? }
+      end
+
+      def latency_summaries(endpoint_key)
+        @cells.select { |cell| cell.endpoint_key == endpoint_key && !cell.skipped? }
+              .map { |cell| statistics.summarize(cell.latencies, label: cell_label(cell)) }
+      end
+
+      # Clears the application cache before an endpoint's FIRST cell, and only then.
+      # Returns whether it was actually cleared -- a shared store is left alone, and the
+      # result then reports a first-request figure rather than claiming a cold one.
+      def prepare_cold_pass(endpoint)
+        return false if @cold_measured[endpoint.to_s]
+
+        cold_warm.prepare!
+      end
+
+      def record_cold_warm(endpoint, cell, cache_cleared)
+        key = endpoint.to_s
+        return if @cold_measured[key]
+        return if cell.cold_latencies.compact.empty?
+
+        @cold_measured[key] = true
+        @cold_warm[key] = cold_warm.compare(cell.cold_latencies, cell.latencies, cache_cleared: cache_cleared)
+      end
+
+      def record_rate_limit_headers(cell, response)
+        Analysis::TrafficDiagnosis::RATE_LIMIT_HEADERS.each do |name|
+          value = response.header(name)
+          cell.rate_limit_headers[name] = value if value
+        end
+      end
+
+      def query_data_for?(endpoint_key)
+        @cells.any? { |cell| cell.endpoint_key == endpoint_key && cell.query_counts.compact.any? }
+      end
+
+      def cell_label(cell)
+        "#{cell.sweep} scale=#{cell.scale_factor} page=#{cell.page_size || 'default'} " \
+          "concurrency=#{cell.actual_concurrency || cell.requested_concurrency}"
       end
 
       def outcome_for(endpoint)
@@ -526,7 +656,13 @@ module Loadwright
         # The validity gate comes first, always. No performance verdict is attached to
         # a response that did not prove it did the work.
         invalid = verdicts.find { |verdict| !verdict.valid? }
-        return inconclusive(endpoint, invalid.reason, invalid.detail) if invalid
+        if invalid
+          # A more specific reason when the run-level pattern supports one.
+          # `:unsuccessful_status` only says an error path was measured;
+          # `:auth_failed` and `:rate_limited` name the fix.
+          diagnosed = traffic_reason_for(key)
+          return inconclusive(endpoint, diagnosed || invalid.reason, invalid.detail)
+        end
 
         shapes = cells.map(&:shape)
         unless validator.consistent_shape?(shapes)
@@ -544,7 +680,7 @@ module Loadwright
         EndpointOutcome.derive(
           endpoint: endpoint,
           findings: findings,
-          coverage: coverage_for(cells),
+          coverage: coverage_for(key, cells),
           capability_epoch: cells.last.capability_epoch
         )
       end
@@ -553,7 +689,7 @@ module Loadwright
       # attached to EVERY outcome regardless of state — a reader can then see that an
       # otherwise-clean endpoint was checked with one N+1 detector instead of two,
       # without `inconclusive` having to be overloaded to signal it.
-      def coverage_for(cells)
+      def coverage_for(endpoint_key, cells)
         measured = cells.reject(&:skipped?)
         page_size_cells = measured.select { |cell| cell.sweep == :page_size }
         seed_scale_cells = measured.select { |cell| cell.sweep == :seed_scale }
@@ -566,7 +702,10 @@ module Loadwright
             query_data: measured.any? { |cell| cell.query_counts.compact.any? },
             tables_queried: tables_queried(measured)
           ).merge(
-            payload_growth: payload_growth_state(seed_scale_cells)
+            payload_growth: payload_growth_state(seed_scale_cells),
+            explain: @explain.fetch(endpoint_key, nil)&.detector_state ||
+                     [:unavailable, "the EXPLAIN phase did not run for this endpoint"],
+            percentiles: statistics.detector_state(@latency.fetch(endpoint_key, []))
           )
         )
       end
@@ -603,6 +742,20 @@ module Loadwright
         fingerprint.to_s[/(?:FROM|JOIN)\s+[`"']?([A-Za-z0-9_]+)/i, 1]
       end
 
+      # The slowest example of each distinct query shape, kept for the EXPLAIN phase.
+      #
+      # Keyed by fingerprint rather than appended, for two reasons. It bounds memory by
+      # the number of query SHAPES instead of by requests issued, and explaining the
+      # same shape once per request would produce N copies of one finding.
+      def remember_slow_query(endpoint_key, query)
+        return if query[:sql].nil?
+
+        shapes = (@slow_queries[endpoint_key] ||= {})
+        existing = shapes[query[:fingerprint]]
+        shapes[query[:fingerprint]] = query if existing.nil? ||
+                                              query[:duration_ms].to_f > existing[:duration_ms].to_f
+      end
+
       def findings_for(endpoint, cells)
         # The two sweeps answer different questions, so their observations are fed to
         # the correlator separately — the whole point of holding one axis fixed in each.
@@ -622,8 +775,60 @@ module Loadwright
         end)
 
         findings.concat(Array(@guard&.findings).select { |finding| finding.endpoint_key == endpoint.to_s })
+        findings.concat(latency_findings(endpoint.to_s))
+        findings.concat(Array(@explain[endpoint.to_s]&.findings))
+        findings.concat(job_volume_findings(endpoint.to_s, cells))
+        # NOT Array(...): Struct#to_a explodes a Finding into its four members, and
+        # `[:cold_cache_dependency, :medium, "...", {}]` then flows on as four findings,
+        # none of which respond to #kind.
+        findings.concat([cold_warm.finding_for(endpoint.to_s, @cold_warm[endpoint.to_s])].compact)
 
         annotate(findings)
+      end
+
+      # A REQUEST ENQUEUING 200 JOBS IS A FINDING IN ITS OWN RIGHT
+      # (performance-signals.md Part 1), and containment is what makes it visible: the
+      # :test adapter records rather than performs, which turns suppression into a
+      # measurement. Reported per request, not per run -- the run total rises with
+      # nothing but the number of requests issued.
+      def job_volume_findings(endpoint_key, cells)
+        counts = cells.reject(&:skipped?).flat_map { |cell| Array(cell.jobs_enqueued).compact }
+        return [] if counts.empty?
+
+        worst = counts.max
+        return [] if worst <= @config.jobs_enqueued_warning_threshold
+
+        [Analysis::ResponseCorrelator::Finding.new(
+          kind: :job_fan_out,
+          confidence: :high,
+          detail: "one request enqueued #{worst} background job(s), against a threshold of " \
+                  "#{@config.jobs_enqueued_warning_threshold}. Containment recorded them instead of " \
+                  "performing them, so this run did not pay their cost -- production would.",
+          evidence: { endpoint: endpoint_key, max_jobs_per_request: worst,
+                      threshold: @config.jobs_enqueued_warning_threshold }
+        )]
+      end
+
+      # The WORST cell that had enough samples to say anything, not the average across
+      # cells. An endpoint that meets its budget at concurrency 1 and blows it at 20 has
+      # a latency problem, and averaging the two would hide exactly the case worth
+      # reporting.
+      def latency_findings(endpoint_key)
+        budget = statistics.budget_for(endpoint_key)
+        return [] if budget.nil?
+
+        checks = Array(@latency[endpoint_key]).filter_map { |summary| statistics.budget_check(summary, budget) }
+        worst = checks.select(&:exceeded?).max_by(&:observed_ms)
+        return [] if worst.nil?
+
+        [Analysis::ResponseCorrelator::Finding.new(
+          kind: :latency_budget_exceeded,
+          confidence: :medium,
+          detail: "#{worst.checked_at} latency was #{worst.observed_ms.round(1)}ms against a " \
+                  "#{worst.budget_ms}ms budget#{worst.caveat ? ". #{worst.caveat}" : ''}",
+          evidence: { endpoint: endpoint_key, budget_ms: worst.budget_ms, checked_at: worst.checked_at,
+                      observed_ms: worst.observed_ms.round(3) }
+        )]
       end
 
       def annotate(findings)
@@ -650,6 +855,17 @@ module Loadwright
         blocker = events.map(&:blocker).uniq.join(", ")
 
         "abandoned after the backoff ladder; #{events.length} contention event(s), blocker: #{blocker}"
+      end
+
+      def traffic_reason_for(endpoint_key)
+        observation = traffic_observations_cache[endpoint_key]
+        return nil if observation.nil?
+
+        traffic_diagnosis.reason_for(endpoint_key, observation, Array(@traffic))
+      end
+
+      def traffic_observations_cache
+        @traffic_observations_cache ||= traffic_observations(@cells.map(&:endpoint_key).uniq)
       end
 
       def already_decided?(endpoint) = @outcomes.any? { |outcome| outcome.endpoint == endpoint }
@@ -706,6 +922,24 @@ module Loadwright
 
       def validator = @validator ||= Analysis::ResponseValidator.new(config: @config)
 
+      def statistics = @statistics ||= Analysis::Statistics.new(config: @config)
+
+      def cold_warm = @cold_warm_analyzer ||= Analysis::ColdWarm.new(config: @config)
+
+      def traffic_diagnosis = @traffic_diagnosis ||= Analysis::TrafficDiagnosis.new(config: @config)
+
+      def containment_disclosure
+        @containment_disclosure ||= Analysis::ContainmentDisclosure.from(@containment)
+      end
+
+      def pool_sizing
+        @pool_sizing ||= Analysis::PoolSizingCheck.new(
+          config: @config, capability: @context.capability_profile, pool_tracker: @pool_tracker
+        ).check
+      end
+
+      def explain_analyzer = @explain_analyzer ||= Analysis::ExplainAnalyzer.new(config: @config, stdout: @stdout)
+
       def correlator
         @correlator ||= Analysis::ResponseCorrelator.new(config: @config, capability: @context.capability_profile)
       end
@@ -719,6 +953,18 @@ module Loadwright
         @outcomes = []
         @verdicts = {}
         @correlations = {}
+        # Slowest exemplar per (endpoint, fingerprint). Bounded by the number of
+        # distinct query shapes rather than by request count, so a long run does not
+        # accumulate one entry per request.
+        @slow_queries = {}
+        @explain = {}
+        @latency = {}
+        @cold_warm = {}
+        # Which endpoints have already had their cold pass measured. The cold figure is
+        # only meaningful for the FIRST cell an endpoint is exercised in -- by the
+        # second, the application cache is warm and "cold" would be a lie.
+        @cold_measured = {}
+        @traffic = []
         self
       end
     end

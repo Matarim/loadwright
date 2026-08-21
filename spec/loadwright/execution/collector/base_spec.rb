@@ -41,37 +41,94 @@ RSpec.describe Loadwright::Execution::Collector::Base do
   end
 
   describe "side-effect volume" do
+    # A collector that measures the delta the real path measures: begin_request takes
+    # the baseline, collect subtracts it.
+    def counting_collector
+      Class.new(described_class) do
+        def collector_name = :fake
+        def collect(request, response, capability_epoch: 0) = response_derived(response, request)
+      end.new(config: config)
+    end
+
+    # A mutable mail outbox, so a "delivery" can happen BETWEEN the baseline and the
+    # collection, which is what a request sending mail actually looks like.
+    def stub_outbox(entries)
+      stub_const("ActionMailer::Base", Class.new { def self.deliveries = @deliveries ||= [] })
+      ActionMailer::Base.deliveries.concat(entries)
+    end
+
     # Containment forces mail and jobs to :test adapters, which RECORD rather than
     # perform. That turns suppression into a measurement: a request enqueuing 200
     # jobs is a finding, and dropping the jobs silently would lose it.
-    it "counts recorded mail deliveries when ActionMailer is present" do
-      stub_const("ActionMailer::Base", Class.new { def self.deliveries = [1, 2, 3] })
-      collector = Class.new(described_class) do
-        def collector_name = :fake
-        def collect(request, response, capability_epoch: 0) = response_derived(response)
-      end.new(config: config)
+    it "counts the mail one request delivered" do
+      stub_outbox([:already_sent_before_the_run])
+      collector = counting_collector
+      request = build_request
 
-      expect(collector.collect(build_request, nil)[:mail_deliveries]).to eq(Loadwright::Measurement.value(3))
+      collector.begin_request(request)
+      ActionMailer::Base.deliveries.concat(%i[one two three])
+
+      expect(collector.collect(request, nil)[:mail_deliveries]).to eq(Loadwright::Measurement.value(3))
     end
 
-    it "counts enqueued jobs when the test adapter is in place" do
-      adapter = Class.new { def enqueued_jobs = [1, 2] }.new
+    # THE NUMBER THAT WOULD OTHERWISE RISE WITH NOTHING BUT TIME. The test adapters
+    # accumulate across the whole run, so reporting the raw total per request shows
+    # request 500 enqueuing 500 jobs and request 1 enqueuing one.
+    it "reports a delta, not the total the adapter has accumulated all run" do
+      adapter = Class.new { def enqueued_jobs = @jobs ||= [] }.new
       stub_const("ActiveJob::Base", Class.new).tap { |k| k.define_singleton_method(:queue_adapter) { adapter } }
-      collector = Class.new(described_class) do
-        def collector_name = :fake
-        def collect(request, response, capability_epoch: 0) = response_derived(response)
-      end.new(config: config)
+      adapter.enqueued_jobs.concat(Array.new(400) { :earlier_in_the_run })
+      collector = counting_collector
+      request = build_request
 
-      expect(collector.collect(build_request, nil)[:jobs_enqueued]).to eq(Loadwright::Measurement.value(2))
+      collector.begin_request(request)
+      adapter.enqueued_jobs.concat(%i[a b])
+
+      expect(collector.collect(request, nil)[:jobs_enqueued]).to eq(Loadwright::Measurement.value(2))
+    end
+
+    # A WRONG ATTRIBUTION IS WORSE THAN AN ABSENT ONE here: "this endpoint enqueues
+    # 200 jobs" is exactly the kind of finding someone acts on. The counters are
+    # process-global, so overlapping requests cannot be told apart -- and overlap is
+    # DETECTED rather than inferred from the configured concurrency, because what
+    # matters is whether requests actually overlapped.
+    it "refuses a per-request count when another request was in flight at the same time" do
+      adapter = Class.new { def enqueued_jobs = @jobs ||= [] }.new
+      stub_const("ActiveJob::Base", Class.new).tap { |k| k.define_singleton_method(:queue_adapter) { adapter } }
+      collector = counting_collector
+      first = build_request
+      second = build_request
+
+      collector.begin_request(first)
+      collector.begin_request(second)
+      adapter.enqueued_jobs.concat(%i[a b])
+
+      expect(collector.collect(first, nil)[:jobs_enqueued]).to be_unavailable
+      expect(collector.collect(second, nil)[:jobs_enqueued].reason).to include("another request was in flight")
+    end
+
+    it "counts again once the requests stop overlapping" do
+      adapter = Class.new { def enqueued_jobs = @jobs ||= [] }.new
+      stub_const("ActiveJob::Base", Class.new).tap { |k| k.define_singleton_method(:queue_adapter) { adapter } }
+      collector = counting_collector
+
+      overlapping = [build_request, build_request]
+      overlapping.each { |r| collector.begin_request(r) }
+      overlapping.each { |r| collector.collect(r, nil) }
+
+      alone = build_request
+      collector.begin_request(alone)
+      adapter.enqueued_jobs << :a
+
+      expect(collector.collect(alone, nil)[:jobs_enqueued]).to eq(Loadwright::Measurement.value(1))
     end
 
     it "omits them rather than reporting zero when the adapters are not in place" do
-      collector = Class.new(described_class) do
-        def collector_name = :fake
-        def collect(request, response, capability_epoch: 0) = response_derived(response)
-      end.new(config: config)
+      collector = counting_collector
+      request = build_request
+      collector.begin_request(request)
 
-      expect(collector.collect(build_request, nil)).to eq({})
+      expect(collector.collect(request, nil)).to eq({})
     end
   end
 end

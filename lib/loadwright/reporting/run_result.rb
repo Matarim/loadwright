@@ -22,12 +22,14 @@ module Loadwright
     class RunResult
       attr_reader :config, :started_at, :finished_at, :cells, :outcomes, :correlations,
                   :breaker, :guard, :seeder, :identities, :warnings, :aborted_reason,
-                  :safety_decision, :containment, :discovery
+                  :safety_decision, :containment, :discovery, :explain, :latency,
+                  :time_breakdowns, :cold_warm, :pool_sizing, :traffic, :containment_disclosure
 
       def initialize(config:, cells:, outcomes:, context: nil, started_at: nil, finished_at: nil,
                      correlations: {}, breaker: nil, guard: nil, seeder: nil, identities: nil,
                      warnings: [], aborted_reason: nil, safety_decision: nil, containment: nil,
-                     discovery: nil)
+                     discovery: nil, explain: {}, latency: {}, time_breakdowns: {}, cold_warm: {},
+                     pool_sizing: nil, traffic: nil, containment_disclosure: nil)
         @config = config
         @context = context
         @started_at = started_at
@@ -44,6 +46,13 @@ module Loadwright
         @safety_decision = safety_decision
         @containment = containment
         @discovery = discovery
+        @explain = explain
+        @latency = latency
+        @time_breakdowns = time_breakdowns
+        @cold_warm = cold_warm
+        @pool_sizing = pool_sizing
+        @traffic = traffic
+        @containment_disclosure = containment_disclosure
       end
 
       def duration_seconds
@@ -108,11 +117,22 @@ module Loadwright
           config: config.snapshot,
           safety: safety_decision&.to_h,
           containment: containment&.to_h,
+          # REQUIRED, not optional (performance-signals.md Part 1). A run with outbound
+          # HTTP blocked is faster than reality, and the missing time appears in no
+          # component at all -- so nothing in the numbers hints at it. It is repeated on
+          # every endpoint's time breakdown too, because those get read separately.
+          containment_disclosure: containment_disclosure&.to_h,
           discovery: discovery,
           seeding: seeder&.to_h,
           identities: identities&.to_h,
           circuit_breaker: breaker&.to_h,
           contention: guard&.to_h,
+          pool_sizing: pool_sizing&.to_h,
+          # The run-wide diagnoses that explain a report full of `inconclusive` -- rate
+          # limiting, or an unwired auth_token_provider. In metadata rather than on an
+          # endpoint because they are properties of the RUN, and a reader looking at
+          # twelve inconclusive endpoints needs the one sentence that explains all of them.
+          traffic: traffic_to_h,
           aborted: aborted?,
           aborted_reason: aborted_reason,
           warnings: warnings
@@ -174,8 +194,33 @@ module Loadwright
         outcome.to_h.merge(
           endpoint: key,
           findings: outcome.findings.map { |finding| finding.respond_to?(:to_h) ? finding.to_h : finding },
-          correlation: correlations[key]
+          correlation: correlations[key],
+          # Per cell, and each carrying its own sample count: a percentile without the
+          # sample size behind it is not something a reader can judge.
+          latency: Array(latency[key]).map(&:to_h),
+          explain: explain[key]&.to_h,
+          time_breakdown: time_breakdown_for(key),
+          cold_warm: cold_warm[key]&.to_h
         ).compact
+      end
+
+      # The breakdown always travels with the disclosure. Someone reading one endpoint's
+      # section must not have to remember what the run header said about containment.
+      # nil rather than an empty array when nothing was diagnosed: `.compact` then drops
+      # the key entirely, so a clean run's metadata does not carry an empty "traffic"
+      # section a reader has to interpret.
+      def traffic_to_h
+        diagnoses = Array(traffic).map { |diagnosis| diagnosis.respond_to?(:to_h) ? diagnosis.to_h : diagnosis }
+
+        diagnoses.empty? ? nil : diagnoses
+      end
+
+      def time_breakdown_for(key)
+        breakdown = time_breakdowns[key]
+        return nil if breakdown.nil?
+
+        breakdown = breakdown.respond_to?(:to_h) ? breakdown.to_h : breakdown
+        breakdown.merge(containment: containment_disclosure&.to_h)
       end
 
       def confidence_rank(finding)

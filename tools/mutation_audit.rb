@@ -470,6 +470,33 @@ MUTATIONS = [
       end
     PROOF
   ),
+  # EXPLAIN ANALYZE EXECUTES THE STATEMENT. On a write, that performs the write --
+  # against a developer's database, from a tool whose premise is that it is safe to
+  # run locally.
+  Mutation.new(
+    name: "EXPLAIN: ANALYZE run on a write statement",
+    file: "lib/loadwright/analysis/explain_analyzer.rb",
+    from: "        analyzed = analyzable?(candidate.sql)",
+    to: "        analyzed = true",
+    spec: "spec/loadwright/analysis/explain_analyzer_spec.rb",
+    proof: <<~PROOF
+      connection = Object.new
+      connection.instance_variable_set(:@statements, [])
+      def connection.adapter_name = "PostgreSQL"
+      def connection.statements = @statements
+      def connection.select_all(sql) = (@statements << sql) && []
+      def connection.execute(sql) = @statements << sql
+      analyzer = Loadwright::Analysis::ExplainAnalyzer.new(
+        config: Loadwright::Configuration.new, connection: connection, stdout: StringIO.new
+      )
+      candidate = Loadwright::Analysis::ExplainAnalyzer::Candidate.new(
+        endpoint_key: "DELETE /posts/1", fingerprint: "fp",
+        sql: "DELETE FROM posts WHERE id = 1", duration_ms: 900.0
+      )
+      analyzer.analyze([candidate])
+      "would_execute=\#{connection.statements.grep(/ANALYZE/).inspect}"
+    PROOF
+  ),
   Mutation.new(
     name: "cleanup: deletes whole tables instead of tracked ids",
     file: "lib/loadwright/seeding/factory_bot_seeder.rb",

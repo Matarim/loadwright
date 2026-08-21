@@ -211,6 +211,14 @@ module Loadwright
     setting :min_samples_for_percentiles, { p50: 20, p95: 100, p99: 500 }.freeze, section: :instrumentation
     setting :check_pool_vs_server_threads, true, section: :instrumentation
 
+    # Jobs enqueued PER REQUEST above which the volume is itself a finding.
+    #
+    # Not zero: enqueuing a job from a POST is ordinary and correct. The finding is
+    # about volume -- a request fanning out into 200 jobs is doing something a
+    # developer almost certainly did not intend, and containment is what makes it
+    # visible at all (the :test adapter records instead of performing).
+    setting :jobs_enqueued_warning_threshold, 10, section: :instrumentation
+
     # =========================================================================
     # RUN HISTORY & COMPARISON — references/run-comparison.md
     # =========================================================================

@@ -59,6 +59,20 @@ module Loadwright
         @mutex = Mutex.new
         @subscriber = nil
         @capture_call_sites = config.detect_n_plus_one || config.serializer_attribution
+        # RAW SQL, AND ONLY FOR EXPLAIN.
+        #
+        # A normalised fingerprint cannot be EXPLAINed: `WHERE id = ?` is not a
+        # runnable statement, and substituting a literal for the placeholder would
+        # change the plan the planner picks -- which is the one thing this signal is
+        # about. So the analyzer needs one exemplar statement per fingerprint, with
+        # its literals intact.
+        #
+        # It is captured ONLY when EXPLAIN is enabled, it never leaves this process
+        # by any path but the analyzer, and it is stripped from every serialisation:
+        # RequestMetrics#to_h drops it, and History::Redactor strips it again on the
+        # way to a persisted record. Specs assert both. The fingerprint remains what
+        # every report and finding is built from.
+        @capture_exemplars = config.run_explain_on_slow_queries
       end
 
       # Subscribes once. Idempotent so a double-start (engine plus middleware in
@@ -147,6 +161,7 @@ module Loadwright
           cached: !!payload[:cached]
         }
         entry[:call_site] = call_site if @capture_call_sites
+        entry[:sql] = payload[:sql].to_s if @capture_exemplars
 
         request_id = CurrentRequest.id
 

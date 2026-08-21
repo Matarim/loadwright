@@ -173,17 +173,34 @@ module Loadwright
         OpenSSL.secure_compare(provided, expected)
       end
 
-      # Redaction at COLLECTION time, not render time (reporting.md). Bind values
-      # never reach a response body, so they cannot leak into a persisted run
-      # record either — fingerprints have already had literals replaced by
-      # QueryTracker.fingerprint, and the raw SQL is deliberately never included.
+      # Redaction at COLLECTION time, not render time (reporting.md). Fingerprints have
+      # already had their literals replaced by QueryTracker.fingerprint, so nothing here
+      # carries a bind value into a report or a persisted run record.
+      #
+      # THE ONE EXCEPTION, and the reason it is narrow. `sql` is the exemplar statement
+      # with its literals intact, and it is here because EXPLAIN cannot work without one:
+      # `WHERE id = ?` is not runnable, and substituting a literal would change the plan
+      # the planner picks, which is the thing being measured. Under :http the statement
+      # is in the SERVER's process and the analyzer runs in the harness, so it has to
+      # cross this boundary or index analysis is simply unavailable in :http mode.
+      #
+      # What still holds, and what each part rests on:
+      #
+      #   * It is present ONLY when run_explain_on_slow_queries is on — QueryTracker does
+      #     not capture it otherwise, so turning EXPLAIN off removes it at the source.
+      #   * It never reaches an artefact. RequestMetrics#to_h drops it, History::Redactor
+      #     strips it again on the way to a persisted record, and specs assert both.
+      #   * The channel is the collection endpoint, which is loopback-bound and guarded
+      #     by a per-run 0600 secret — and which execution-modes.md already describes as
+      #     the route for "full SQL, stack traces".
       def redact(query)
         {
           "fingerprint" => query[:fingerprint],
           "duration_ms" => query[:duration_ms],
           "name" => query[:name],
-          "call_site" => query[:call_site]
-        }
+          "call_site" => query[:call_site],
+          "sql" => query[:sql]
+        }.compact
       end
 
       def rack_query(env)

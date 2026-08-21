@@ -218,17 +218,50 @@ RSpec.describe Loadwright::Execution::CollectorMiddleware do
       expect(JSON.parse(body.join)["error"]).to match(/request_id/)
     end
 
-    # Redaction at COLLECTION time, not render time. Bind values never reach a
-    # response body, so they cannot leak into a persisted run record either.
-    it "returns fingerprints only, never raw SQL or bind values" do
+    # Redaction at COLLECTION time, not render time. The fingerprint is what every
+    # finding is built from, and it has already had its literals replaced.
+    it "returns fingerprints, with the literals already replaced" do
       _, _, body = collect
 
-      serialised = body.join
-      expect(serialised).to include("SELECT * FROM posts WHERE id = ?")
-      expect(serialised).not_to include("id = 1")
-      expect(serialised).not_to include("id = 2")
-      expect(JSON.parse(serialised)["queries"].first.keys)
-        .to contain_exactly("fingerprint", "duration_ms", "name", "call_site")
+      expect(body.join).to include("SELECT * FROM posts WHERE id = ?")
+    end
+
+    # THE DEFAULT. With EXPLAIN off there is no reason for a bind value to cross this
+    # boundary at all, and it does not: QueryTracker never captured one.
+    context "with EXPLAIN disabled" do
+      # Overridden on the config the tracker is BUILT from: QueryTracker decides once,
+      # at construction, whether to capture exemplars at all. Flipping the key inside
+      # the example would be too late, and the example would pass or fail on hook order.
+      let(:config) do
+        Loadwright::Configuration.new.tap { |c| c.run_explain_on_slow_queries = false }
+      end
+
+      it "carries no raw statement, because none was ever captured" do
+        _, _, body = collect
+
+        serialised = body.join
+        expect(serialised).not_to include("id = 1")
+        expect(serialised).not_to include("id = 2")
+        expect(JSON.parse(serialised)["queries"].first.keys)
+          .to contain_exactly("fingerprint", "duration_ms", "name", "call_site")
+      end
+    end
+
+    # THE ONE EXCEPTION, and it is narrow on purpose. EXPLAIN cannot run on a
+    # fingerprint -- `WHERE id = ?` is not a runnable statement, and substituting a
+    # literal would change the plan the planner picks, which is the thing being
+    # measured. Under :http the statement lives in the server process and the analyzer
+    # runs in the harness, so index analysis is either available through this field or
+    # not available in :http mode at all.
+    #
+    # The channel is loopback-bound and secret-guarded, and the companion guarantee --
+    # that this never reaches a persisted artefact -- is asserted in the redaction spec.
+    it "carries the exemplar statement when EXPLAIN is enabled, because a plan needs one" do
+      _, _, body = collect
+
+      queries = JSON.parse(body.join)["queries"]
+      expect(queries.first.keys).to include("sql")
+      expect(queries.first["sql"]).to eq("SELECT * FROM posts WHERE id = 1")
     end
 
     it "releases the bucket after collection, so a long run does not grow forever" do
