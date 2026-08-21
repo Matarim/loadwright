@@ -228,6 +228,26 @@ RSpec.describe "end-to-end against examples/sample_app", :sample_app do
 
     # The two classes this session activated are now genuinely checked, on every
     # endpoint that was measurable at all.
+    # THE FINDING THIS ENABLES. An endpoint at 340ms with 3 queries has no query-count
+    # finding at all; if most of it is view time, the advice is "your serialiser" rather
+    # than anything about SQL. Without view_runtime that verdict is impossible.
+    it "attributes an endpoint's time to db, view, gc and a named residual" do
+      endpoint = result.to_h[:endpoints].find { |e| e[:endpoint] == "GET /api/v1/posts" }
+      breakdown = endpoint[:time_breakdown]
+
+      expect(breakdown[:total_ms]).to be > 0
+      expect(breakdown).to have_key(:other_ms)
+      expect(breakdown[:dominant]).to be_a(Symbol)
+    end
+
+    # Required, not optional: containment makes the app faster than reality, and the
+    # missing time appears in NO component -- so the arithmetic gives no hint of it.
+    it "discloses the containment skew alongside the breakdown, not only in the header" do
+      endpoint = result.to_h[:endpoints].find { |e| e[:endpoint] == "GET /api/v1/posts" }
+
+      expect(endpoint[:time_breakdown][:containment]).not_to be_nil
+    end
+
     it "covers the index-scan and latency classes it previously never attempted" do
       outcome = outcome_for(result, "/api/v1/posts/{post_id}/comments")
 

@@ -141,4 +141,108 @@ RSpec.describe Loadwright::History::Redactor do
       expect(audit[:header_patterns]).to include("/authorization/i")
     end
   end
+
+  # =========================================================================
+  # THE TWO PLACES REDACTION HAS TO REACH THAT ARE NOT OBVIOUS.
+  #
+  # Measurement.unavailable(reason) and CapabilityProfile's downgrade causes read as
+  # internal metadata, so it is easy to treat them as exempt. They are free text
+  # written by the code that failed, which knows exactly the things worth protecting --
+  # the target URL, the database host, the path the secret was at -- and they are
+  # persisted into every run record and rendered into every report.
+  # =========================================================================
+  describe "#reason" do
+    it "redacts a non-loopback host, which can name internal infrastructure" do
+      expect(redactor.reason("the app under test at http://staging.acme.internal:3000 did not answer"))
+        .to eq("the app under test at http://[FILTERED]:3000 did not answer")
+    end
+
+    # The whole value of the message, and it names nothing private. Redacting it would
+    # be over-redaction that hides why a signal is missing.
+    it "keeps a loopback host, which is the useful half of a local failure" do
+      text = "the app at http://127.0.0.1:52341 did not become healthy"
+
+      expect(redactor.reason(text)).to eq(text)
+    end
+
+    it "redacts credentials embedded in a connection string" do
+      result = redactor.reason("could not connect to postgres://app:hunter2@db.acme.internal/production")
+
+      expect(result).not_to include("hunter2")
+      expect(result).not_to include("db.acme.internal")
+    end
+
+    # A home directory names the user. The path is the useful part; the account is not.
+    it "replaces the home directory with ~" do
+      expect(redactor.reason("could not read #{Dir.home}/tmp/loadwright/x.secret"))
+        .to eq("could not read ~/tmp/loadwright/x.secret")
+    end
+
+    it "redacts a secret assigned inside free text" do
+      expect(redactor.reason("the auth token=sk-live-abc123 was rejected"))
+        .to eq("the auth token=[FILTERED] was rejected")
+    end
+
+    # Over-redaction is its own failure: a reason that no longer says why a signal is
+    # missing is worse than no reason, because it looks like an answer.
+    it "leaves an ordinary mention of a sensitive word alone" do
+      text = "no auth token was configured, so every request was anonymous"
+
+      expect(redactor.reason(text)).to eq(text)
+    end
+
+    it "tolerates nil" do
+      expect(redactor.reason(nil)).to be_nil
+    end
+  end
+
+  # One entry point for anything persisted, so a field added downstream is covered by
+  # default rather than by someone remembering to redact it.
+  describe "#document" do
+    it "redacts reason strings wherever they appear in the structure" do
+      result = redactor.document(
+        endpoints: [
+          { endpoint: "GET /a",
+            latency: { p99: { unavailable: "the app at http://prod.acme.internal timed out" } } }
+        ]
+      )
+
+      expect(result[:endpoints].first[:latency][:p99][:unavailable]).to include("[FILTERED]")
+    end
+
+    it "redacts a capability downgrade cause" do
+      timeline = Loadwright::CapabilityTimeline.new(
+        Loadwright::CapabilityProfile.derive(transport: :http, collector: :middleware)
+      )
+      timeline.degrade!(:n_plus_one_slope, reason: "http://collector.acme.internal stopped answering")
+
+      result = redactor.document(timeline.to_h)
+
+      expect(JSON.generate(result)).not_to include("collector.acme.internal")
+    end
+
+    # The exemplar statement is kept for EXPLAIN and has its literals intact. Nothing in
+    # a report is built from it -- the fingerprint is -- so it must not reach an
+    # artefact at all.
+    it "drops raw SQL outright rather than trying to sanitise it" do
+      result = redactor.document(
+        queries: [{ fingerprint: "SELECT * FROM users WHERE email = ?",
+                    sql: "SELECT * FROM users WHERE email = 'ceo@acme.com'" }]
+      )
+
+      expect(result[:queries].first).to eq(fingerprint: "SELECT * FROM users WHERE email = ?")
+      expect(JSON.generate(result)).not_to include("ceo@acme.com")
+    end
+
+    it "still filters sensitive keys anywhere in the tree" do
+      result = redactor.document(metadata: { config: { auth_token_provider: "sk-live-abc" } })
+
+      expect(result[:metadata][:config][:auth_token_provider]).to eq("[FILTERED]")
+    end
+
+    it "leaves ordinary values untouched" do
+      expect(redactor.document(summary: { endpoints: 4, healthy: 2 }))
+        .to eq(summary: { endpoints: 4, healthy: 2 })
+    end
+  end
 end

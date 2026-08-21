@@ -52,6 +52,83 @@ module Loadwright
 
       def body(value) = params(value)
 
+      # =====================================================================
+      # THE TWO PLACES REDACTION HAS TO REACH THAT ARE NOT OBVIOUS.
+      #
+      # Measurement.unavailable(reason) and CapabilityProfile's downgrade causes are
+      # free text written by the code that failed, and that code knows exactly the
+      # things worth protecting: the target URL, the database host, the path the
+      # secret file was at, the user account the process runs as. They read as
+      # internal metadata, so it is easy to treat them as exempt -- but they are
+      # persisted into every run record and rendered into every report, on the same
+      # path as everything else. They get redacted on that same path.
+      #
+      # WHAT SURVIVES, deliberately. Loopback hosts are kept: "the app at
+      # http://127.0.0.1:52341 did not become healthy" is the whole value of the
+      # message and names nothing private. It is the NON-loopback host that can name a
+      # company's internal infrastructure, and that is what goes.
+      # =====================================================================
+      LOOPBACK_HOSTS = %w[localhost 127.0.0.1 0.0.0.0 ::1].freeze
+
+      # user:password@host in a URL or a connection string. Always redacted, whatever
+      # the host -- a password is not less sensitive for being on loopback.
+      URL_CREDENTIALS = %r{(?<scheme>[a-z][a-z0-9+.-]*://)(?<credentials>[^/@\s:]+(?::[^/@\s]*)?)@}i
+
+      URL_HOST = %r{(?<scheme>[a-z][a-z0-9+.-]*://)(?<host>[^/\s:?#]+)}i
+
+      def reason(text)
+        return text if text.nil?
+
+        result = text.to_s
+        result = result.gsub(URL_CREDENTIALS) { "#{Regexp.last_match[:scheme]}#{PLACEHOLDER}@" }
+        result = result.gsub(URL_HOST) do
+          match = Regexp.last_match
+          LOOPBACK_HOSTS.include?(match[:host].downcase) ? match[0] : "#{match[:scheme]}#{PLACEHOLDER}"
+        end
+        result = redact_home_directory(result)
+
+        patterns.reduce(result) do |carried, pattern|
+          # `token=abc`, `password: hunk` and similar inside free text. Anchored on the
+          # separator so an ordinary mention of the WORD "token" survives -- an
+          # over-redacted reason that hides why a signal is missing defeats the purpose
+          # of having a reason at all.
+          carried.gsub(/((?:#{pattern.source})[^\s:=]*\s*[:=]\s*)(\S+)/i) { "#{Regexp.last_match(1)}#{PLACEHOLDER}" }
+        end
+      end
+
+      # THE ONE ENTRY POINT FOR ANYTHING PERSISTED. Walks a whole run record, so a new
+      # field added anywhere downstream is covered by default rather than by someone
+      # remembering to redact it.
+      #
+      #   * `:sql` is DROPPED outright. It is the exemplar statement kept for EXPLAIN,
+      #     it has its literals intact, and nothing in a report is built from it -- the
+      #     fingerprint is. It must not reach an artefact.
+      #   * free-text explanation fields get #reason
+      #   * sensitive-looking keys get [FILTERED]
+      REASON_KEYS = %i[reason cause unavailable detail message explanation summary caveat
+                       error aborted_reason].freeze
+
+      DROPPED_KEYS = %i[sql].freeze
+
+      def document(value)
+        case value
+        when Hash
+          value.each_with_object({}) do |(key, nested), out|
+            name = key.to_s
+            next if DROPPED_KEYS.any? { |dropped| dropped.to_s == name }
+
+            out[key] =
+              if redact_param?(key) then PLACEHOLDER
+              elsif nested.is_a?(String) && REASON_KEYS.any? { |field| field.to_s == name } then reason(nested)
+              else document(nested)
+              end
+          end
+        when Array then value.map { |element| document(element) }
+        when String then value
+        else value
+        end
+      end
+
       def to_h
         {
           header_patterns: @config.redact_header_patterns.map(&:inspect),
@@ -83,6 +160,18 @@ module Loadwright
                       # boolean, and over-redaction that hides a real value is its
                       # own kind of misleading report.
                       [/password/i, /secret/i, /token/i, /\bapi[-_]?key\b/i]
+      end
+
+      # A home directory names the user. Paths appear in reasons constantly -- the
+      # secret file's location, a spec's call site, an OpenAPI document that would not
+      # parse -- and the path is the useful part while the account name is not.
+      def redact_home_directory(text)
+        home = Dir.home
+        return text if home.nil? || home.empty? || home == "/"
+
+        text.gsub(home, "~")
+      rescue StandardError
+        text
       end
 
       def rails_filter_parameters

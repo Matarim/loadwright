@@ -2,6 +2,7 @@
 
 require "loadwright/execution/collector/base"
 require "loadwright/instrumentation/query_tracker"
+require "loadwright/analysis/time_breakdown"
 
 module Loadwright
   module Execution
@@ -19,22 +20,30 @@ module Loadwright
       # — so both collectors use one QueryTracker rather than each having its own
       # idea of correlation.
       class Direct < Base
-        def initialize(config: Loadwright.configuration, tracker: nil)
+        def initialize(config: Loadwright.configuration, tracker: nil, time_breakdown: nil)
           super(config: config)
           @tracker = tracker || Instrumentation::QueryTracker.new(config: config)
+          # Subscribed once per run, for the same reason the query tracker is: AS::N
+          # subscribers are process-global. It reads Rails' own db_runtime and
+          # view_runtime off process_action, which is the only way view time is
+          # obtainable at all -- and view time is what stops the report blaming the
+          # database for a serialisation problem.
+          @time_breakdown = time_breakdown || Analysis::TimeBreakdown.new(config: config)
         end
 
-        attr_reader :tracker
+        attr_reader :tracker, :time_breakdown
 
         def collector_name = :direct
 
         def start_run!
           @tracker.start!
+          @time_breakdown.start!
           self
         end
 
         def stop_run!
           @tracker.stop!
+          @time_breakdown.stop!
           self
         end
 
@@ -66,7 +75,11 @@ module Loadwright
             query_count: Measurement.value(bucket.count),
             distinct_query_count: Measurement.value(bucket.distinct_count),
             unattributed_query_count: Measurement.value(@tracker.unattributed_count),
-            db_runtime_ms: sum_query_duration(bucket),
+            # Rails' own db_runtime where it reported one, falling back to the summed
+            # SQL durations we measured ourselves. The fallback is not equivalent and is
+            # not pretended to be: it counts only queries we attributed, so it
+            # under-reports whatever GAP-01 missed.
+            **timing_metrics(bucket),
             **process_metrics,
             **pool_metrics,
             **response_derived(raw_response, request)
@@ -74,6 +87,19 @@ module Loadwright
         end
 
         private
+
+        def timing_metrics(bucket)
+          breakdown = @time_breakdown.metrics_for(request_id_of(bucket))
+          @time_breakdown.forget(request_id_of(bucket))
+
+          {
+            db_runtime_ms: breakdown[:db_runtime_ms].available? ? breakdown[:db_runtime_ms]
+                                                                : sum_query_duration(bucket),
+            view_runtime_ms: breakdown[:view_runtime_ms]
+          }
+        end
+
+        def request_id_of(bucket) = bucket.request_id
 
         def sum_query_duration(bucket)
           Measurement.value(bucket.queries.sum { |q| q[:duration_ms].to_f }.round(3))

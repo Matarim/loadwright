@@ -74,7 +74,13 @@ module Loadwright
             Execution::CollectorMiddleware.mount!(
               tracker: tracker,
               guard: Safety::EnvironmentGuard.new(config: Loadwright.configuration),
-              secret: secret
+              secret: secret,
+              # APP-SIDE, and it has to be. Under :http the process_action event fires
+              # in THIS process, so db_runtime and view_runtime are observable only
+              # here -- the harness never sees them. Without it, view time is
+              # unavailable in :http mode and the report cannot tell a serialisation
+              # problem from a database one.
+              time_breakdown: Analysis::TimeBreakdown.new(config: Loadwright.configuration)
             )
           rescue SafetyError => e
             # Not fatal for the app under test: it simply serves requests without

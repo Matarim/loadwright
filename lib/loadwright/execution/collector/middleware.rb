@@ -69,14 +69,30 @@ module Loadwright
             query_count: Measurement.value(count),
             distinct_query_count: distinct_count(raw_response, detail),
             unattributed_query_count: detail_measurement(detail, "unattributed_query_count"),
-            db_runtime_ms: header_measurement(raw_response, CollectorMiddleware::DB_RUNTIME_HEADER),
-            view_runtime_ms: header_measurement(raw_response, CollectorMiddleware::VIEW_RUNTIME_HEADER),
+            # Header first, detail second. The header is the cheap channel and is
+            # present on every response; the detail endpoint carries Rails' own
+            # process_action timings, which are the only source of view_runtime.
+            db_runtime_ms: timing(raw_response, detail, CollectorMiddleware::DB_RUNTIME_HEADER,
+                                  "db_runtime_ms"),
+            view_runtime_ms: timing(raw_response, detail, CollectorMiddleware::VIEW_RUNTIME_HEADER,
+                                    "view_runtime_ms"),
+            gc_time_ms: detail_measurement(detail, "gc_time_ms"),
             allocations: header_measurement(raw_response, CollectorMiddleware::ALLOCATIONS_HEADER),
             **response_derived(raw_response, request)
           )
         end
 
         private
+
+        def timing(raw_response, detail, header, detail_key)
+          from_header = header_measurement(raw_response, header)
+          return from_header if from_header.available?
+
+          from_detail = detail_measurement(detail, detail_key)
+          # The header's reason names the header, which is the more actionable of the
+          # two when neither channel had it.
+          from_detail.available? ? from_detail : from_header
+        end
 
         def distinct_count(raw_response, detail)
           from_header = header_integer(raw_response, CollectorMiddleware::DISTINCT_QUERY_HEADER)

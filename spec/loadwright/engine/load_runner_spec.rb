@@ -515,6 +515,55 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     end
   end
 
+  # `ensure` does not run on a signal, and the partial record is what the next run gets
+  # compared against -- and what the partial-report path reads from.
+  describe "run history" do
+    require "tmpdir"
+
+    around { |example| Dir.mktmpdir("engine-history-") { |dir| @dir = dir; example.run } }
+
+    before do
+      config.run_history_dir = @dir
+      config.scale_factors = [10]
+      config.page_size_sweep = [5]
+      config.requests_per_endpoint_per_level = 2
+      config.warmup_requests = 0
+    end
+
+    let(:lifecycle) { Loadwright::Lifecycle.new(stderr: StringIO.new) }
+    let(:store) { Loadwright::History::RunStore.new(config: config, lifecycle: lifecycle) }
+
+    it "leaves a usable record when the run is interrupted partway" do
+      calls = 0
+      responder = lambda do |_|
+        calls += 1
+        raise Loadwright::Interrupted, "ctrl-c" if calls > 2
+
+        { status: 200, body: '[{"id":1}]' }
+      end
+
+      begin
+        runner(context: build_context(responder: responder), run_store: store, lifecycle: lifecycle)
+          .run(endpoints: [endpoint])
+      rescue Loadwright::Interrupted
+        nil
+      end
+      lifecycle.run_teardown!
+
+      expect(store.list.length).to eq(1)
+      expect(store.latest.endpoints).not_to be_empty
+    end
+
+    # An empty record would later read as a run that found nothing, which is a different
+    # claim from a run that never got going.
+    it "writes nothing when the interrupt landed before any cell ran" do
+      runner(context: build_context, run_store: store, lifecycle: lifecycle)
+      lifecycle.run_teardown!
+
+      expect(store.list).to be_empty
+    end
+  end
+
   describe "the RunResult data shape" do
     it "separates the three states rather than collapsing them" do
       responder = lambda do |request|

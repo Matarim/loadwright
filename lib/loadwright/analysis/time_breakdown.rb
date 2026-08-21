@@ -68,6 +68,28 @@ module Loadwright
         end
       end
 
+      # Builds a breakdown from figures the pipeline already carries, rather than from a
+      # notification. Used to aggregate an ENDPOINT's breakdown from its requests: the
+      # subscriber is per-request and lives in whichever process ran the controller,
+      # while this is arithmetic the harness can do over what came back.
+      #
+      # `other` stays a named residual. Middleware, authentication, controller Ruby, and
+      # any outbound HTTP that was not blocked all live there, and a large `other` is a
+      # real finding -- it is just not one this breakdown can attribute further.
+      def self.from_totals(total_ms:, db_ms: nil, view_ms: nil, gc_ms: nil, controller: nil, action: nil)
+        return nil if total_ms.nil?
+
+        accounted = [db_ms, view_ms, gc_ms].compact.sum
+        Breakdown.new(
+          total_ms: total_ms, db_ms: db_ms, view_ms: view_ms, gc_ms: gc_ms,
+          # Clamped at zero for the same reason #record clamps it: the components are
+          # measured independently and can sum to slightly more than the total on a fast
+          # request, and a negative residual is nonsense in a report.
+          other_ms: [total_ms - accounted, 0.0].max,
+          controller: controller, action: action
+        )
+      end
+
       def initialize(config: Loadwright.configuration)
         @config = config
         @breakdowns = {}

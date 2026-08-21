@@ -490,6 +490,16 @@ set_baseline:   bundle exec loadwright baseline set <run_id>
 compare:        bundle exec loadwright compare <run_a> <run_b>
 compare_base:   bundle exec loadwright compare --baseline
 
+implemented_now: [runs, baseline, compare]
+still_stubbed:   [run, record]   # need the reporting layer; raise NotImplementedError
+
+compare_exit_codes:
+  0: comparable, and either no regressions or fail_on_regression is false
+  1: comparable, regressions found, and fail_on_regression is true
+  2: NOT COMPARABLE — the runs diverge on a measurement dimension.
+     This is an ERROR, never a silent pass. Do not retry with different
+     flags; the fix is to re-run one side under matching config.
+
 flags:
   --dry-run:                 resolve everything, send zero requests
   --execute:                 actually issue requests
@@ -504,8 +514,51 @@ reason: >
 
 interrupt_behavior: >
   SIGINT (Ctrl-C) is trapped: stops issuing requests, tears down any booted
-  server, cleans up seeded rows, writes a partial report. Interrupting is
-  safe. Tell users this — they often fear it isn't.
+  server, cleans up seeded rows, writes a partial report AND a partial run
+  history record. Interrupting is safe. Tell users this — they often fear it
+  isn't.
+```
+
+### 7b. COMPARISON RULES
+
+```yaml
+COMP-01:
+  rule: Query count deltas are the primary signal; latency deltas are mostly noise.
+  detail: >
+    A query count going 3 -> 47 is unambiguous and reproducible on any machine,
+    and gets NO statistical treatment. Laptop latency moves 10-20% between
+    identical runs, so a latency delta must clear BOTH regression_threshold_pct
+    AND the measured noise floor. Anything below is labelled "within noise" —
+    shown, never called a regression.
+
+COMP-02:
+  rule: The comparability gate refuses rather than misleads, and names the dimension.
+  dimensions_checked:
+    - resolved config values (execution_mode, scale_factors, concurrency_levels,
+      requests_per_endpoint_per_level, warmup_requests, page_size_sweep,
+      containment settings, disable_query_cache_during_run, seed_cleanup_strategy)
+    - the app's OWN default page size, observed per endpoint — NOT in the config
+      fingerprint, because the seed-scale sweep sends no page-size parameter
+    - CapabilityProfile: a run that lost query collection mid-way has the same
+      config fingerprint and less data
+  capability_handling: >
+    Capability mismatch EXCLUDES the affected metric and names it, rather than
+    refusing the whole comparison. Config or page-size mismatch refuses outright.
+
+COMP-03:
+  rule: A finding that disappeared because the endpoint became inconclusive is NOT a fix.
+  detail: >
+    healthy/has_findings -> inconclusive is its own event: the endpoint became
+    unmeasurable, which is neither an improvement nor a regression. Never report
+    it as "resolved". Loadwright marks these `resolved: false` with a note.
+
+COMP-04:
+  rule: The noise floor is measured, not assumed.
+  how: >
+    `baseline set` looks for a second run on the same commit with the same config
+    fingerprint and records the spread between them as the noise floor. Without
+    one it says so and falls back to regression_threshold_pct alone. Advise
+    running the suite twice on the baseline commit.
 ```
 
 ---
@@ -528,6 +581,12 @@ DIAG-01:
     Do not conclude the API is broken. Do not disable
     require_successful_response to "get results" — that produces
     measurements of the 403 error path.
+  note: >
+    Loadwright names this itself when 80%+ of at least three endpoints return
+    ONLY 401/403: the endpoints are marked inconclusive with reason
+    `auth_failed`, whose explanation points at auth_token_provider, and a
+    run-level diagnosis is printed. Below that bar it says nothing, because an
+    API with an admin section is not a misconfiguration.
 
 DIAG-02:
   symptom: "Cluster of 429s / Retry-After headers / run mostly inconclusive"
@@ -536,7 +595,12 @@ DIAG-02:
     Allowlist Loadwright's requests in the rate limiter for dev/test, e.g.
     a safelist on a header Loadwright sends, or disable the throttle in the
     dev environment.
-  note: Loadwright should detect and name this; if it didn't, report the gap.
+  note: >
+    Loadwright detects and names this itself, at the RUN level: a cluster of
+    429s, or Retry-After / RateLimit-* headers, produces a plain-language
+    diagnosis in run metadata and on stdout, and the affected endpoints are
+    marked inconclusive with reason `rate_limited` rather than the generic
+    `unsuccessful_status`. If a throttled run does NOT say so, report the gap.
 
 DIAG-03:
   symptom: "Nested endpoints 404; /posts/{id}/... all fail"

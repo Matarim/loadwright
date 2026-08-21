@@ -11,6 +11,7 @@ require "loadwright/analysis/statistics"
 require "loadwright/analysis/cold_warm"
 require "loadwright/analysis/containment_disclosure"
 require "loadwright/analysis/traffic_diagnosis"
+require "loadwright/analysis/time_breakdown"
 require "loadwright/analysis/pool_sizing_check"
 require "loadwright/reporting/run_result"
 
@@ -56,7 +57,7 @@ module Loadwright
         :skipped_reason, :duplicates, :shape, :db_runtimes, :tables,
         # The warmup pass, KEPT rather than discarded: cold-cache performance is what
         # users hit right after a deploy, and it is the case nobody measures.
-        :cold_latencies, :jobs_enqueued,
+        :cold_latencies, :jobs_enqueued, :view_runtimes, :gc_times,
         # Only the rate-limit headers, not the whole response header set: they are what
         # names a throttled run, and keeping the rest would put arbitrary header values
         # into a persisted record for no signal.
@@ -119,7 +120,7 @@ module Loadwright
       def initialize(config: Loadwright.configuration, context:, guard: nil, breaker: nil,
                      seeder: nil, identities: nil, resolver: nil, lifecycle: nil, stdout: $stdout,
                      explain_analyzer: nil, statistics: nil, containment: nil, pool_tracker: nil,
-                     cold_warm: nil)
+                     cold_warm: nil, run_store: nil)
         @config = config
         @context = context
         @guard = guard
@@ -134,11 +135,29 @@ module Loadwright
         @containment = containment
         @pool_tracker = pool_tracker
         @cold_warm_analyzer = cold_warm
+        @run_store = run_store
         @warnings = []
         reset!
+        arm_run_history!
       end
 
       attr_reader :cells, :outcomes, :warnings
+
+      # A PARTIAL RECORD IS OFTEN THE MOST INTERESTING ONE, and `ensure` does not run on
+      # a signal. The store registers with Lifecycle -- which owns the one trap -- so a
+      # Ctrl-C mid-run still leaves something the next run can be compared against, and
+      # something the partial-report path can read.
+      #
+      # The provider returns nil until there is anything to record, so an interrupt
+      # during startup writes no record rather than an empty one that would later read
+      # as a run which found nothing.
+      def arm_run_history!
+        @run_store&.arm! do
+          next nil if @cells.empty? && @outcomes.empty?
+
+          build_result(@endpoints || [], aborted_reason: "interrupted")
+        end
+      end
 
       # ------------------------------------------------------------ matrix shape
 
@@ -200,6 +219,9 @@ module Loadwright
       # ------------------------------------------------------------------- the run
 
       def run(endpoints:)
+        # Held so the interrupt path can build a result for the endpoints this run was
+        # actually asked about, rather than for an empty list.
+        @endpoints = endpoints
         return dry_run(endpoints) if @context.transport.dry_run
 
         @started_at = Time.now
@@ -232,7 +254,7 @@ module Loadwright
               requested_concurrency: concurrency, requests: @config.requests_per_endpoint_per_level,
               latencies: [], query_counts: [], record_counts: [], bytes: [], statuses: [],
               errors: [], contention_events: 0, db_runtimes: [], duplicates: {}, tables: [],
-              cold_latencies: [], jobs_enqueued: [], rate_limit_headers: {}
+              cold_latencies: [], jobs_enqueued: [], rate_limit_headers: {}, view_runtimes: [], gc_times: []
             )
           end
         end
@@ -248,7 +270,7 @@ module Loadwright
             requested_concurrency: 1, requests: @config.requests_per_endpoint_per_level,
             latencies: [], query_counts: [], record_counts: [], bytes: [], statuses: [],
             errors: [], contention_events: 0, db_runtimes: [], duplicates: {}, tables: [],
-            cold_latencies: [], jobs_enqueued: [], rate_limit_headers: {},
+            cold_latencies: [], jobs_enqueued: [], rate_limit_headers: {}, view_runtimes: [], gc_times: [],
             skipped_reason: page_size_sweep_measurable? ? nil : page_size_sweep_unmeasurable_reason
           )
         end
@@ -347,7 +369,7 @@ module Loadwright
           requests: @config.requests_per_endpoint_per_level,
           latencies: [], query_counts: [], record_counts: [], bytes: [], statuses: [],
           errors: [], contention_events: 0, db_runtimes: [], duplicates: {}, tables: [],
-          cold_latencies: [], jobs_enqueued: [], rate_limit_headers: {},
+          cold_latencies: [], jobs_enqueued: [], rate_limit_headers: {}, view_runtimes: [], gc_times: [],
           capability_epoch: @context.capability_epoch
         )
 
@@ -441,6 +463,8 @@ module Loadwright
         cell.query_counts << metrics.query_count.value_or(nil)
         cell.db_runtimes << metrics.db_runtime_ms.value_or(nil)
         cell.jobs_enqueued << metrics.jobs_enqueued.value_or(nil)
+        cell.view_runtimes << metrics.view_runtime_ms.value_or(nil)
+        cell.gc_times << metrics.gc_time_ms.value_or(nil)
 
         # The WORST SINGLE REQUEST, not the total across requests. Concatenating turned
         # "the same query ran 26 times in a single request" into "ran 1170 times",
@@ -554,6 +578,7 @@ module Loadwright
           explain: @explain,
           latency: @latency,
           cold_warm: @cold_warm,
+          time_breakdowns: @time_breakdowns,
           traffic: @traffic,
           pool_sizing: pool_sizing,
           containment_disclosure: containment_disclosure
@@ -580,6 +605,7 @@ module Loadwright
           next if @cells.none? { |cell| cell.endpoint_key == key }
 
           @latency[key] = latency_summaries(key)
+          @time_breakdowns[key] = time_breakdown_for(key)
           @explain[key] = explain_analyzer.analyze(
             explain_analyzer.candidates_from(@slow_queries.fetch(key, {}).values, endpoint_key: key),
             query_data: query_data_for?(key)
@@ -635,6 +661,33 @@ module Loadwright
           value = response.header(name)
           cell.rate_limit_headers[name] = value if value
         end
+      end
+
+      # WHERE THE TIME ACTUALLY WENT, per endpoint. This is what stops the report
+      # blaming the database for a serialisation problem: an endpoint at 340ms with 3
+      # queries has no query-count finding at all, and if 280ms of it is view time the
+      # advice is "your serialiser is the problem" rather than anything about SQL.
+      #
+      # Medians across the endpoint's cells, so one slow outlier does not redraw the
+      # picture.
+      def time_breakdown_for(endpoint_key)
+        cells = @cells.select { |cell| cell.endpoint_key == endpoint_key && !cell.skipped? }
+        return nil if cells.empty?
+
+        breakdown = Analysis::TimeBreakdown.from_totals(
+          total_ms: median_across(cells, :latencies),
+          db_ms: median_across(cells, :db_runtimes),
+          view_ms: median_across(cells, :view_runtimes),
+          gc_ms: median_across(cells, :gc_times)
+        )
+        breakdown&.to_h
+      end
+
+      def median_across(cells, field)
+        values = cells.flat_map { |cell| Array(cell.public_send(field)).compact }.sort
+        return nil if values.empty?
+
+        values[(values.length - 1) / 2].to_f
       end
 
       def query_data_for?(endpoint_key)
@@ -960,6 +1013,7 @@ module Loadwright
         @explain = {}
         @latency = {}
         @cold_warm = {}
+        @time_breakdowns = {}
         # Which endpoints have already had their cold pass measured. The cold figure is
         # only meaningful for the FIRST cell an endpoint is exercised in -- by the
         # second, the application cache is warm and "cold" would be a lie.

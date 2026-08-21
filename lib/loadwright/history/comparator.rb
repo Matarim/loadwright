@@ -1,21 +1,468 @@
 # frozen_string_literal: true
 
 require "loadwright/errors"
+require "loadwright/analysis/statistics"
+require "loadwright/capability_profile"
 
 module Loadwright
   module History
-    # Comparability gate first: refuse and name the diverging dimension rather
-    # than produce a plausible meaningless delta. Query counts are the primary
-    # signal; latency deltas must clear both regression_threshold_pct and the
-    # measured noise floor. A healthy -> inconclusive transition is neither a fix
-    # nor a regression and must be surfaced as its own event.
+    # "Did my change make it worse?" -- the question developers actually ask.
     #
-    # Specified in references/run-comparison.md
+    # ===========================================================================
+    # TWO THINGS GOVERN THIS CLASS, and both are about refusing to mislead.
     #
-    # STATUS: stub. Implemented in a later session per CLAUDE.md section 4.
+    # 1. THE COMPARABILITY GATE. Two runs are comparable only where their measurement
+    #    conditions match. If they do not, we refuse and NAME THE DIMENSION that
+    #    diverged. Comparing concurrency 20 to concurrency 5, or :http to :in_process,
+    #    produces numbers that look meaningful and are not -- and a plausible-looking
+    #    meaningless delta is worse than no comparison, because it gets acted on.
+    #
+    #    The gate has three parts, and the second and third are the ones easily missed:
+    #
+    #      a. Resolved config, not assigned config. Two runs with identical explicit
+    #         settings but different contention presets resolve to different timeouts
+    #         and are not comparable. Configuration fingerprints resolved values
+    #         already; this compares the resolved values themselves so the refusal can
+    #         say WHICH key differs rather than only that the digests do.
+    #
+    #      b. CAPABILITY, not just config. A run that degraded mid-way and lost query
+    #         collection has the same config fingerprint and dramatically less data.
+    #         The INTERSECTION of the two runs' capabilities is what is comparable;
+    #         anything outside it is excluded from the delta and listed, never silently
+    #         compared against a missing number.
+    #
+    #      c. The app's own default page size. The seed-scale sweep sends no page-size
+    #         parameter, so what it holds fixed is an app property invisible to the
+    #         config fingerprint. A change to it is treated exactly like a change to
+    #         page_size_sweep.
+    #
+    # 2. QUERY COUNTS ARE THE SIGNAL; LATENCY IS MOSTLY NOISE. An endpoint that went
+    #    from 3 queries to 47 has unambiguously regressed, reproducibly, on any
+    #    machine. Laptop latency moves 10-20% between identical runs, so a latency
+    #    delta must clear BOTH regression_threshold_pct AND the measured noise floor
+    #    before it is called a regression. Everything below those bars is shown and
+    #    labelled "within noise" -- a comparison tool that cries wolf is ignored inside
+    #    a week.
+    # ===========================================================================
     class Comparator
-      def compare(*, **, &)
-        raise NotImplementedError, "Loadwright::History::Comparator#compare is not implemented yet"
+      # Which capability each compared metric depends on. Used for the intersection
+      # gate: a metric whose capability is missing on either side is excluded from the
+      # delta rather than compared against a hole.
+      SIGNAL_REQUIREMENTS = {
+        queries: :n_plus_one_pattern_match,
+        bytes: nil,
+        records: nil,
+        latency_ms: nil
+      }.freeze
+
+      # Query counts are near-deterministic, so the tolerance exists only to absorb a
+      # genuinely incidental difference (a cache warming one query earlier). Anything
+      # above it is reported.
+      COUNT_TOLERANCE = 0
+
+      # Payload size moves a little with ids and timestamps, so it gets a small
+      # proportional tolerance rather than an absolute one.
+      BYTES_TOLERANCE = 0.05
+
+      # Below this, a latency change is not even worth listing as within-noise.
+      # run-comparison.md wants noise SHOWN rather than hidden, but a row reading
+      # "p50 latency: 100.0 -> 100.0, within noise" is not information -- it is padding
+      # that buries the rows that matter. Anything under 5% is agreed by every reading
+      # to have not moved.
+      LATENCY_REPORTING_FLOOR = 0.05
+
+      Divergence = Struct.new(:dimension, :before, :after, keyword_init: true) do
+        def to_h = { dimension: dimension, before: before, after: after }
+
+        def to_s = "#{dimension}: #{before.inspect} -> #{after.inspect}"
+      end
+
+      Delta = Struct.new(:endpoint, :metric, :before, :after, :change, :verdict, :note,
+                         keyword_init: true) do
+        def regression? = verdict == :regression
+
+        def improvement? = verdict == :improvement
+
+        def within_noise? = verdict == :within_noise
+
+        def to_h
+          { endpoint: endpoint, metric: metric, before: before, after: after,
+            change: change&.round(4), verdict: verdict, note: note }.compact
+        end
+      end
+
+      Transition = Struct.new(:endpoint, :before, :after, :note, keyword_init: true) do
+        def to_h = { endpoint: endpoint, before: before, after: after, note: note }
+      end
+
+      Result = Struct.new(:comparable, :divergences, :warnings, :new_findings, :resolved_findings,
+                          :changed_findings, :deltas, :transitions, :endpoints_added,
+                          :endpoints_removed, :excluded_signals, :noise_floor, keyword_init: true) do
+        def comparable? = comparable == true
+
+        def regressions = deltas.select(&:regression?)
+
+        def within_noise = deltas.select(&:within_noise?)
+
+        # A new finding is a regression; so is a query-count rise. Resolved findings are
+        # deliberately NOT netted against them -- a fix and a regression in one run are
+        # two facts, not zero.
+        def regressed? = new_findings.any? || regressions.any?
+
+        def refusal
+          return nil if comparable?
+
+          "these runs are not comparable: #{divergences.map(&:to_s).join('; ')}"
+        end
+
+        def to_h
+          {
+            comparable: comparable?,
+            refusal: refusal,
+            divergences: divergences.map(&:to_h),
+            warnings: warnings,
+            new_findings: new_findings,
+            resolved_findings: resolved_findings,
+            changed_findings: changed_findings,
+            regressions: regressions.map(&:to_h),
+            within_noise: within_noise.map(&:to_h),
+            transitions: transitions.map(&:to_h),
+            endpoints_added: endpoints_added,
+            endpoints_removed: endpoints_removed,
+            excluded_signals: excluded_signals,
+            noise_floor: noise_floor
+          }.compact
+        end
+      end
+
+      def initialize(config: Loadwright.configuration, statistics: nil)
+        @config = config
+        @statistics = statistics || Analysis::Statistics.new(config: config)
+      end
+
+      def compare(before, after, noise_floor: nil)
+        divergences = hard_divergences(before, after)
+        return refused(divergences) if divergences.any?
+
+        excluded = excluded_signals(before, after)
+        shared = before.endpoint_keys & after.endpoint_keys
+
+        Result.new(
+          comparable: true,
+          divergences: [],
+          warnings: soft_warnings(before, after),
+          new_findings: findings_diff(before, after, shared, :new),
+          resolved_findings: findings_diff(before, after, shared, :resolved),
+          changed_findings: changed_findings(before, after, shared),
+          deltas: deltas(before, after, shared, excluded, noise_floor),
+          transitions: transitions(before, after, shared),
+          endpoints_added: after.endpoint_keys - before.endpoint_keys,
+          endpoints_removed: before.endpoint_keys - after.endpoint_keys,
+          excluded_signals: excluded,
+          noise_floor: noise_floor
+        )
+      end
+
+      # ------------------------------------------------------------------ the gate
+
+      # Divergences that make a comparison meaningless rather than merely caveated.
+      def hard_divergences(before, after)
+        divergences = config_divergences(before, after)
+        divergences.concat(page_size_divergences(before, after))
+        divergences
+      end
+
+      def config_divergences(before, after)
+        Configuration::COMPARABILITY_KEYS.filter_map do |key|
+          mine = comparability_value(before, key)
+          theirs = comparability_value(after, key)
+          next if mine == theirs
+
+          Divergence.new(dimension: "config.#{key}", before: mine, after: theirs)
+        end
+      end
+
+      # THE DIMENSION THAT IS NOT IN THE CONFIG FINGERPRINT. The seed-scale sweep sends
+      # no page-size parameter, so the axis it holds fixed is whatever the APP defaults
+      # to -- a property of the app, not of the run. Two runs either side of a change to
+      # that default are not comparing the same thing even though both fingerprints
+      # match, so a change here is treated exactly like a change to page_size_sweep.
+      def page_size_divergences(before, after)
+        mine = observed_page_sizes(before)
+        theirs = observed_page_sizes(after)
+
+        (mine.keys & theirs.keys).filter_map do |endpoint|
+          next if mine[endpoint] == theirs[endpoint]
+
+          Divergence.new(dimension: "#{endpoint} observed default page size",
+                         before: mine[endpoint], after: theirs[endpoint])
+        end
+      end
+
+      # CAPABILITY, NOT JUST CONFIG. Two runs with identical config are not comparable
+      # on query counts if one of them lost query collection partway. Rather than
+      # refusing the whole comparison -- run-comparison.md prefers a partial comparison
+      # on the intersection -- the affected metrics are excluded and named.
+      def excluded_signals(before, after)
+        mine = effective_capabilities(before)
+        theirs = effective_capabilities(after)
+
+        SIGNAL_REQUIREMENTS.filter_map do |metric, signal|
+          next if signal.nil?
+          next if available?(mine, signal) && available?(theirs, signal)
+
+          missing = available?(mine, signal) ? "the later run" : "the earlier run"
+          { metric: metric, signal: signal, detail: "#{signal} was unavailable in #{missing}, so " \
+                                                    "#{metric} cannot be compared and is excluded " \
+                                                    "from this delta" }
+        end
+      end
+
+      # Softer mismatches: reported, never a refusal.
+      def soft_warnings(before, after)
+        warnings = []
+
+        if before.fingerprint != after.fingerprint
+          warnings << "these runs were measured on different machines or Ruby/database versions. " \
+                      "Query, allocation and payload deltas are still reliable; LATENCY deltas are not, " \
+                      "and are labelled within-noise more readily as a result."
+        end
+
+        [[before, "earlier"], [after, "later"]].each do |record, which|
+          warnings << "the #{which} run was made from a dirty worktree, so its git SHA does not fully " \
+                      "describe the code that produced it" if record.dirty?
+        end
+
+        [[before, "earlier"], [after, "later"]].each do |record, which|
+          warnings << "the #{which} run was aborted partway, so it covers fewer endpoints than it " \
+                      "intended to" if record.aborted?
+        end
+
+        added = after.endpoint_keys - before.endpoint_keys
+        removed = before.endpoint_keys - after.endpoint_keys
+        if added.any? || removed.any?
+          warnings << "the endpoint sets differ; the intersection was compared. " \
+                      "Added: #{added.empty? ? 'none' : added.join(', ')}. " \
+                      "Removed: #{removed.empty? ? 'none' : removed.join(', ')}."
+        end
+
+        warnings
+      end
+
+      # -------------------------------------------------------------- findings & state
+
+      def findings_diff(before, after, shared, direction)
+        shared.flat_map do |key|
+          old_kinds = finding_kinds(before, key)
+          new_kinds = finding_kinds(after, key)
+
+          case direction
+          when :new then (new_kinds - old_kinds).map { |kind| { endpoint: key, finding: kind } }
+          when :resolved then resolved_for(before, after, key, old_kinds - new_kinds)
+          end
+        end
+      end
+
+      # ===========================================================================
+      # A FINDING THAT DISAPPEARED BECAUSE THE ENDPOINT STOPPED BEING MEASURABLE IS NOT
+      # A FIX. This is the failure this method exists to prevent: an endpoint that went
+      # from `has_findings` to `inconclusive` has lost its findings in the arithmetic,
+      # and reporting that as "resolved: N+1" tells a developer their fix worked when
+      # nothing was even checked.
+      # ===========================================================================
+      def resolved_for(_before, after, key, disappeared)
+        state = endpoint_state(after, key)
+
+        disappeared.map do |kind|
+          if state == "inconclusive"
+            { endpoint: key, finding: kind, resolved: false,
+              note: "this finding is absent because the endpoint became INCONCLUSIVE, not because it " \
+                    "was fixed -- nothing was measured to fix. See its transition below." }
+          else
+            { endpoint: key, finding: kind, resolved: true }
+          end
+        end
+      end
+
+      def changed_findings(before, after, shared)
+        shared.flat_map do |key|
+          old = findings_by_kind(before, key)
+          new = findings_by_kind(after, key)
+
+          (old.keys & new.keys).filter_map do |kind|
+            next if old[kind]["detail"] == new[kind]["detail"]
+
+            { endpoint: key, finding: kind, before: old[kind]["detail"], after: new[kind]["detail"] }
+          end
+        end
+      end
+
+      # A state change is its own event. healthy -> inconclusive has neither improved
+      # nor regressed: it became unmeasurable, which is worth surfacing on its own terms
+      # rather than being inferred from findings appearing or vanishing.
+      def transitions(before, after, shared)
+        shared.filter_map do |key|
+          old_state = endpoint_state(before, key)
+          new_state = endpoint_state(after, key)
+          next if old_state == new_state || old_state.nil? || new_state.nil?
+
+          Transition.new(endpoint: key, before: old_state, after: new_state,
+                         note: transition_note(old_state, new_state, after, key))
+        end
+      end
+
+      def transition_note(old_state, new_state, after, key)
+        return nil unless new_state == "inconclusive"
+
+        reason = after.endpoint(key)&.dig("reason")
+        "became unmeasurable (#{reason || 'reason not recorded'}). This is neither an improvement nor a " \
+          "regression, and any findings it no longer reports were not fixed -- they were not looked for."
+      end
+
+      # ------------------------------------------------------------------- the deltas
+
+      def deltas(before, after, shared, excluded, noise_floor)
+        excluded_metrics = excluded.map { |entry| entry[:metric] }
+
+        shared.flat_map do |key|
+          old_cells = cells_by_shape(before, key)
+          new_cells = cells_by_shape(after, key)
+
+          (old_cells.keys & new_cells.keys).flat_map do |shape|
+            compare_cell(key, shape, old_cells[shape], new_cells[shape], excluded_metrics, noise_floor)
+          end
+        end.compact
+      end
+
+      def compare_cell(key, shape, old_cell, new_cell, excluded_metrics, noise_floor)
+        deltas = []
+
+        unless excluded_metrics.include?(:queries)
+          deltas << count_delta(key, shape, :queries, old_cell["queries"], new_cell["queries"])
+        end
+        deltas << bytes_delta(key, shape, old_cell["bytes"], new_cell["bytes"])
+        deltas << latency_delta(key, shape, old_cell, new_cell, noise_floor)
+
+        deltas.compact
+      end
+
+      # NO STATISTICAL TREATMENT, deliberately. A query count is close to deterministic:
+      # 3 -> 47 is unambiguous, reproducible on any machine, in any mode, under any
+      # load. Applying a noise threshold to it would only ever hide a real regression.
+      def count_delta(key, shape, metric, before, after)
+        return nil if before.nil? || after.nil?
+        return nil if (after - before).abs <= COUNT_TOLERANCE
+
+        Delta.new(
+          endpoint: key, metric: "#{metric} (#{shape})", before: before, after: after,
+          change: before.zero? ? nil : (after - before) / before.to_f,
+          verdict: after > before ? :regression : :improvement,
+          note: after > before ? "query count is near-deterministic; this is a real change, not noise" : nil
+        )
+      end
+
+      def bytes_delta(key, shape, before, after)
+        return nil if before.nil? || after.nil? || before.zero?
+
+        change = (after - before) / before.to_f
+        return nil if change.abs <= BYTES_TOLERANCE
+
+        Delta.new(endpoint: key, metric: "payload bytes (#{shape})", before: before, after: after,
+                  change: change, verdict: change.positive? ? :regression : :improvement)
+      end
+
+      # BOTH BARS. run-comparison.md: the threshold alone produces false alarms
+      # constantly, because laptop latency moves 10-20% between identical runs. The
+      # measured noise floor is what turns the threshold from a guess into a
+      # measurement of THIS machine.
+      def latency_delta(key, shape, old_cell, new_cell, noise_floor)
+        before = old_cell.dig("latency_ms", "p50")
+        after = new_cell.dig("latency_ms", "p50")
+        return nil if before.nil? || after.nil? || before.zero?
+
+        change = (after - before) / before.to_f
+        return nil if change.abs < LATENCY_REPORTING_FLOOR
+
+        regression = @statistics.latency_regression?(before, after, noise_floor: noise_floor)
+        bar = @statistics.bar(noise_floor)
+
+        Delta.new(
+          endpoint: key, metric: "p50 latency (#{shape})", before: before, after: after, change: change,
+          verdict: regression ? :regression : :within_noise,
+          note: regression ? nil : noise_note(change, bar, noise_floor)
+        )
+      end
+
+      def noise_note(change, bar, noise_floor)
+        measured = noise_floor.respond_to?(:value_or) ? noise_floor.value_or(nil) : noise_floor
+        basis = if measured && measured > (@config.regression_threshold_pct.to_f / 100.0)
+                  "a noise floor of #{(measured * 100).round}% measured on this machine"
+                else
+                  "the configured regression_threshold_pct of #{@config.regression_threshold_pct}%"
+                end
+
+        "within noise: #{(change * 100).round}% change against #{basis} " \
+          "(bar: #{(bar * 100).round}%). Shown because you may want to see it, not reported as a regression."
+      end
+
+      # ------------------------------------------------------------------ record access
+
+      def comparability_value(record, key)
+        record.metadata.dig("config", key.to_s, "value")
+      end
+
+      def observed_page_sizes(record)
+        record.metadata.dig("sweeps", "seed_scale", "observed_page_size") || {}
+      end
+
+      # The capability actually in effect at the END of the run, which is the most
+      # degraded it ever was. A run that lost query collection at request 200 cannot be
+      # compared on query counts, however capable it started out.
+      def effective_capabilities(record)
+        epochs = record.metadata.dig("capabilities", "epochs")
+        return {} if epochs.nil? || epochs.empty?
+
+        epochs.last["capabilities"] || {}
+      end
+
+      def available?(capabilities, signal)
+        # Absent means the run predates the field or did not record it. Treated as
+        # available so an older record is comparable rather than silently excluded --
+        # the config gate has already established the runs match in every dimension we
+        # can see.
+        entry = capabilities[signal.to_s]
+        entry.nil? || entry["status"] == "available"
+      end
+
+      def endpoint_state(record, key) = record.endpoint(key)&.dig("state")
+
+      def finding_kinds(record, key)
+        Array(record.endpoint(key)&.dig("findings")).filter_map { |finding| finding["kind"] }
+      end
+
+      def findings_by_kind(record, key)
+        Array(record.endpoint(key)&.dig("findings")).to_h { |finding| [finding["kind"], finding] }
+      end
+
+      # Cells are matched by SHAPE -- sweep, scale, page size, concurrency -- not by
+      # position. Position matching would silently pair a concurrency-1 cell with a
+      # concurrency-5 one the moment an endpoint was added or a level skipped.
+      def cells_by_shape(record, key)
+        Array(record.data["cells"])
+          .select { |cell| cell["endpoint"] == key }
+          .to_h do |cell|
+            shape = "#{cell['sweep']} scale=#{cell['scale_factor']} " \
+                    "page=#{cell['page_size'] || 'default'} c=#{cell['requested_concurrency']}"
+            [shape, cell]
+          end
+      end
+
+      def refused(divergences)
+        Result.new(
+          comparable: false, divergences: divergences, warnings: [], new_findings: [],
+          resolved_findings: [], changed_findings: [], deltas: [], transitions: [],
+          endpoints_added: [], endpoints_removed: [], excluded_signals: []
+        )
       end
     end
   end

@@ -48,11 +48,16 @@ module Loadwright
       LOOPBACK_ADDRESSES = %w[127.0.0.1 ::1 localhost 0.0.0.0].freeze
 
       class << self
-        attr_reader :active_secret, :tracker
+        attr_reader :active_secret, :tracker, :time_breakdown
 
         # Called by the harness after the safety guard approves. Returns the
         # per-run secret.
-        def mount!(tracker:, guard: nil, secret: nil)
+        #
+        # `time_breakdown` is optional and app-side: under :http the process_action
+        # event fires in the SERVER's process, so db_runtime and view_runtime can only
+        # be observed here. Without it the timings are simply absent from the payload,
+        # and the collector reports them unavailable rather than as zero.
+        def mount!(tracker:, guard: nil, secret: nil, time_breakdown: nil)
           if guard&.production_adjacent?
             raise SafetyError,
                   "refusing to mount Loadwright's collection endpoint: the safety guard flagged this " \
@@ -61,11 +66,14 @@ module Loadwright
           end
 
           @tracker = tracker
+          @time_breakdown = time_breakdown&.tap(&:start!)
           @active_secret = secret || SecureRandom.hex(32)
         end
 
         def unmount!
           @tracker = nil
+          @time_breakdown&.stop!
+          @time_breakdown = nil
           @active_secret = nil
         end
 
@@ -150,10 +158,27 @@ module Loadwright
           "distinct_query_count" => bucket.distinct_count,
           "unattributed_query_count" => tracker.unattributed_count,
           "queries" => bucket.queries.map { |q| redact(q) }
-        }
+        }.merge(timing_payload(request_id))
         tracker.forget(request_id)
 
         [200, { "content-type" => "application/json", "cache-control" => "no-store" }, [JSON.generate(payload)]]
+      end
+
+      # Rails' db_runtime and view_runtime for this request, read app-side. Under :http
+      # the process_action event fires in the SERVER's process, so this is the only
+      # place it can be observed -- the harness never sees it. Timings only; nothing
+      # here can carry a value.
+      def timing_payload(request_id)
+        breakdown = self.class.time_breakdown&.for_request(request_id)
+        self.class.time_breakdown&.forget(request_id)
+        return {} if breakdown.nil?
+
+        {
+          "db_runtime_ms" => breakdown.db_ms,
+          "view_runtime_ms" => breakdown.view_ms,
+          "gc_time_ms" => breakdown.gc_ms,
+          "total_runtime_ms" => breakdown.total_ms
+        }.compact
       end
 
       # Bound to localhost. A remote peer cannot reach this even with the secret.

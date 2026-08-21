@@ -3,6 +3,8 @@
 require "optparse"
 require "loadwright/version"
 require "loadwright/errors"
+require "loadwright/history/run_store"
+require "loadwright/history/comparator"
 
 module Loadwright
   # Command-line entry point.
@@ -22,7 +24,9 @@ module Loadwright
   #     budget, and prompt for confirmation above
   #     config.long_run_confirmation_threshold_minutes (CLAUDE.md corollary 7).
   #
-  # STATUS: stub. Implemented in a later session per CLAUDE.md section 4.
+  # STATUS: `runs`, `baseline` and `compare` are implemented. `run` and `record`
+  # remain stubs -- they need the reporting layer to produce anything a user would
+  # read, and that lands in the next session.
   class CLI
     COMMANDS = {
       "run" => "Discover, seed, and exercise endpoints under the scale x concurrency matrix",
@@ -64,16 +68,229 @@ module Loadwright
         return 1
       end
 
+      # Parsed AGAIN after the command is removed, because `order!` stops at the first
+      # non-option -- so `loadwright compare --baseline` leaves the flag sitting in argv
+      # where dispatch would read it as a run id. Users put flags after the command;
+      # both orders now work.
+      parser.order!(argv)
+
       dispatch(command, argv)
     end
 
     private
 
-    def dispatch(command, _argv)
-      raise NotImplementedError,
-            "`loadwright #{command}` is not implemented yet. This is a pre-release scaffold; " \
-            "see CLAUDE.md section 6 for what has been built."
+    def dispatch(command, argv)
+      case command
+      when "runs" then cmd_runs(argv)
+      when "baseline" then cmd_baseline(argv)
+      when "compare" then cmd_compare(argv)
+      else
+        raise NotImplementedError,
+              "`loadwright #{command}` is not implemented yet. This is a pre-release scaffold; " \
+              "see CLAUDE.md section 6 for what has been built."
+      end
     end
+
+    # --------------------------------------------------------------------- runs
+
+    def cmd_runs(argv)
+      subcommand = argv.shift || "list"
+      unless subcommand == "list"
+        @stderr.puts "unknown subcommand: runs #{subcommand} (expected: runs list)"
+        return 1
+      end
+
+      records = store.list
+      if records.empty?
+        @stdout.puts "no runs recorded yet in #{store.directory}"
+        return 0
+      end
+
+      baseline_id = store.baseline&.fetch("run_id", nil)
+      records.each { |record| @stdout.puts run_line(record, baseline_id) }
+      0
+    end
+
+    def run_line(record, baseline_id)
+      summary = record.summary
+      marks = []
+      marks << "BASELINE" if record.run_id == baseline_id
+      marks << "dirty" if record.dirty?
+      marks << "ABORTED" if record.aborted?
+
+      format(
+        "%<id>s  %<sha>-8s  %<healthy>d healthy / %<findings>d with findings / %<inconclusive>d " \
+        "inconclusive%<marks>s",
+        id: record.run_id, sha: record.git_sha || "-",
+        healthy: summary["healthy"].to_i, findings: summary["has_findings"].to_i,
+        inconclusive: summary["inconclusive"].to_i,
+        marks: marks.empty? ? "" : "  [#{marks.join(', ')}]"
+      )
+    end
+
+    # ----------------------------------------------------------------- baseline
+
+    def cmd_baseline(argv)
+      subcommand = argv.shift
+      unless subcommand == "set"
+        @stderr.puts "unknown subcommand: baseline #{subcommand} (expected: baseline set <run_id>)"
+        return 1
+      end
+
+      run_id = argv.shift
+      if run_id.nil?
+        @stderr.puts "baseline set needs a run id (see `loadwright runs list`)"
+        return 1
+      end
+
+      record = store.find(run_id)
+      if record.nil?
+        @stderr.puts "no such run: #{run_id}"
+        return 1
+      end
+
+      floor = measure_noise_floor(record)
+      store.set_baseline!(record.run_id, noise_floor: floor)
+      @stdout.puts "baseline set to #{record.run_id} (#{record.git_sha || 'no sha'})"
+      @stdout.puts noise_floor_message(floor)
+      0
+    end
+
+    # ===========================================================================
+    # THE NOISE FLOOR. run-comparison.md: without one, regression_threshold_pct is a
+    # guess about what this machine's jitter looks like. With one, the tool knows.
+    #
+    # It is measured from a SECOND run on the same commit -- two runs of identical code
+    # differ only by noise, so the spread between them IS the noise. Nothing is
+    # fabricated when there is no second run; the user is told what to do instead.
+    # ===========================================================================
+    def measure_noise_floor(baseline)
+      sibling = store.list.find do |record|
+        record.run_id != baseline.run_id && record.git_sha == baseline.git_sha &&
+          record.config_fingerprint == baseline.config_fingerprint
+      end
+      return nil if sibling.nil?
+
+      pairs = paired_latencies(sibling, baseline)
+      floor = Analysis::Statistics.new(config: configuration).noise_floor_from(pairs)
+      floor.value_or(nil)
+    end
+
+    def paired_latencies(before, after)
+      keys = before.endpoint_keys & after.endpoint_keys
+      comparator = History::Comparator.new(config: configuration)
+
+      keys.flat_map do |key|
+        old_cells = comparator.cells_by_shape(before, key)
+        new_cells = comparator.cells_by_shape(after, key)
+
+        (old_cells.keys & new_cells.keys).filter_map do |shape|
+          [old_cells[shape].dig("latency_ms", "p50"), new_cells[shape].dig("latency_ms", "p50")]
+        end
+      end
+    end
+
+    def noise_floor_message(floor)
+      return format("  measured noise floor: %<pct>.1f%% (from a second run on the same commit)",
+                    pct: floor * 100) if floor
+
+      "  no second run on this commit was found, so the noise floor is unmeasured and comparisons " \
+        "will fall back to regression_threshold_pct alone. Run the suite again on this commit and " \
+        "re-run `baseline set` to measure it -- without it, the threshold is a guess."
+    end
+
+    # ------------------------------------------------------------------ compare
+
+    def cmd_compare(argv)
+      before, after = resolve_comparison(argv)
+      return 1 if before.nil?
+
+      floor = store.baseline&.fetch("noise_floor", nil)
+      result = History::Comparator.new(config: configuration).compare(before, after, noise_floor: floor)
+
+      print_comparison(before, after, result)
+
+      # A comparison that CANNOT BE COMPUTED is an error, never a silent pass -- even
+      # where someone has wired this into a script (run-comparison.md, exit codes).
+      return 2 unless result.comparable?
+
+      configuration.fail_on_regression && result.regressed? ? 1 : 0
+    end
+
+    def resolve_comparison(argv)
+      if @options[:baseline]
+        baseline = store.baseline_record
+        latest = store.latest
+        return missing("no baseline is set; use `loadwright baseline set <run_id>`") if baseline.nil?
+        return missing("no runs recorded yet") if latest.nil?
+        return missing("the latest run IS the baseline; there is nothing to compare it against") if
+          latest.run_id == baseline.run_id
+
+        return [baseline, latest]
+      end
+
+      a, b = argv.shift(2)
+      return missing("compare needs two run ids, or --baseline") if a.nil? || b.nil?
+
+      before = store.find(a)
+      after = store.find(b)
+      return missing("no such run: #{a}") if before.nil?
+      return missing("no such run: #{b}") if after.nil?
+
+      [before, after]
+    end
+
+    def missing(message)
+      @stderr.puts message
+      [nil, nil]
+    end
+
+    # Plain text. The formatted comparison report is a reporting concern and lands with
+    # the rest of that layer; this is what the terminal needs to be useful today.
+    def print_comparison(before, after, result)
+      @stdout.puts "comparing #{before.run_id} -> #{after.run_id}"
+
+      unless result.comparable?
+        @stdout.puts result.refusal
+        @stdout.puts "  Nothing was compared. A delta across these conditions would look meaningful " \
+                     "and would not be."
+        return
+      end
+
+      result.warnings.each { |warning| @stdout.puts "  ! #{warning}" }
+      result.excluded_signals.each { |signal| @stdout.puts "  ! #{signal[:detail]}" }
+
+      section("NEW FINDINGS", result.new_findings.map { |f| "#{f[:endpoint]}: #{f[:finding]}" })
+      section("REGRESSIONS", result.regressions.map { |d| delta_line(d) })
+      section("RESOLVED", result.resolved_findings.map { |f| resolved_line(f) })
+      section("CHANGED", result.changed_findings.map { |f| "#{f[:endpoint]}: #{f[:finding]} " \
+                                                          "#{f[:before]} -> #{f[:after]}" })
+      section("STATE CHANGES", result.transitions.map { |t| "#{t.endpoint}: #{t.before} -> #{t.after}" \
+                                                            "#{t.note ? " -- #{t.note}" : ''}" })
+      section("WITHIN NOISE", result.within_noise.map { |d| delta_line(d) })
+
+      @stdout.puts result.regressed? ? "\nREGRESSED" : "\nno regressions"
+    end
+
+    def section(title, lines)
+      return if lines.empty?
+
+      @stdout.puts "\n#{title}"
+      lines.each { |line| @stdout.puts "  #{line}" }
+    end
+
+    def delta_line(delta)
+      "#{delta.endpoint} #{delta.metric}: #{delta.before} -> #{delta.after}" \
+        "#{delta.note ? " (#{delta.note})" : ''}"
+    end
+
+    def resolved_line(finding)
+      "#{finding[:endpoint]}: #{finding[:finding]}#{finding[:resolved] ? '' : " -- #{finding[:note]}"}"
+    end
+
+    def configuration = Loadwright.configuration
+
+    def store = @store ||= History::RunStore.new(config: configuration)
 
     def build_parser
       OptionParser.new do |o|
