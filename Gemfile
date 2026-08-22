@@ -20,6 +20,14 @@ group :test do
   gem "factory_bot", "~> 6.4"
   gem "sqlite3", "~> 2.0"
 
+  # So the fixture can exercise SIDE-EFFECT CONTAINMENT for real. Without them the
+  # containment subsystem finds both measures unenforceable and aborts, so every
+  # end-to-end run had to disable them -- meaning the contained path, which is the
+  # DEFAULT path, was never exercised against a live app. They also make the job
+  # fan-out finding reachable, since the :test adapter records instead of performing.
+  gem "activejob", ">= 7.0"
+  gem "actionmailer", ">= 7.0"
+
   # Required by config.block_outbound_http. Loadwright treats its absence as a
   # containment failure at runtime (see abort_if_containment_unavailable), so we
   # need it present here to test both the enforced and degraded paths.

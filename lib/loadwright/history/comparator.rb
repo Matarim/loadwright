@@ -71,6 +71,18 @@ module Loadwright
       # to have not moved.
       LATENCY_REPORTING_FLOOR = 0.05
 
+      # AND an absolute floor. A percentage computed on sub-millisecond values is
+      # unstable in the same way a ratio between two tiny numbers is: 0.63ms -> 0.89ms
+      # is "42% slower" and is also 0.26ms, which is scheduler noise. Local endpoints
+      # against a small dev database live in exactly that range, so without this the
+      # threshold fires on jitter for every fast endpoint -- and a comparison tool that
+      # cries wolf is ignored within a week.
+      #
+      # Nothing is lost by it: a change too small to clear this is, by construction,
+      # too small to notice, and a genuine regression that matters shows up in the
+      # query count, which needs no threshold at all.
+      LATENCY_ABSOLUTE_FLOOR_MS = 1.0
+
       Divergence = Struct.new(:dimension, :before, :after, keyword_init: true) do
         def to_h = { dimension: dimension, before: before, after: after }
 
@@ -383,17 +395,28 @@ module Loadwright
         change = (after - before) / before.to_f
         return nil if change.abs < LATENCY_REPORTING_FLOOR
 
-        regression = @statistics.latency_regression?(before, after, noise_floor: noise_floor)
+        moved_enough = (after - before).abs >= LATENCY_ABSOLUTE_FLOOR_MS
+        regression = moved_enough && @statistics.latency_regression?(before, after, noise_floor: noise_floor)
         bar = @statistics.bar(noise_floor)
 
         Delta.new(
-          endpoint: key, metric: "p50 latency (#{shape})", before: before, after: after, change: change,
+          endpoint: key, metric: "p50 latency (#{shape})",
+          # ROUNDED. A raw float renders as 0.6289997100830078 in a table, which is
+          # both unreadable and falsely precise about a figure this class has just
+          # finished explaining is noisy.
+          before: before.round(2), after: after.round(2), change: change,
           verdict: regression ? :regression : :within_noise,
-          note: regression ? nil : noise_note(change, bar, noise_floor)
+          note: regression ? nil : noise_note(change, bar, noise_floor, moved_enough: moved_enough)
         )
       end
 
-      def noise_note(change, bar, noise_floor)
+      def noise_note(change, bar, noise_floor, moved_enough: true)
+        unless moved_enough
+          return "within noise: #{(change * 100).round}% change, but under " \
+                 "#{LATENCY_ABSOLUTE_FLOOR_MS}ms in absolute terms. A percentage on sub-millisecond " \
+                 "values is jitter wearing a decimal point; the query count is the signal to read."
+        end
+
         measured = noise_floor.respond_to?(:value_or) ? noise_floor.value_or(nil) : noise_floor
         basis = if measured && measured > (@config.regression_threshold_pct.to_f / 100.0)
                   "a noise floor of #{(measured * 100).round}% measured on this machine"

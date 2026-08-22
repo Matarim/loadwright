@@ -32,6 +32,15 @@ require "logger"
 require "active_record/railtie"
 require "action_controller/railtie"
 
+# ActiveJob and ActionMailer are here so the fixture can exercise SIDE-EFFECT
+# CONTAINMENT for real. Without them the containment subsystem reports both measures
+# unenforceable and aborts, so every end-to-end run had to disable them -- which meant
+# the contained path, the default path, was never exercised against a live app at all.
+# They also make the job fan-out finding reachable: the :test adapter records enqueued
+# jobs instead of performing them, which is what turns suppression into a measurement.
+require "active_job/railtie"
+require "action_mailer/railtie"
+
 # A host app loads the gem through Bundler.require from its :development, :test
 # group. This fixture has no Gemfile of its own, so it requires it directly — and it
 # must, because the railtie is what mounts the identity endpoint. Without it, the

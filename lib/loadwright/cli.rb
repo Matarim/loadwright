@@ -5,6 +5,7 @@ require "loadwright/version"
 require "loadwright/errors"
 require "loadwright/history/run_store"
 require "loadwright/history/comparator"
+require "loadwright/reporting/comparison_report"
 
 module Loadwright
   # Command-line entry point.
@@ -245,47 +246,13 @@ module Loadwright
       [nil, nil]
     end
 
-    # Plain text. The formatted comparison report is a reporting concern and lands with
-    # the rest of that layer; this is what the terminal needs to be useful today.
+    # Rendered by ComparisonReport, so the terminal, a PR description, and the HTML
+    # file all order the sections the same way. The ordering is load-bearing -- state
+    # changes come before "resolved" so an endpoint that became unmeasurable is not
+    # read as a fix -- and duplicating it here would let the two drift.
     def print_comparison(before, after, result)
-      @stdout.puts "comparing #{before.run_id} -> #{after.run_id}"
-
-      unless result.comparable?
-        @stdout.puts result.refusal
-        @stdout.puts "  Nothing was compared. A delta across these conditions would look meaningful " \
-                     "and would not be."
-        return
-      end
-
-      result.warnings.each { |warning| @stdout.puts "  ! #{warning}" }
-      result.excluded_signals.each { |signal| @stdout.puts "  ! #{signal[:detail]}" }
-
-      section("NEW FINDINGS", result.new_findings.map { |f| "#{f[:endpoint]}: #{f[:finding]}" })
-      section("REGRESSIONS", result.regressions.map { |d| delta_line(d) })
-      section("RESOLVED", result.resolved_findings.map { |f| resolved_line(f) })
-      section("CHANGED", result.changed_findings.map { |f| "#{f[:endpoint]}: #{f[:finding]} " \
-                                                          "#{f[:before]} -> #{f[:after]}" })
-      section("STATE CHANGES", result.transitions.map { |t| "#{t.endpoint}: #{t.before} -> #{t.after}" \
-                                                            "#{t.note ? " -- #{t.note}" : ''}" })
-      section("WITHIN NOISE", result.within_noise.map { |d| delta_line(d) })
-
-      @stdout.puts result.regressed? ? "\nREGRESSED" : "\nno regressions"
-    end
-
-    def section(title, lines)
-      return if lines.empty?
-
-      @stdout.puts "\n#{title}"
-      lines.each { |line| @stdout.puts "  #{line}" }
-    end
-
-    def delta_line(delta)
-      "#{delta.endpoint} #{delta.metric}: #{delta.before} -> #{delta.after}" \
-        "#{delta.note ? " (#{delta.note})" : ''}"
-    end
-
-    def resolved_line(finding)
-      "#{finding[:endpoint]}: #{finding[:finding]}#{finding[:resolved] ? '' : " -- #{finding[:note]}"}"
+      @stdout.puts Reporting::ComparisonReport.new(config: configuration)
+                                              .render(result, before: before, after: after)
     end
 
     def configuration = Loadwright.configuration

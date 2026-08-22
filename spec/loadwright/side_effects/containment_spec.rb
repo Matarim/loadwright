@@ -23,6 +23,19 @@ RSpec.describe Loadwright::SideEffects::Containment do
     ActionMailer::Base
   end
 
+  # ==========================================================================
+  # STATE THE ABSENCE, never rely on it. These examples' premise is "ActionMailer /
+  # ActiveJob is not loaded", and for a while that held only because those gems were
+  # not in the bundle. They are now -- examples/sample_app requires them so the
+  # fixture can exercise containment for real -- and once it boots, both constants are
+  # defined for every example that runs afterwards. The premise then passes or fails
+  # on spec ORDER, which is precisely the failure that silently disabled twenty-two of
+  # the safety guard's examples (CLAUDE.md, working conventions).
+  # ==========================================================================
+  def without_action_mailer = hide_const("ActionMailer::Base")
+
+  def without_active_job = hide_const("ActiveJob::Base")
+
   def with_active_job
     adapter = Class.new.new
     stub_const("ActiveJob::Base", Class.new do
@@ -60,6 +73,7 @@ RSpec.describe Loadwright::SideEffects::Containment do
     end
 
     it "reports mail as unenforceable when ActionMailer is not loaded" do
+      without_action_mailer
       config.block_outbound_http = false
       config.suppress_background_jobs = false
 
@@ -97,6 +111,7 @@ RSpec.describe Loadwright::SideEffects::Containment do
     end
 
     it "names the bypass routes when ActiveJob is not loaded" do
+      without_active_job
       config.suppress_mail_delivery = false
       config.block_outbound_http = false
 
@@ -142,12 +157,16 @@ RSpec.describe Loadwright::SideEffects::Containment do
     # contained, and silently not being contained is the failure that mails real
     # customers from a dev box.
     it "aborts the run rather than proceeding unprotected" do
+      without_action_mailer
+      without_active_job
       config.block_outbound_http = false
 
       expect { containment.install! }.to raise_error(Loadwright::ContainmentError, /refusing to run/)
     end
 
     it "names every unenforceable measure at once, not just the first" do
+      without_action_mailer
+      without_active_job
       config.block_outbound_http = false
 
       expect { containment.install! }.to raise_error(Loadwright::ContainmentError) { |error|
@@ -158,6 +177,7 @@ RSpec.describe Loadwright::SideEffects::Containment do
 
     it "restores anything it had already installed before aborting" do
       mailer = with_action_mailer(delivery_method: :smtp)
+      without_active_job
       config.block_outbound_http = false
       # ActiveJob missing -> mail installs, then jobs is unenforceable.
 
@@ -166,6 +186,8 @@ RSpec.describe Loadwright::SideEffects::Containment do
     end
 
     it "proceeds with a loud warning when the user explicitly accepts the risk" do
+      without_action_mailer
+      without_active_job
       config.abort_if_containment_unavailable = false
       config.block_outbound_http = false
 

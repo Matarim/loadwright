@@ -168,8 +168,8 @@ RSpec.describe Loadwright::CLI do
         second = write_run
 
         expect(run_cli("compare", first.run_id, second.run_id)).to eq(0)
-        expect(stdout.string).to include("comparing #{first.run_id} -> #{second.run_id}")
-        expect(stdout.string).to include("no regressions")
+        expect(stdout.string).to include(first.run_id, second.run_id)
+        expect(stdout.string).to include("No regressions.")
       end
 
       # ====================================================================
@@ -182,7 +182,7 @@ RSpec.describe Loadwright::CLI do
         second = write_run
 
         expect(run_cli("compare", first.run_id, second.run_id)).to eq(2)
-        expect(stdout.string).to include("not comparable", "concurrency_levels")
+        expect(stdout.string).to include("Not comparable", "concurrency_levels")
         expect(stdout.string).to include("would look meaningful and would not be")
       end
 

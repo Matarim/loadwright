@@ -153,9 +153,18 @@ module Loadwright
       # as a run which found nothing.
       def arm_run_history!
         @run_store&.arm! do
+          # ONLY WHEN #run NEVER RETURNED. A run that finished -- normally, or by
+          # rescuing an abort and building a partial result -- hands its result to the
+          # caller, who persists it. Firing here as well wrote a SECOND record marked
+          # "interrupted" for every completed run, which then showed up in `runs list`
+          # and made every comparison warn that a healthy run had been aborted.
+          next nil if @completed
           next nil if @cells.empty? && @outcomes.empty?
 
-          build_result(@endpoints || [], aborted_reason: "interrupted")
+          # ASSEMBLE, do not build: #build_result persists, and RunStore#arm! persists
+          # what this block returns. Calling the persisting one here wrote the record
+          # twice.
+          assemble_result(@endpoints || [], aborted_reason: "interrupted")
         end
       end
 
@@ -401,8 +410,22 @@ module Loadwright
 
       # Real threads, so :http concurrency means something. In :in_process the level is
       # forced to 1, so this is a plain loop there.
+      #
+      # THE SINGLE-THREADED PATH CHECKS FOR INTERRUPTION TOO, and it is the one that
+      # matters most: concurrency 1 is the default, and it is forced under :in_process.
+      # Without the check, Ctrl-C did not stop the request loop until the whole cell
+      # finished -- so with 200 requests per cell the run kept hammering a server
+      # Lifecycle teardown had already killed, and the resulting wall of connection
+      # errors tripped the CIRCUIT BREAKER. The run then reported itself aborted for
+      # an error rate rather than interrupted, which is a false account of what
+      # happened and blames the app for the user pressing Ctrl-C.
       def drive(endpoint, page_size:, concurrency:, count:)
-        return Array.new(count) { issue(endpoint, scale: nil, page_size: page_size) }.compact if concurrency <= 1
+        if concurrency <= 1
+          return Array.new(count) do
+            @lifecycle&.check_interrupt!
+            issue(endpoint, scale: nil, page_size: page_size)
+          end.compact
+        end
 
         results = Queue.new
         per_thread = (count.to_f / concurrency).ceil
@@ -557,7 +580,26 @@ module Loadwright
 
       # ---------------------------------------------------------------- the verdict
 
+      # PERSISTED HERE, not left to the caller. "An interrupted run still leaves a
+      # usable record" cannot depend on a caller remembering to write one -- the
+      # interrupted caller is precisely the one that did not get that far. The runner
+      # has the result, so the runner stores it, and the Lifecycle-armed hook is left
+      # covering only the case where #run never returned at all.
+      #
+      # A DRY RUN IS NOT PERSISTED. It issues no requests, so a record of one would be a
+      # run of zeroes sitting in history waiting to be compared against something real.
       def build_result(endpoints, aborted_reason:)
+        result = assemble_result(endpoints, aborted_reason: aborted_reason)
+        @run_store&.write!(result) unless @context.transport.dry_run
+        # Set HERE and not in an `ensure` around #run: `ensure` also fires when an
+        # exception is propagating, which is the one case the Lifecycle-armed record
+        # exists for. Marking the run complete there disarmed the hook exactly when it
+        # was needed.
+        @completed = true
+        result
+      end
+
+      def assemble_result(endpoints, aborted_reason:)
         run_post_load_analysis(endpoints)
         endpoints.each { |endpoint| @outcomes << outcome_for(endpoint) unless already_decided?(endpoint) }
 
@@ -1019,6 +1061,7 @@ module Loadwright
         # second, the application cache is warm and "cold" would be a lie.
         @cold_measured = {}
         @traffic = []
+        @completed = false
         self
       end
     end

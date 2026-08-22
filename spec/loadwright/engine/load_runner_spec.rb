@@ -533,6 +533,9 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     let(:lifecycle) { Loadwright::Lifecycle.new(stderr: StringIO.new) }
     let(:store) { Loadwright::History::RunStore.new(config: config, lifecycle: lifecycle) }
 
+    # The runner persists its OWN result. "An interrupted run still leaves a usable
+    # record" cannot depend on the caller remembering to write one -- the interrupted
+    # caller is exactly the one that did not get that far.
     it "leaves a usable record when the run is interrupted partway" do
       calls = 0
       responder = lambda do |_|
@@ -542,16 +545,79 @@ RSpec.describe Loadwright::Engine::LoadRunner do
         { status: 200, body: '[{"id":1}]' }
       end
 
-      begin
-        runner(context: build_context(responder: responder), run_store: store, lifecycle: lifecycle)
-          .run(endpoints: [endpoint])
-      rescue Loadwright::Interrupted
-        nil
-      end
+      runner(context: build_context(responder: responder), run_store: store, lifecycle: lifecycle)
+        .run(endpoints: [endpoint])
       lifecycle.run_teardown!
 
       expect(store.list.length).to eq(1)
+      expect(store.latest.metadata["aborted"]).to be(true)
       expect(store.latest.endpoints).not_to be_empty
+    end
+
+    # The armed hook covers the one case the runner cannot: #run never returning,
+    # because something it does not handle escaped. A transport turns a responder's
+    # exception into an errored response by design, so this raises from the RESOLVER,
+    # which sits outside that rescue.
+    it "still leaves a record when the run raises something it does not handle" do
+      resolver = Object.new
+      calls = 0
+      # Late enough that the first cell has already been recorded -- the hook
+      # deliberately writes nothing when a run dies before collecting anything, since
+      # an empty record would later read as a run that found nothing.
+      resolver.define_singleton_method(:resolve) do |_endpoint|
+        calls += 1
+        raise "the database went away" if calls > 4
+
+        nil
+      end
+      resolver.define_singleton_method(:seeded_ids=) { |_| nil }
+
+      expect do
+        runner(context: build_context(responder: ->(_) { { status: 200, body: "[]" } }),
+               run_store: store, lifecycle: lifecycle, resolver: resolver).run(endpoints: [endpoint])
+      end.to raise_error(/database went away/)
+      lifecycle.run_teardown!
+
+      expect(store.list.length).to eq(1)
+      expect(store.latest.metadata["aborted"]).to be(true)
+    end
+
+    # ======================================================================
+    # A COMPLETED RUN MUST NOT ALSO WRITE AN "INTERRUPTED" RECORD. The armed teardown
+    # fires on every Lifecycle teardown, including the ordinary one at the end of a
+    # successful run -- so without this it wrote a second record per run, marked
+    # aborted. Those then appeared in `runs list` and made every comparison warn that
+    # a perfectly healthy run had been aborted partway.
+    # ======================================================================
+    it "writes exactly one record for a run that finished" do
+      responder = ->(_) { { status: 200, body: '[{"id":1}]' } }
+      runner(context: build_context(responder: responder), run_store: store, lifecycle: lifecycle)
+        .run(endpoints: [endpoint])
+      lifecycle.run_teardown!
+
+      expect(store.list.length).to eq(1)
+    end
+
+    it "does not mark a completed run aborted" do
+      responder = ->(_) { { status: 200, body: '[{"id":1}]' } }
+      runner(context: build_context(responder: responder), run_store: store,
+             lifecycle: lifecycle).run(endpoints: [endpoint])
+      lifecycle.run_teardown!
+
+      expect(store.list.map { |record| record.metadata["aborted"] }).to all(be(false))
+    end
+
+    # A dry run issues no requests. A record of one would be a run of zeroes sitting in
+    # history waiting to be compared against something real.
+    it "persists nothing for a dry run" do
+      context = Loadwright::Execution::ExecutionContext.new(
+        config: config,
+        transport: Loadwright::Execution::Transport::Null.new(config: config, dry_run: true),
+        collector: ExecutionHelpers::ScriptedCollector.new(config: config, name: :direct)
+      )
+      runner(context: context, run_store: store, lifecycle: lifecycle).run(endpoints: [endpoint])
+
+      expect(store.list).to be_empty
     end
 
     # An empty record would later read as a run that found nothing, which is a different

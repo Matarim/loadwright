@@ -50,6 +50,16 @@ RSpec.describe Loadwright::Execution::Collector::Base do
       end.new(config: config)
     end
 
+    # STATE THE ABSENCE, never rely on it. examples/sample_app now requires ActiveJob
+    # and ActionMailer so the fixture can exercise containment for real, which means
+    # both constants are defined for every example that runs after it boots. An
+    # example whose premise is "the adapter is not in place" has to say so, or it
+    # passes or fails on spec order.
+    def without_side_effect_adapters
+      hide_const("ActionMailer::Base")
+      hide_const("ActiveJob::Base")
+    end
+
     # A mutable mail outbox, so a "delivery" can happen BETWEEN the baseline and the
     # collection, which is what a request sending mail actually looks like.
     def stub_outbox(entries)
@@ -75,6 +85,7 @@ RSpec.describe Loadwright::Execution::Collector::Base do
     # accumulate across the whole run, so reporting the raw total per request shows
     # request 500 enqueuing 500 jobs and request 1 enqueuing one.
     it "reports a delta, not the total the adapter has accumulated all run" do
+      hide_const("ActionMailer::Base")
       adapter = Class.new { def enqueued_jobs = @jobs ||= [] }.new
       stub_const("ActiveJob::Base", Class.new).tap { |k| k.define_singleton_method(:queue_adapter) { adapter } }
       adapter.enqueued_jobs.concat(Array.new(400) { :earlier_in_the_run })
@@ -93,6 +104,7 @@ RSpec.describe Loadwright::Execution::Collector::Base do
     # DETECTED rather than inferred from the configured concurrency, because what
     # matters is whether requests actually overlapped.
     it "refuses a per-request count when another request was in flight at the same time" do
+      hide_const("ActionMailer::Base")
       adapter = Class.new { def enqueued_jobs = @jobs ||= [] }.new
       stub_const("ActiveJob::Base", Class.new).tap { |k| k.define_singleton_method(:queue_adapter) { adapter } }
       collector = counting_collector
@@ -108,6 +120,7 @@ RSpec.describe Loadwright::Execution::Collector::Base do
     end
 
     it "counts again once the requests stop overlapping" do
+      hide_const("ActionMailer::Base")
       adapter = Class.new { def enqueued_jobs = @jobs ||= [] }.new
       stub_const("ActiveJob::Base", Class.new).tap { |k| k.define_singleton_method(:queue_adapter) { adapter } }
       collector = counting_collector
@@ -124,6 +137,7 @@ RSpec.describe Loadwright::Execution::Collector::Base do
     end
 
     it "omits them rather than reporting zero when the adapters are not in place" do
+      without_side_effect_adapters
       collector = counting_collector
       request = build_request
       collector.begin_request(request)

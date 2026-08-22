@@ -243,6 +243,30 @@ RSpec.describe Loadwright::History::Comparator do
       expect(latency_result(100.0, 140.0).regressions.map(&:metric).join).to include("latency")
     end
 
+    # ======================================================================
+    # A PERCENTAGE ON SUB-MILLISECOND VALUES IS JITTER WEARING A DECIMAL POINT.
+    # 0.65ms -> 0.91ms is "40% slower" and is also a quarter of a millisecond. Local
+    # endpoints against a small dev database live in exactly that range, so without an
+    # absolute floor the threshold fires on scheduler noise for every fast endpoint.
+    # ======================================================================
+    it "does not call a sub-millisecond move a regression, however large the percentage" do
+      result = latency_result(0.65, 0.91)
+
+      expect(result.regressions).to be_empty
+      expect(result.within_noise.first.note).to include("jitter wearing a decimal point")
+    end
+
+    it "still calls a large absolute move a regression" do
+      expect(latency_result(10.0, 40.0).regressions).not_to be_empty
+    end
+
+    it "rounds the figures it reports, rather than printing a raw float" do
+      delta = latency_result(0.6289997100830078, 0.8940000534057617).deltas.first
+
+      expect(delta.before).to eq(0.63)
+      expect(delta.after).to eq(0.89)
+    end
+
     # BOTH BARS. Without the measured floor, regression_threshold_pct is a guess about
     # what this machine's jitter looks like.
     it "raises the bar when this machine's measured noise floor exceeds the threshold" do

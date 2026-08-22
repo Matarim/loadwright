@@ -1,18 +1,208 @@
 # frozen_string_literal: true
 
+require "cgi"
 require "loadwright/errors"
+require "loadwright/reporting/presenter"
 
 module Loadwright
   module Reporting
-    # New findings, resolved findings, changed magnitude, within-noise changes,
-    # and state transitions.
+    # "Did my change make it worse?" rendered for a human.
     #
-    # Specified in references/run-comparison.md
+    # ===========================================================================
+    # SECTION ORDER IS THE DESIGN. A comparison report is read in about four seconds
+    # before someone decides whether to merge, so the ordering decides what they
+    # actually learn:
     #
-    # STATUS: stub. Implemented in a later session per CLAUDE.md section 4.
+    #   1. REFUSAL, if the runs are not comparable. Nothing else is rendered — a
+    #      plausible-looking meaningless delta is worse than no comparison, and
+    #      showing one below a refusal notice invites reading it anyway.
+    #   2. NEW FINDINGS. The headline. What this change broke.
+    #   3. REGRESSIONS in measured values.
+    #   4. STATE CHANGES, before "resolved" — because an endpoint that became
+    #      unmeasurable will otherwise be read as a fix two sections later.
+    #   5. RESOLVED. How a developer confirms a fix worked.
+    #   6. WITHIN NOISE, last and clearly separated. Shown because the developer may
+    #      want it, never presented as a regression.
+    #
+    # Resolved findings are NOT netted against new ones anywhere in this file. A fix
+    # and a regression in one run are two facts, not zero.
+    # ===========================================================================
     class ComparisonReport
-      def render(*, **, &)
-        raise NotImplementedError, "Loadwright::Reporting::ComparisonReport#render is not implemented yet"
+      include Presenter
+
+      def initialize(config: Loadwright.configuration)
+        @config = config
+      end
+
+      # Markdown by default: this is the artefact that goes into a PR description.
+      def render(comparison, before: nil, after: nil)
+        @comparison = comparison
+
+        return refusal_markdown(before, after) unless comparison.comparable?
+
+        [
+          heading(before, after),
+          verdict_line,
+          warnings_block,
+          section("New findings", new_finding_rows, empty: "None. Nothing broke that was not already broken."),
+          section("Regressions", regression_rows, empty: "None."),
+          section("State changes", transition_rows, empty: nil),
+          section("Resolved", resolved_rows, empty: nil),
+          section("Within noise", noise_rows, empty: nil,
+                  note: "Shown because you may want to see them. None of these cleared both the " \
+                        "configured threshold and this machine's measured noise floor, so none is " \
+                        "reported as a regression."),
+          endpoint_set_block
+        ].compact.reject(&:empty?).join("\n\n")
+      end
+
+      def render_html(comparison, before: nil, after: nil)
+        body = render(comparison, before: before, after: after)
+
+        <<~HTML
+          <!doctype html>
+          <html lang="en"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Loadwright comparison</title>
+          <style>#{stylesheet}</style></head>
+          <body><main><pre class="markdown">#{CGI.escapeHTML(body)}</pre></main></body></html>
+        HTML
+      end
+
+      def write!(comparison, path:, before: nil, after: nil)
+        require "fileutils"
+        FileUtils.mkdir_p(File.dirname(path))
+        content = path.end_with?(".html") ? render_html(comparison, before: before, after: after)
+                                          : render(comparison, before: before, after: after)
+        File.write(path, content)
+        path
+      end
+
+      private
+
+      def heading(before, after)
+        ids = [before&.run_id, after&.run_id].compact
+        ids.empty? ? "# Loadwright comparison" : "# Loadwright comparison\n\n`#{ids.join('` → `')}`"
+      end
+
+      # ===========================================================================
+      # A REFUSAL RENDERS NOTHING ELSE. Putting the deltas underneath a notice saying
+      # they are meaningless is an invitation to read them anyway, and the reader who
+      # skims is exactly the reader the gate exists to protect.
+      # ===========================================================================
+      def refusal_markdown(before, after)
+        rows = @comparison.divergences.map { |d| [d.dimension, d.before.inspect, d.after.inspect] }
+
+        [
+          heading(before, after),
+          "",
+          "## Not comparable",
+          "",
+          "These runs differ on a dimension that changes what was measured, so no delta is " \
+          "computed. A comparison across these conditions would look meaningful and would not be.",
+          "",
+          table(%w[Dimension Earlier Later], rows),
+          "",
+          "Re-run one side under matching configuration, then compare again."
+        ].join("\n")
+      end
+
+      def verdict_line
+        return "**REGRESSED** — see below." if @comparison.regressed?
+
+        "No regressions."
+      end
+
+      def warnings_block
+        lines = @comparison.warnings.map { |warning| "- #{warning}" }
+        lines += @comparison.excluded_signals.map { |signal| "- #{signal[:detail]}" }
+        return "" if lines.empty?
+
+        (["## Caveats", ""] + lines).join("\n")
+      end
+
+      def new_finding_rows
+        @comparison.new_findings.map { |finding| [finding[:endpoint], "`#{finding[:finding]}`"] }
+                   .then { |rows| rows.empty? ? nil : table(%w[Endpoint Finding], rows) }
+      end
+
+      def regression_rows
+        rows = @comparison.regressions.map do |delta|
+          [delta.endpoint, delta.metric, delta.before, delta.after, change_text(delta)]
+        end
+
+        rows.empty? ? nil : table(["Endpoint", "Metric", "Before", "After", "Change"], rows)
+      end
+
+      # BEFORE "Resolved", deliberately. An endpoint that became unmeasurable has lost
+      # its findings in the arithmetic, and a reader who meets the resolved list first
+      # concludes their fix worked.
+      def transition_rows
+        rows = @comparison.transitions.map { |t| [t.endpoint, t.before, t.after, t.note] }
+
+        rows.empty? ? nil : table(%w[Endpoint Before After Note], rows)
+      end
+
+      def resolved_rows
+        rows = @comparison.resolved_findings.map do |finding|
+          [finding[:endpoint], "`#{finding[:finding]}`",
+           finding[:resolved] ? "fixed" : "NOT a fix — #{finding[:note]}"]
+        end
+
+        rows.empty? ? nil : table(%w[Endpoint Finding Outcome], rows)
+      end
+
+      def noise_rows
+        rows = @comparison.within_noise.map do |delta|
+          [delta.endpoint, delta.metric, delta.before, delta.after, change_text(delta)]
+        end
+
+        rows.empty? ? nil : table(["Endpoint", "Metric", "Before", "After", "Change"], rows)
+      end
+
+      def endpoint_set_block
+        added = @comparison.endpoints_added
+        removed = @comparison.endpoints_removed
+        return "" if added.empty? && removed.empty?
+
+        ["## Endpoint set", "",
+         added.empty? ? nil : "Added: #{added.map { |e| "`#{e}`" }.join(', ')}",
+         removed.empty? ? nil : "Removed: #{removed.map { |e| "`#{e}`" }.join(', ')}"].compact.join("\n")
+      end
+
+      def change_text(delta)
+        return "" if delta.change.nil?
+
+        "#{(delta.change * 100).round(1)}%"
+      end
+
+      def section(title, body, empty:, note: nil)
+        return "" if body.nil? && empty.nil?
+
+        parts = ["## #{title}", ""]
+        parts << note if note && body
+        parts << "" if note && body
+        parts << (body || empty)
+        parts.join("\n")
+      end
+
+      def table(headers, rows)
+        lines = ["| #{headers.join(' | ')} |", "|#{headers.map { '---' }.join('|')}|"]
+        lines += rows.map { |row| "| #{row.map { |cell| escape(cell) }.join(' | ')} |" }
+        lines.join("\n")
+      end
+
+      def escape(value) = value.to_s.gsub("|", "\\|").gsub("\n", " ")
+
+      def stylesheet
+        <<~CSS
+          :root { --bg: #ffffff; --fg: #1b1f24; }
+          @media (prefers-color-scheme: dark) { :root { --bg: #12161a; --fg: #e6edf3; } }
+          body { margin: 0; background: var(--bg); color: var(--fg); }
+          main { max-width: 60rem; margin: 0 auto; padding: 2rem 1.25rem; }
+          pre.markdown { white-space: pre-wrap; word-break: break-word;
+                         font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+        CSS
       end
     end
   end

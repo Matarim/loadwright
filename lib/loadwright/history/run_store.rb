@@ -94,6 +94,10 @@ module Loadwright
         self
       end
 
+      # THE RUNNER CALLS THIS, not the caller of the runner. LoadRunner#build_result
+      # persists its own result, so a caller that also calls #write! produces two
+      # records for one run -- and the second one then shows up in `runs list` and in
+      # every comparison as a separate run.
       def write!(result)
         return nil if result.nil?
 

@@ -49,6 +49,52 @@ RSpec.describe "architecture invariants" do
     expect(sample.include?(EXEMPTION_MARKER)).to be(true)
   end
 
+  # ==========================================================================
+  # SPEC FILES MUST NOT DECLARE COLLIDING TOP-LEVEL CONSTANTS.
+  #
+  # A constant assigned inside an `RSpec.describe` block lands on Object, not on the
+  # example group: Ruby resolves the assignment LEXICALLY, and the lexical scope is
+  # the file's top level. So two spec files declaring the same name silently
+  # overwrite each other, and which definition survives depends on load order.
+  #
+  # This is not hypothetical. examples_spec and documentation_drift_spec both
+  # declared ASSIGNMENT, with DIFFERENT regexes -- the drift spec's matches
+  # commented-out keys and the examples spec's does not -- and the drift spec started
+  # passing or failing by seed. It is the same order-dependence class that once
+  # disabled twenty-two of the safety guard's examples, and it is invisible in a
+  # single-seed run.
+  # ==========================================================================
+  describe "spec files" do
+    it "declare no colliding top-level constants" do
+      declarations = Hash.new { |hash, key| hash[key] = [] }
+
+      Dir[File.join(SpecPaths::ROOT, "spec", "**", "*.rb")].each do |path|
+        # Which top-level construct we are inside. A constant nested in `module Foo`
+        # is namespaced and cannot collide -- that is exactly the fix this check wants
+        # people to reach for, so flagging it would punish the remedy.
+        inside_example_group = false
+
+        File.readlines(path).each do |line|
+          inside_example_group = true if line.start_with?("RSpec.describe", "RSpec.shared_examples")
+          inside_example_group = false if line.start_with?("module ", "class ")
+
+          name = line[/\A  ([A-Z][A-Za-z0-9_]*)\s*=[^=]/, 1]
+          next if name.nil? || !inside_example_group
+
+          declarations[name] << path.sub("#{SpecPaths::ROOT}/", "")
+        end
+      end
+
+      collisions = declarations.select { |_, files| files.uniq.length > 1 }
+
+      expect(collisions).to be_empty,
+                            "these constants are declared at the top level of more than one spec file, " \
+                            "so whichever loads last wins: " \
+                            "#{collisions.map { |name, files| "#{name} (#{files.uniq.join(', ')})" }.join('; ')}. " \
+                            "Wrap them in a module."
+    end
+  end
+
   describe "the identity endpoint" do
     # production-safety.md Layer 1b. The circularity it resolves: we must ask a
     # remote target what environment it is BEFORE approving a run, but the

@@ -104,9 +104,20 @@ module Loadwright
         "#{prefix}#{notes.map(&:text).join(' ')}"
       end
 
+      # One clause, for places that need the warning without the full explanation --
+      # under every endpoint's time breakdown, say, where the long form would push the
+      # numbers off the screen and train the reader to skip it.
+      def headline
+        return nil if notes.empty?
+        return "Contained run: these figures are lower than production reality." if skewed?
+
+        "Uncontained run: these figures include real side-effect latency."
+      end
+
       def to_h
         {
           skewed: skewed?,
+          headline: headline,
           summary: summary,
           notes: notes.map(&:to_h)
         }.compact

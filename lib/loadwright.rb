@@ -78,6 +78,7 @@ require "loadwright/history/run_store"
 require "loadwright/history/comparator"
 require "loadwright/history/redactor"
 
+require "loadwright/reporting/presenter"
 require "loadwright/reporting/run_result"
 require "loadwright/reporting/html_report"
 require "loadwright/reporting/markdown_report"
