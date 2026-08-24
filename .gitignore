@@ -10,6 +10,11 @@
 # Loadwright's own output, when running it against examples/sample_app.
 /tmp/loadwright/
 
+# The fixture's own run output, when the CLI is driven against it by hand. The
+# end-to-end spec writes to a temp directory instead, but a manual
+# `bundle exec loadwright run` from examples/sample_app lands here.
+examples/sample_app/tmp/
+
 # examples/sample_app is a live fixture; its SQLite databases are generated.
 # The -wal and -shm sidecars matter as much as the database itself: in WAL mode
 # the write-ahead log grows to megabytes during a run, and a `*.sqlite3` glob

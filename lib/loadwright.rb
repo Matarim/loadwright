@@ -48,6 +48,7 @@ require "loadwright/discovery/openapi_source"
 require "loadwright/discovery/integration_spec_source"
 require "loadwright/discovery/route_source"
 require "loadwright/discovery/merger"
+require "loadwright/discovery/pipeline"
 require "loadwright/discovery/path_param_resolver"
 
 require "loadwright/seeding/factory_bot_seeder"

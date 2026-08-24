@@ -6,6 +6,8 @@ require "loadwright/errors"
 require "loadwright/history/run_store"
 require "loadwright/history/comparator"
 require "loadwright/reporting/comparison_report"
+require "loadwright/cli/run_command"
+require "loadwright/cli/record_command"
 
 module Loadwright
   # Command-line entry point.
@@ -14,20 +16,21 @@ module Loadwright
   # told these exact invocations, so they are not free to drift. Argument
   # parsing and --help are real; every command body is a stub.
   #
-  # Two behaviours specified elsewhere belong to this layer and are noted here
-  # so they are not forgotten when the bodies land:
+  # This class is ARGUMENT PARSING AND DISPATCH ONLY. The two commands with real
+  # orchestration behind them live next door in cli/run_command.rb and
+  # cli/record_command.rb, so the mapping from argv to behaviour stays readable and
+  # the pipeline assembly is testable without going through a command line.
   #
-  #   * The single SIGINT/SIGTERM trap is installed here and delegates to
-  #     Loadwright::Lifecycle. Subsystems register teardown callbacks; they do
-  #     not trap signals themselves (CLAUDE.md corollary 6).
+  # Two behaviours specified elsewhere belong to the `run` path and are implemented
+  # in RunCommand:
   #
-  #   * Before any run, print the estimated duration and worst-case backoff
-  #     budget, and prompt for confirmation above
+  #   * The single SIGINT/SIGTERM trap, delegating to Loadwright::Lifecycle.
+  #     Subsystems register teardown callbacks; they do not trap signals themselves
+  #     (CLAUDE.md corollary 6).
+  #
+  #   * The estimated duration and worst-case backoff budget printed before any
+  #     requests are issued, with a confirmation above
   #     config.long_run_confirmation_threshold_minutes (CLAUDE.md corollary 7).
-  #
-  # STATUS: `runs`, `baseline` and `compare` are implemented. `run` and `record`
-  # remain stubs -- they need the reporting layer to produce anything a user would
-  # read, and that lands in the next session.
   class CLI
     COMMANDS = {
       "run" => "Discover, seed, and exercise endpoints under the scale x concurrency matrix",
@@ -48,6 +51,13 @@ module Loadwright
     end
 
     def start(argv)
+      # UNBUFFERED. A run prints progress over minutes, and block buffering (which is
+      # what a pipe or a redirect gets, unlike a terminal) holds all of it until the
+      # process exits -- so `loadwright run > run.log` shows nothing until it is over,
+      # and any stderr message lands ahead of the stdout lines that led up to it. For
+      # a tool whose output IS the interface, that ordering is a defect.
+      @stdout.sync = true if @stdout.respond_to?(:sync=)
+
       argv = argv.dup
       parser = build_parser
       parser.order!(argv)
@@ -85,11 +95,19 @@ module Loadwright
       when "runs" then cmd_runs(argv)
       when "baseline" then cmd_baseline(argv)
       when "compare" then cmd_compare(argv)
-      else
-        raise NotImplementedError,
-              "`loadwright #{command}` is not implemented yet. This is a pre-release scaffold; " \
-              "see CLAUDE.md section 6 for what has been built."
+      when "run" then cmd_run
+      when "record" then cmd_record
       end
+    end
+
+    # ---------------------------------------------------------------- run/record
+
+    def cmd_run
+      RunCommand.new(options: @options, stdout: @stdout, stderr: @stderr).call
+    end
+
+    def cmd_record
+      RecordCommand.new(options: @options, stdout: @stdout, stderr: @stderr).call
     end
 
     # --------------------------------------------------------------------- runs

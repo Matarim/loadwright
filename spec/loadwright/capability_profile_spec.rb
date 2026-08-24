@@ -138,5 +138,38 @@ RSpec.describe Loadwright::CapabilityProfile do
 
       expect(documented).to match_array(described_class::SIGNALS)
     end
+
+    # ===========================================================================
+    # THE VALUES, not just the signal names. The example above only proves the
+    # table lists the right rows -- it passed happily while the table claimed
+    # explain_index_analysis and connection_pool_exhaustion were available under
+    # :http, which is false for a remote target that the middleware cannot reach.
+    #
+    # That is the exact failure this file exists to prevent: an agent reading a
+    # stale matrix tells a user a signal is trustworthy when the run never
+    # measured it. Names drifting is cosmetic; values drifting is a wrong answer.
+    # ===========================================================================
+    it "states each signal's real availability in each transport+collector pairing" do
+      matrix = SpecPaths.read(SpecPaths::AGENTS_MD)[/### 5\.1.*?```yaml\n(.*?)```/m, 1]
+
+      columns = [
+        described_class.derive(transport: :in_process, collector: :direct),
+        described_class.derive(transport: :http, collector: :middleware),
+        described_class.derive(transport: :http, collector: :external)
+      ]
+
+      wrong = matrix.each_line.filter_map do |line|
+        match = line.match(/^\s{2}([a-z0-9_]+):\s+(\S+)\s+(\S+)\s+(\S+)\s*$/)
+        next unless match
+
+        signal = match[1].to_sym
+        documented = match[2..4].map { |cell| cell.downcase.to_sym }
+        actual = columns.map { |profile| profile.signals[signal].status }
+
+        "#{signal}: AGENTS.md says #{documented.inspect}, actual #{actual.inspect}" if documented != actual
+      end
+
+      expect(wrong).to be_empty, "AGENTS.md section 5.1 disagrees with CapabilityProfile:\n  #{wrong.join("\n  ")}"
+    end
   end
 end

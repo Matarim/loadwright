@@ -50,9 +50,37 @@ RSpec.describe Loadwright::CLI do
     end
   end
 
-  describe "commands" do
-    it "are not implemented yet" do
-      expect { run("run") }.to raise_error(NotImplementedError, /not implemented yet/)
+  # Dispatch only. What `run` and `record` DO is covered by run_command_spec and by
+  # cli_end_to_end_spec, which drives the real binary against a real Rails app --
+  # this is just the argv-to-command mapping.
+  describe "dispatch" do
+    it "hands `run` to RunCommand with the parsed options" do
+      command = instance_double(Loadwright::CLI::RunCommand, call: 0)
+      allow(Loadwright::CLI::RunCommand).to receive(:new) do |options:, **|
+        expect(options).to include(execute: true, only: "/api/v1/orders")
+        command
+      end
+
+      expect(run("run", "--execute", "--only", "/api/v1/orders")).to eq(0)
+    end
+
+    it "hands `record` to RecordCommand with the spec path" do
+      command = instance_double(Loadwright::CLI::RecordCommand, call: 0)
+      allow(Loadwright::CLI::RecordCommand).to receive(:new) do |options:, **|
+        expect(options).to include(specs: "spec/requests")
+        command
+      end
+
+      expect(run("record", "--specs", "spec/requests")).to eq(0)
+    end
+
+    # The command's exit code is the process's exit code; swallowing it would make
+    # every run look successful to anything scripted around it.
+    it "returns the command's exit code rather than its own" do
+      allow(Loadwright::CLI::RunCommand).to receive(:new)
+        .and_return(instance_double(Loadwright::CLI::RunCommand, call: 3))
+
+      expect(run("run")).to eq(3)
     end
   end
 
@@ -62,9 +90,6 @@ RSpec.describe Loadwright::CLI do
     end
   end
 
-  # ==========================================================================
-  # The history commands. `run` and `record` remain stubs -- they need the reporting
-  # layer to produce anything a user would read.
   # ==========================================================================
   describe "the history commands" do
     require "tmpdir"

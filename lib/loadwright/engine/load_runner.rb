@@ -120,7 +120,7 @@ module Loadwright
       def initialize(config: Loadwright.configuration, context:, guard: nil, breaker: nil,
                      seeder: nil, identities: nil, resolver: nil, lifecycle: nil, stdout: $stdout,
                      explain_analyzer: nil, statistics: nil, containment: nil, pool_tracker: nil,
-                     cold_warm: nil, run_store: nil)
+                     cold_warm: nil, run_store: nil, safety_decision: nil, discovery: nil)
         @config = config
         @context = context
         @guard = guard
@@ -136,6 +136,12 @@ module Loadwright
         @pool_tracker = pool_tracker
         @cold_warm_analyzer = cold_warm
         @run_store = run_store
+        # PROVENANCE, not measurement. production-safety.md requires every guard
+        # decision to reach the report, so a run's authority to have happened at all
+        # is auditable after the fact rather than only in the terminal that is gone.
+        # The runner does not consult either of these; it carries them.
+        @safety_decision = safety_decision
+        @discovery = discovery
         @warnings = []
         reset!
         arm_run_history!
@@ -246,6 +252,22 @@ module Loadwright
         @stdout.puts "loadwright: interrupted; writing a partial report"
         mark_remaining_skipped(endpoints, e)
         build_result(endpoints, aborted_reason: "interrupted")
+      end
+
+      # THE SAME CONTRACT AS RunStore#arm!, for reports rather than history: the
+      # caller writes the report when #run returns, and this covers only the case
+      # where it never did. `@completed` is what distinguishes them, so a run that
+      # finished -- normally or by rescuing an abort -- never produces a second,
+      # partial report alongside its real one.
+      #
+      # Returns nil when there is nothing yet to report, because an empty report
+      # written by an interrupt during startup reads as an API where nothing was
+      # found rather than as a run that never began.
+      def partial_result
+        return nil if @completed
+        return nil if @cells.empty? && @outcomes.empty?
+
+        assemble_result(@endpoints || [], aborted_reason: "interrupted")
       end
 
       private
@@ -623,6 +645,9 @@ module Loadwright
           time_breakdowns: @time_breakdowns,
           traffic: @traffic,
           pool_sizing: pool_sizing,
+          containment: @containment,
+          safety_decision: @safety_decision,
+          discovery: @discovery,
           containment_disclosure: containment_disclosure
         )
       end

@@ -9,12 +9,16 @@ human_readable: not_required
 authoritative_for: [setup, configuration, troubleshooting, result_interpretation]
 not_authoritative_for: [gem_internals]
 gem_internals_see: .claude/skills/loadwright-development/
-STATUS: SPECIFICATION_ONLY__GEM_NOT_YET_IMPLEMENTED
+STATUS: IMPLEMENTED__VERIFIED_AGAINST_THE_BUILD
 status_note: |
-  Every command, key, and output shape below describes intended behavior.
-  Verify against the installed gem version before asserting anything to a
-  user. If observed behavior differs from this file, the gem wins and this
-  file is stale — say so rather than insisting.
+  Every command, config key, report state, exit code, and capability pairing
+  below has been checked against the implementation, and the config-key half
+  is enforced by a drift spec that fails the build when this file names a key
+  that does not exist.
+  Two things are still true and still matter: this file describes a
+  pre-1.0 gem, and if observed behaviour differs from this file, THE GEM WINS
+  and this file is stale — say so rather than insisting.
+verified_at: 2026-08-24
 ```
 
 ## 0. READ_ORDER
@@ -117,6 +121,37 @@ INV-11:
     never terminates a database session, never terminates a process it did not
     spawn, and never kills on a PID match alone. If a user or a diff asks for
     either of the latter, the answer is still no.
+
+INV-12:
+  rule: >
+    Never read an unavailable Measurement as zero, absent, or fine. It carries a
+    REASON, and the reason is the finding.
+  detail: |
+    Measurement is tri-state and never nullable: a value, or unavailable(reason).
+    "0 queries" and "query count could not be measured" are opposite claims and
+    an agent that flattens them produces exactly the confidently-wrong all-clear
+    the three-state outcome model exists to prevent.
+
+      WRONG: "connection pool exhaustion: 0 -- no pool pressure detected"
+      RIGHT: "connection pool exhaustion: not measured (in-process execution has
+              no server thread pool). Re-run with --mode http to answer this."
+
+    Same rule for the run's own summary: an endpoint whose signals were mostly
+    unavailable is `inconclusive`, not `healthy`, and must never be counted in a
+    healthy total. See INV-06 and section 9.
+  violation_severity: critical
+
+INV-13:
+  rule: >
+    Never quote a capability, finding, or exit code from `execution_mode` alone.
+    Read the run's own metadata.
+  detail: |
+    execution_mode is what was REQUESTED. Capability is what was ACHIEVED, and
+    an :http run against a target that would not answer the collector gets the
+    same transport and far less capability. metadata.capabilities states the
+    actual transport+collector pairing, per window, with the cause of every
+    downgrade. Section 5.1 is keyed that way for this reason.
+  violation_severity: high
 ```
 
 ---
@@ -296,27 +331,76 @@ MODE_SUMMARY_FOR_USERS: >
   Most questions are the first kind.
 ```
 
-### 5.1 Mode capability matrix
+### 5.1 Capability matrix — KEYED BY TRANSPORT + COLLECTOR, NOT BY MODE
+
+**READ THIS BEFORE USING THE TABLE.** Capability is a property of the
+COLLECTOR, not of `execution_mode`. An `:http` run against a target that does
+not load the gem has the same transport as a fully instrumented one and
+dramatically less capability. Keying this table by mode — as an earlier version
+did — reports confident numbers for things that run never measured.
+
+So there are three columns, not two. `execution_mode = :http` can land in
+EITHER of the last two, and which one is decided at runtime by whether the
+collector middleware answers:
+
+- `in_process + direct` — the default. The harness shares the app's process.
+- `http + middleware` — Loadwright booted the server, so it could arm the
+  collector with a per-run secret.
+- `http + external` — **the degraded remote case.** `http_target_url` points at
+  a server Loadwright did not boot, so nothing could get a secret into that
+  process. Only response-derived signals survive.
+
+Never report a signal from the wrong column. Read the run's own
+`metadata.capabilities`, which states the actual pairing and the reason for
+every downgrade — do not infer it from the configured mode.
 
 ```yaml
-# available=yes means the finding is measurable and trustworthy in that mode
-finding:                          in_process:  http:
-  n_plus_one_pattern_match:       yes          yes
-  n_plus_one_slope:               yes          yes
-  queries_per_returned_record:    yes          yes*
-  over_fetch_hint:                yes          yes*
-  payload_growth_pagination:      yes          yes
-  response_validity_gate:         yes          yes
-  time_breakdown_db_view_gc:      yes          yes*
-  explain_index_analysis:         yes          yes
-  cold_vs_warm_cache:             yes          yes
-  latency_under_concurrency:      NO           yes
-  connection_pool_exhaustion:     NO           yes
-  pool_vs_threads_static_check:   partial      yes
-  true_client_latency:            NO           yes
-  clean_memory_attribution:       NO           yes
-# * requires collector middleware; unavailable against a remote target that
-#   does not load the gem. Degrades to external-only metrics.
+# signal:                      in_process+direct  http+middleware  http+external
+  n_plus_one_pattern_match:    available          available        UNAVAILABLE
+  n_plus_one_slope:            available          available        UNAVAILABLE
+  queries_per_returned_record: available          available        UNAVAILABLE
+  over_fetch_hint:             available          available        UNAVAILABLE
+  payload_growth_pagination:   available          available        available
+  response_validity_gate:      available          available        available
+  time_breakdown_db_view_gc:   available          available        UNAVAILABLE
+  explain_index_analysis:      available          available        UNAVAILABLE
+  cold_vs_warm_cache:          available          available        available
+  latency_under_concurrency:   UNAVAILABLE        available        available
+  connection_pool_exhaustion:  UNAVAILABLE        available        UNAVAILABLE
+  pool_vs_threads_static_check: partial           available        UNAVAILABLE
+  true_client_latency:         UNAVAILABLE        available        available
+  clean_memory_attribution:    UNAVAILABLE        available        UNAVAILABLE
+```
+
+```yaml
+unavailability_reasons:
+  no_collector_middleware: |
+    "no collector middleware; query data cannot be retrieved from the target"
+    Applies to the whole http+external column. Everything derived from the
+    app's own instrumentation is gone; response-derived signals survive.
+  no_real_threads: |
+    "in-process execution has no server thread pool; use execution_mode = :http"
+    NOT re-enabled by allow_in_process_threading. Threads inside one process
+    sharing a GVL do not measure anything a user would experience.
+  no_app_process: |
+    "harness shares the app's process; use execution_mode = :http"
+    Applies to clean_memory_attribution under in_process.
+
+partial_is_a_third_state: |
+  pool_vs_threads_static_check under in_process is "partial": the STATIC config
+  comparison (threads > pool, PER PROCESS) works; the observed-contention half
+  does not. Report the static half and say the observed half is missing. Do not
+  round `partial` to either `available` or `unavailable`.
+
+CAPABILITY_IS_NOT_FIXED_FOR_A_RUN:
+  rule: >
+    Capability degrades MID-RUN. Middleware can stop responding; the app process
+    can die. Results stay attributed to the capability actually in effect when
+    they were collected, and the report renders capability PER WINDOW with the
+    cause of each downgrade.
+  agent_consequence: >
+    Do not summarise a run's capability as one thing if metadata shows more than
+    one epoch. Say which windows lost which signals and why. See DIAG-17.
 ```
 
 ### 5.2 Known measurement gaps — state these, do not paper over them
@@ -490,8 +574,32 @@ set_baseline:   bundle exec loadwright baseline set <run_id>
 compare:        bundle exec loadwright compare <run_a> <run_b>
 compare_base:   bundle exec loadwright compare --baseline
 
-implemented_now: [runs, baseline, compare]
-still_stubbed:   [run, record]   # need the reporting layer; raise NotImplementedError
+implemented_now: [run, record, runs, baseline, compare]
+still_stubbed:   []
+
+run_exit_codes:
+  0: the run completed. Findings may still be present -- see below.
+  1: the run completed and something the user asked to fail on was found
+     (a latency budget exceeded, an N+1 when fail_on_n_plus_one is true), OR
+     the run aborted partway (circuit breaker, contention) and its report is partial.
+  3: REFUSED. Nothing ran. The safety guard declined, containment could not be
+     enforced, the app would not boot, or discovery produced no exercisable
+     endpoint. NEVER read this as a clean result -- no endpoint was measured.
+  130: interrupted by SIGINT/SIGTERM. Seeded rows were cleaned up and a partial
+     report was written.
+
+run_exit_code_caveats:
+  inconclusive_does_not_fail: >
+    An endpoint that could not be validly measured is a COVERAGE gap, not a
+    defect, and never contributes to a non-zero exit code. So exit 0 does NOT
+    mean "the API is healthy" -- read the three-state summary, never the exit
+    code alone. This is the confidently-wrong-all-clear failure INV-* exists to
+    prevent, applied to scripting.
+  advisory_findings_do_not_fail: >
+    over_fetch_hint is advisory and never fails the run, per response-analysis.md.
+  exit_code_is_a_convenience: >
+    reporting.md is explicit that this is not the tool's interface. For a real CI
+    gate the honest answer is still n_plus_one_control.
 
 compare_exit_codes:
   0: comparable, and either no regressions or fail_on_regression is false
@@ -511,6 +619,30 @@ ALWAYS_DRY_RUN_FIRST: true
 reason: >
   Shows the endpoint list, mutating-request count, estimated duration, and
   worst-case backoff budget before anything is sent. Cheap insurance.
+
+dry_run_writes_no_report: true
+dry_run_note: >
+  --dry-run prints the matrix to the terminal and writes NO report file and NO
+  history record, because it issues zero requests -- every endpoint in such a
+  report would be `inconclusive` and every measurement absent. Do not go looking
+  for a report file after a dry run, and do not tell a user one exists.
+
+run_prerequisites:
+  working_directory: >
+    `loadwright run` boots the host app itself by loading config/environment.rb
+    from the CURRENT DIRECTORY. It must be run from the Rails application root.
+    Exit 3 with "no config/environment.rb" means the wrong directory, not a
+    broken install.
+  configuration_source: >
+    config/initializers/loadwright.rb is what configures the run; it is evaluated
+    as part of that boot. --mode is applied AFTER it, so the flag beats the file.
+
+long_run_confirmation: >
+  Before issuing requests, the estimated duration is printed and, above
+  long_run_confirmation_threshold_minutes, confirmed interactively. With stdin
+  not a terminal the run PROCEEDS with a warning rather than refusing -- unlike
+  the production gate, which refuses when it cannot prompt. Do not conflate the
+  two: this one is about someone's afternoon, that one is about irreversible harm.
 
 interrupt_behavior: >
   SIGINT (Ctrl-C) is trapped: stops issuing requests, tears down any booted
@@ -820,6 +952,60 @@ DIAG-15:
   cause: :transactional_rollback is unavailable in :http mode — separate
          process can't see the harness's transaction
   fix: use :delete_created_rows, or switch to :in_process
+
+DIAG-16:
+  symptom: >
+    ":http run, but the report shows no query counts / no N+1 findings /
+    'no collector middleware' as the reason on every endpoint"
+  cause: >
+    The run got the External collector, not Middleware. That happens when
+    http_target_url points at a server Loadwright did NOT boot: arming the
+    collector means getting a per-run secret into the app's process, and nothing
+    can do that for a process someone else started.
+  do_not: >
+    Do NOT report this as "no N+1 problems found". Nothing was measured. This is
+    the http+external column of 5.1 and it is the single easiest place to produce
+    a confidently-wrong all-clear.
+  fix: |
+    Let Loadwright boot the server (unset http_target_url, set
+    http_server_command), or accept the reduced capability and say so explicitly
+    in any summary. Response-derived signals -- payload growth, the validity
+    gate, cold/warm, true client latency -- are still trustworthy.
+
+DIAG-17:
+  symptom: >
+    "Two endpoints in the same report have different signals available" /
+    "the capability section lists more than one window"
+  cause: >
+    Capability degraded mid-run: the collector middleware stopped responding, or
+    under :http the app process died. Capability is recorded per WINDOW, and
+    results stay attributed to the capability in effect when they were collected.
+  fix: >
+    Nothing to fix in the app. Read the downgrade cause in the report -- if the
+    app process died, that IS the finding, and it is more important than anything
+    else in the run.
+  agent_instruction: >
+    Findings from before and after the downgrade are not equally trustworthy.
+    Never summarise such a run as one confidence level. See GAP-02, INV-13.
+
+DIAG-18:
+  symptom: >
+    "loadwright run exits 3 and says no endpoints to exercise" /
+    "loadwright run exits 3 immediately"
+  cause: |
+    Exit 3 is a REFUSAL: nothing ran. One of, in the order they are checked:
+      - not run from the Rails app root (no config/environment.rb)
+      - the app raised while booting -- that is the app's error, not Loadwright's
+      - the safety guard declined (environment not in enabled_environments)
+      - containment could not be enforced and abort_if_containment_unavailable
+      - discovery produced no exercisable endpoint
+  do_not: >
+    Never read exit 3 as a clean run. No endpoint was measured. It is deliberately
+    distinct from 0 and 1 for exactly this reason.
+  fix: >
+    The stderr message names which one it was. For the discovery case the usual
+    causes are an empty openapi_spec_paths, no `loadwright record` recording, and
+    excluded_paths filtering more than intended.
 ```
 
 ---
