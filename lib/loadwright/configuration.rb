@@ -155,8 +155,30 @@ module Loadwright
     setting :path_param_overrides, {}.freeze, section: :discovery
 
     # AUTH
+    #
+    # How the token from auth_token_provider is attached to each request:
+    #   :bearer_token  Authorization: Bearer <token>   (JWT, Doorkeeper, most APIs)
+    #   :session       Cookie: <token>                 (Devise and friends)
+    #   :header        X-Api-Key: <token>              (API-key APIs)
+    # A public API needs none of them: leave auth_token_provider nil and no auth
+    # header is sent at all.
+    AUTH_STRATEGIES = %i[bearer_token session header].freeze
+
     setting :auth_strategy, :bearer_token, section: :auth
     setting :auth_token_provider, nil, section: :auth
+
+    # Log in the way your clients do, instead of minting a token in this file.
+    # Loadwright issues this request once per credential, before the run, through the
+    # same transport the run uses. The requests are setup: never measured, never
+    # reported as endpoints.
+    #
+    #   config.auth_login = {
+    #     path: "/api/v1/login",
+    #     verb: :post,                                  # optional, defaults to :post
+    #     credentials: [{ email: "dev@example.com", password: "password" }],
+    #     extract: { json: "token" }                    # or { header: "Set-Cookie" }
+    #   }
+    setting :auth_login, nil, section: :auth
     setting :test_identity_pool_size, 5, section: :auth
     setting :default_headers, { "Accept" => "application/json" }.freeze, section: :auth
 
@@ -166,6 +188,25 @@ module Loadwright
     setting :scale_factors, [1, 10, 50, 200].freeze, section: :seeding
     setting :seed_batch_size, 50, section: :seeding
     setting :seed_cleanup_strategy, :delete_created_rows, section: :seeding
+
+    # Also delete rows the APP created while answering requests, not just the ones the
+    # factories created. A few hundred POSTs otherwise leave a few hundred records in
+    # your database -- and so does a GET that writes an audit row or touches a
+    # last_seen_at, which many apps do.
+    #
+    # Same mechanism as the factories' associated rows: a per-table high-water mark
+    # taken before seeding, and only tables that actually received an INSERT. Still
+    # strictly id-bounded, still never a TRUNCATE, still incapable of touching a row
+    # that existed before the run.
+    #
+    # WHAT TURNING IT OFF ACTUALLY BUYS, stated precisely because the obvious reading
+    # is too generous: it governs tables that ONLY the requests wrote to. A table the
+    # FACTORIES also wrote to is swept above the watermark either way -- that is how
+    # their own associated rows are cleaned up, and it predates this key.
+    #
+    # So on a shared database this narrows the blast radius; it does not remove it.
+    # The setting that removes it is seed_cleanup_strategy = :leave.
+    setting :cleanup_request_created_rows, true, section: :seeding
     setting :unique_field_generator, nil, section: :seeding
 
     # LOAD SHAPE
@@ -365,6 +406,21 @@ module Loadwright
 
       unless %i[in_process http].include?(resolved[:execution_mode])
         errors << "execution_mode must be :in_process or :http"
+      end
+
+      # Checked here rather than where the header is built: that path only runs once
+      # a provider is configured and a request is about to go out, so a typo
+      # surfaced mid-run, after seeding, instead of before anything started.
+      unless AUTH_STRATEGIES.include?(resolved[:auth_strategy])
+        errors << "auth_strategy must be one of #{AUTH_STRATEGIES.join(', ')}"
+      end
+
+      # Refused rather than resolved by precedence. Both set means two different
+      # answers to "where does the token come from", and silently picking one leaves
+      # the user reading an initializer that says something the run did not do.
+      if resolved[:auth_login] && resolved[:auth_token_provider]
+        errors << "auth_login and auth_token_provider both set; they are two ways to answer " \
+                  "the same question. Keep the one you want."
       end
 
       # discovery-and-load-engine.md: the app runs in a separate process under

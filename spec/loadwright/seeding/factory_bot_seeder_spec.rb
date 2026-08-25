@@ -194,6 +194,76 @@ RSpec.describe Loadwright::Seeding::FactoryBotSeeder, :sample_app do
       expect([Post.count, Author.count, Comment.count]).to eq([0, 0, 0])
     end
 
+    # ROWS THE APP CREATED, not the factories. This is the one place the promise
+    # "Loadwright leaves nothing behind" was not true: cleanup tracked what the
+    # factories wrote and nothing else, so a few hundred POSTs left a few hundred
+    # records in a developer's database -- and so did a GET that writes an audit row
+    # or touches a last_seen_at, which plenty of apps do.
+    #
+    # It is the same watermark the factories' associated rows already use, so it stays
+    # strictly id-bounded and can never reach a row that existed before the run.
+    it "deletes rows the app created while answering requests" do
+      seeder.seed!(2)
+      # Stands in for a POST: a row the app wrote, that no factory knows about.
+      request_created = Post.create!(title: "created by a request", author: Author.first)
+      seeder.note_request_written_table("posts")
+
+      seeder.cleanup!
+
+      expect(Post.where(id: request_created.id)).to be_empty
+    end
+
+    it "still cannot touch a row that existed before the run" do
+      survivor = FactoryBot.create(:post, title: "I was here first")
+      seeder.seed!(2)
+      Post.create!(title: "created by a request", author: Author.first)
+      seeder.note_request_written_table("posts")
+
+      seeder.cleanup!
+
+      expect(Post.pluck(:id)).to eq([survivor.id])
+    end
+
+    # THE ESCAPE HATCH, AND EXACTLY WHAT IT COVERS. It governs tables that ONLY the
+    # requests wrote to -- `tags` here, which no factory in this map touches.
+    #
+    # It does NOT protect a table the factories also wrote to. Those are swept above
+    # the watermark either way, and always were: that is how the factories' own
+    # associated rows get cleaned up. Worth stating in a spec, because the config
+    # comment originally implied the key protected more than it does.
+    it "leaves a request-only table alone when the config says to" do
+      config.cleanup_request_created_rows = false
+      seeder.seed!(2)
+      request_created = Tag.create!(name: "created-by-a-request-#{SecureRandom.hex(4)}")
+      seeder.note_request_written_table("tags")
+
+      seeder.cleanup!
+
+      expect(Tag.where(id: request_created.id)).not_to be_empty
+      request_created.destroy
+    end
+
+    it "sweeps a request-only table when the config allows it" do
+      seeder.seed!(2)
+      request_created = Tag.create!(name: "created-by-a-request-#{SecureRandom.hex(4)}")
+      seeder.note_request_written_table("tags")
+
+      seeder.cleanup!
+
+      expect(Tag.where(id: request_created.id)).to be_empty
+    end
+
+    # No seeding means no watermark, and "everything above nothing" is the whole table.
+    it "refuses to sweep a table when no watermark was ever taken" do
+      untouched = FactoryBot.create(:post, title: "pre-existing")
+
+      seeder.note_request_written_table("posts")
+      seeder.cleanup!
+
+      expect(Post.where(id: untouched.id)).not_to be_empty
+      untouched.destroy
+    end
+
     it "records which tables it wrote to, so the sweep is bounded and auditable" do
       seeder.seed!(2)
 

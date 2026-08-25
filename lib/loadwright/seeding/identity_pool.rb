@@ -23,8 +23,9 @@ module Loadwright
 
       attr_reader :warnings
 
-      def initialize(config: Loadwright.configuration)
+      def initialize(config: Loadwright.configuration, stdout: $stdout)
         @config = config
+        @stdout = stdout
         @warnings = []
         @cursor = 0
         @mutex = Mutex.new
@@ -33,11 +34,16 @@ module Loadwright
       # Resolves the provider once, at run start. Calling it per request would make
       # token issuance part of every measurement — and for a JWT issuer doing bcrypt
       # work, a large part.
-      def resolve!
-        provider = @config.auth_token_provider
-        return self if provider.nil?
+      # `transport` is only needed for config.auth_login, which issues a real login
+      # request. A token provider needs nothing, and a public API needs neither.
+      def resolve!(transport: nil)
+        # Idempotent: the runner resolves at run start, and a caller that resolved
+        # first must not cause the provider -- which may be issuing JWTs or hitting a
+        # login endpoint -- to run twice.
+        return self if @tokens
 
-        tokens = Array(call_provider(provider)).compact.map(&:to_s).reject(&:empty?)
+        tokens = resolve_tokens(transport)
+        return self if tokens.nil?
 
         if tokens.empty?
           raise SeedingError,
@@ -57,6 +63,37 @@ module Loadwright
         @tokens = tokens.freeze
         self
       end
+
+      private
+
+      # nil means "no authentication was configured", which is different from "it was
+      # configured and produced nothing" -- the second raises below.
+      def resolve_tokens(transport)
+        if LoginFlow.configured?(@config)
+          return login_tokens(transport)
+        end
+
+        provider = @config.auth_token_provider
+        return nil if provider.nil?
+
+        Array(call_provider(provider)).compact.map(&:to_s).reject(&:empty?)
+      end
+
+      def login_tokens(transport)
+        if transport.nil?
+          raise ConfigurationError,
+                "config.auth_login needs a transport to issue its login request, and none was " \
+                "available. This is a wiring problem inside Loadwright, not your configuration."
+        end
+
+        flow = LoginFlow.new(config: @config, transport: transport, stdout: @stdout)
+        tokens = Array(flow.tokens).compact.map(&:to_s).reject(&:empty?)
+        @warnings.concat(flow.warnings)
+        tokens
+      end
+
+      public
+
 
       def resolved? = !@tokens.nil?
 
@@ -87,7 +124,7 @@ module Loadwright
         else
           raise ConfigurationError,
                 "unknown auth_strategy #{@config.auth_strategy.inspect}; " \
-                "expected :bearer_token, :session or :header"
+                "expected one of #{Configuration::AUTH_STRATEGIES.join(', ')}"
         end
       end
 

@@ -210,6 +210,25 @@ RSpec.describe Loadwright::Configuration do
   end
 
   describe "#validate!" do
+    # THE GENERATED INITIALIZER USED TO DOCUMENT `:none` AND `:custom`, neither of
+    # which exists -- and omitted `:header`, which does. A user with an API-key API
+    # had a supported strategy they could not discover, and two documented options
+    # that raise. Anchoring the list to one constant is what stops the docs and the
+    # code drifting apart again.
+    it "rejects an auth_strategy that does not exist, before the run starts" do
+      config.auth_strategy = :custom
+
+      expect { config.validate! }.to raise_error(Loadwright::ConfigurationError, /auth_strategy must be one of/)
+    end
+
+    it "accepts every strategy the identity pool can actually build a header for" do
+      Loadwright::Configuration::AUTH_STRATEGIES.each do |strategy|
+        config.auth_strategy = strategy
+
+        expect { config.validate! }.not_to raise_error
+      end
+    end
+
     it "accepts the defaults" do
       expect(config.validate!).to be(true)
     end

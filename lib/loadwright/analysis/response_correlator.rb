@@ -35,14 +35,22 @@ module Loadwright
       # association of several) without firing on a fixed handful of extra queries.
       N_PLUS_ONE_SLOPE = 0.5
 
-      Finding = Struct.new(:kind, :confidence, :detail, :evidence, keyword_init: true) do
+      # `suggestion` is advisory and optional: the shape of a likely fix, or nil where
+      # the query is not a shape we recognise. It never affects the outcome state or
+      # the exit code -- see Analysis::FixSuggestion.
+      Finding = Struct.new(:kind, :confidence, :detail, :evidence, :suggestion, keyword_init: true) do
         # over_fetch is a HINT and must never contribute to a non-zero exit code:
         # data is legitimately loaded for authorisation, filtering, and derived values
         # without being serialised. A tool that cries wolf about ordinary
         # authorisation queries gets uninstalled.
         def hint? = confidence == :low
 
-        def to_h = { kind: kind, confidence: confidence, detail: detail, evidence: evidence }
+        # compact: a finding with no recognised fix shape carries no `suggestion` key
+        # at all, rather than a null that every renderer then has to guard.
+        def to_h
+          { kind: kind, confidence: confidence, detail: detail,
+            evidence: evidence, suggestion: suggestion }.compact
+        end
       end
 
       # One (returned_records, queries, bytes) observation, from one cell.
@@ -206,7 +214,8 @@ module Loadwright
             confidence: :high,
             detail: "the same query ran #{worst.last.length} times in a single request: #{worst.first}",
             evidence: { fingerprint: worst.first, occurrences: worst.last.length,
-                        call_site: worst.last.first[:call_site] }
+                        call_site: worst.last.first[:call_site] },
+            suggestion: FixSuggestion.for(worst.first)
           )
         end
 

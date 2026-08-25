@@ -195,7 +195,8 @@ module Loadwright
           parts << ""
           parts += findings.map do |finding|
             finding = finding.to_h if finding.respond_to?(:to_h)
-            "- **`#{finding[:kind]}`** (#{finding[:confidence]}) — #{finding[:detail]}"
+            "- **`#{finding[:kind]}`** (#{finding[:confidence]}) — #{finding[:detail]}" \
+              "#{finding[:suggestion] ? "\n  - **Try:** #{finding[:suggestion]}" : ''}"
           end
         end
 

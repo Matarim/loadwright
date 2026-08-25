@@ -67,7 +67,11 @@ provenance is auditable after the terminal is gone.
   not is worse than not running it.
 - **Never issues a mutating request** unless you set
   `config.allow_mutating_requests = true`. `POST`, `PUT`, `PATCH` and `DELETE`
-  endpoints are discovered, reported as skipped, and not called.
+  endpoints are discovered, reported as skipped, and not called. If you do turn
+  them on, note the limit of the cleanup guarantee above: Loadwright deletes the
+  rows *it* seeded, and it does not track rows your app created in response to a
+  request. A few hundred `POST`s leave a few hundred records behind, and clearing
+  those is yours. See [`examples/mutating_endpoints`](examples/mutating_endpoints).
 - **Never phones home.** No telemetry, no version checks, no network traffic except
   to the app under test.
 
@@ -368,6 +372,7 @@ coming back all-inconclusive.
 ```ruby
 config.auth_strategy = :bearer_token
 config.auth_token_provider = nil             # a callable returning a token
+config.auth_login = nil                      # or log in for one; see below
 config.test_identity_pool_size = 5           # single-identity traffic lies about caching
 config.default_headers = { "Accept" => "application/json" }
 ```
@@ -395,6 +400,7 @@ config.factory_map = {}                      # see FactoryBot setup, below
 config.scale_factors = [1, 10, 50, 200]
 config.seed_batch_size = 50
 config.seed_cleanup_strategy = :delete_created_rows   # never a TRUNCATE
+config.cleanup_request_created_rows = true   # also clean up rows your app created
 config.unique_field_generator = nil          # nil = report the collision, do not paper over it
 ```
 

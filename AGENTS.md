@@ -247,6 +247,15 @@ step_3_minimum_viable_config:
   required_keys_before_first_run:
     - auth_token_provider   # unless the API is fully public
     - factory_map           # unless you only want route-level smoke testing
+  auth_login_alternative: >
+    config.auth_login is usually easier to get right than auth_token_provider,
+    especially for session/cookie apps where the alternative is hand-assembling a
+    valid cookie. It names the login request the app's own clients make:
+      path, credentials (a LIST -- that is how multi-identity traffic happens),
+      and extract: { json: "token" } or { header: "Set-Cookie" }.
+    Set one or the other; both is refused at startup, not resolved by precedence.
+    The login requests are setup: never measured, never reported as endpoints.
+
   optional_but_high_value:
     - openapi_spec_paths    # if the app has a swagger/OpenAPI doc
     - integration_spec_paths # if it has request specs
@@ -701,6 +710,16 @@ COMP-02:
     at smaller scales, without tripping it -- which is what COMP-03b covers per cell.
     The two are complementary; neither replaces the other.
 
+request_created_row_cleanup: >
+  Rows the APP creates answering a request -- a POST's records, or a GET that writes
+  an audit row -- are now cleaned up too, via the same pre-seed watermark the
+  factories' associated rows use. Strictly id-bounded, never a TRUNCATE, and
+  incapable of reaching a row that existed before the run. Governed by
+  config.cleanup_request_created_rows (default true).
+  PRECISION MATTERS HERE: turning it off narrows the sweep to tables the factories
+  wrote to; it does not stop cleanup. seed_cleanup_strategy = :leave is the setting
+  that cleans up nothing. Do not tell a user the flag makes a shared database safe.
+
 metrics_actually_compared: [queries, records, bytes, latency_ms]
 metrics_NOT_compared:
   allocations: >
@@ -754,6 +773,11 @@ This is the highest-value section. Match symptom exactly.
 ```yaml
 DIAG-01:
   symptom: "Every endpoint reports inconclusive; uniform 401 or 403"
+  version_note: >
+    Before 0.0.2 this could also be the tool's own fault: the identity pool was never
+    resolved, so a correctly configured auth_token_provider was never actually sent.
+    If a user reports this on an older version, check the version before debugging
+    their credentials.
   probability: VERY_HIGH  # most common first-run failure
   cause: auth_token_provider not configured or returning an invalid token
   second_cause_check_it_before_concluding: >
@@ -1078,6 +1102,27 @@ DIAG-18:
 ---
 
 ## 9. REPORT_INTERPRETATION
+
+### 9.0 Fix suggestions
+
+```yaml
+what_they_are: >
+  Some findings carry a `suggestion` alongside `detail`: the shape of a likely fix,
+  derived from the normalised query. Rendered as "Try:" under the finding.
+what_they_are_not: >
+  A verdict. They are read off a query shape with no knowledge of the surrounding
+  code, they never change an outcome state or the exit code, and a shape that is
+  not recognised produces NO suggestion rather than a guess.
+agent_instruction: >
+  Relay a suggestion as a starting point, not as the fix. Say where it came from
+  (the repeated query's shape) so the user can judge it against their own code.
+  Never invent one for a finding that does not carry it.
+the_one_to_get_right: >
+  For a repeated COUNT the suggestion deliberately says `includes` will NOT help.
+  That is correct and is the most common wrong advice about N+1s: preloading still
+  counts with a query unless the code stops calling .count. Do not "improve" it
+  back to "add includes".
+```
 
 ### 9.1 The three states — never collapse to two
 

@@ -64,10 +64,37 @@ module Loadwright
         @created_ids = {}
         @models = {}
         @inserted_tables = []
+        @request_written_tables = []
+        # The load phase writes from many threads at once, unlike seeding, which is
+        # the only reason this needs a lock at all.
+        @tables_mutex = Mutex.new
         @watermarks = nil
         @cleanup_hook = nil
         @cleaned = false
       end
+
+      # A table the APP wrote to while answering a request, as opposed to one the
+      # factories wrote to while seeding.
+      #
+      # Cleanup treats both the same way -- rows above the pre-seed watermark, in
+      # tables that actually received an INSERT -- so this is all it takes for a POST's
+      # rows, or a GET that quietly writes an audit row, to be cleaned up like
+      # everything else. Without it those rows stayed behind, which is the one place
+      # "Loadwright leaves nothing behind" was not true.
+      #
+      # Ignored entirely when the watermarks were never taken: no seeding means no
+      # baseline, and deleting "everything above nothing" is not a thing this will do.
+      def note_request_written_table(table)
+        return self unless @config.cleanup_request_created_rows
+        return self if table.nil? || @watermarks.nil?
+
+        @tables_mutex.synchronize do
+          @request_written_tables << table unless @request_written_tables.include?(table)
+        end
+        self
+      end
+
+      def request_written_tables = @tables_mutex.synchronize { @request_written_tables.dup }
 
       # Loads the host app's factory definitions. Deliberately the host's, not ours:
       # the whole premise is that the app already knows how to build valid records.
@@ -149,6 +176,7 @@ module Loadwright
           created: @created_ids.transform_values(&:length),
           total_created: total_created,
           tables_written: @inserted_tables,
+          tables_written_by_requests: request_written_tables,
           failures: @failures.map(&:to_h),
           warnings: @warnings,
           cleaned_up: @cleaned
@@ -401,7 +429,7 @@ module Loadwright
       end
 
       def delete_created_rows!
-        return if @created_ids.empty? && @inserted_tables.empty?
+        return if @created_ids.empty? && @inserted_tables.empty? && request_written_tables.empty?
 
         with_cleanup_timeout do
           delete_tracked_rows!
@@ -439,14 +467,19 @@ module Loadwright
       # watermark in exactly those tables. Precise, bounded, still strictly id-based,
       # still never a TRUNCATE, and incapable of touching a row that existed first.
       def delete_associated_rows!
-        return if @inserted_tables.empty?
+        # Tables the app wrote to while answering requests are cleaned up exactly like
+        # the factories' associated rows -- same watermark, same id bound, same
+        # never-a-TRUNCATE. They go LAST in insert order, so they unwind FIRST below:
+        # a row a POST created may reference a seeded row, never the other way round.
+        tables = @inserted_tables + (request_written_tables - @inserted_tables)
+        return if tables.empty?
 
         already = @created_ids.values.flatten
         tracked_tables = @created_ids.keys.filter_map { |resource| model_for(resource)&.table_name }
 
         # Reverse first-insert order: children are inserted after their parents, so
         # undoing in reverse means no foreign key is ever holding a row we are deleting.
-        @inserted_tables.reverse_each do |table|
+        tables.reverse_each do |table|
           watermark = @watermarks[table]
           next if watermark.nil?
 

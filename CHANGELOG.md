@@ -7,7 +7,46 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Cleanup now covers rows your app created.** Previously it tracked only what the
+  factories wrote, so a run against a `POST` endpoint left one record per request
+  behind — and so did a `GET` that writes an audit row or touches a `last_seen_at`.
+  The table is learned from the INSERT fingerprints already being collected, so it
+  works in both execution modes with no extra instrumentation, and it reuses the
+  same pre-seed watermark: still strictly id-bounded, still never a `TRUNCATE`,
+  still incapable of reaching a row that existed before the run.
+  Governed by `cleanup_request_created_rows` (default `true`).
+- **`auth_login`** — name the login request your own clients make, and where the
+  token is in the answer, instead of writing the code that mints one inside your
+  initializer. Issued once per credential before the run, through the same
+  transport; those requests are setup and are never measured or reported as
+  endpoints. Supports a JSON path or a response header (for session auth), and a
+  list of credentials, which is how you get multi-identity traffic. A failed login
+  stops the run with the status, and never echoes the credential back.
+- **Fix suggestions on N+1 findings.** The report already named the repeated query
+  and the file and line; it now also names the shape of the likely fix. Notably it
+  does *not* say "add `includes`" for a repeated `COUNT`, where that advice is
+  wrong — a preloaded association is still counted with a query unless the code
+  stops counting, so the fix is a counter cache or `.size` on a loaded collection.
+  Suggestions are advisory: they never change an outcome state or the exit code,
+  and a query shape that is not recognised gets no suggestion rather than a
+  guessed one.
+
+### Fixed
+
+- **Authentication was never sent.** `IdentityPool#resolve!` was called from nowhere
+  in `lib/`, so a configured `auth_token_provider` produced a pool whose tokens were
+  never resolved: every request went out unauthenticated, every endpoint returned
+  401/403, and the report told the user their token was probably misconfigured. It
+  was not — the tool never sent it. This is the failure `AGENTS.md` documents as the
+  most common on a first run, and it was self-inflicted. The pool is now resolved
+  once, before any request is issued, and `examples/sample_app` has an endpoint that
+  actually checks a token so no fixture can hide it again.
+- `auth_strategy` documented `:none` and `:custom`, neither of which exists, and
+  omitted `:header` (`X-Api-Key`), which does. All three real strategies are now
+  documented with the header each sends, and an invalid value is rejected at
+  startup rather than mid-run.
 
 ## [0.0.1] — 2026-08-24
 

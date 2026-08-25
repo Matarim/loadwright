@@ -213,7 +213,7 @@ module Loadwright
           context: @context,
           guard: resource_guard,
           seeder: seeder,
-          identities: Seeding::IdentityPool.new(config: config),
+          identities: Seeding::IdentityPool.new(config: config, stdout: @stdout),
           resolver: Discovery::PathParamResolver.new(config: config),
           lifecycle: lifecycle,
           containment: @containment,

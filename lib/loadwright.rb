@@ -53,6 +53,7 @@ require "loadwright/discovery/path_param_resolver"
 
 require "loadwright/seeding/factory_bot_seeder"
 require "loadwright/seeding/identity_pool"
+require "loadwright/seeding/login_flow"
 
 require "loadwright/instrumentation/query_tracker"
 require "loadwright/instrumentation/memory_tracker"
@@ -66,6 +67,7 @@ require "loadwright/engine/health_poller"
 
 require "loadwright/analysis/response_validator"
 require "loadwright/analysis/response_correlator"
+require "loadwright/analysis/fix_suggestion"
 require "loadwright/analysis/serializer_attribution"
 require "loadwright/analysis/time_breakdown"
 require "loadwright/analysis/explain_analyzer"

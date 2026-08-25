@@ -23,6 +23,75 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     described_class.new(config: config, context: context, stdout: stdout, **rest)
   end
 
+  # AUTHENTICATION ACTUALLY BEING SENT.
+  #
+  # IdentityPool#resolve! was called from nowhere in lib/ -- only from its own spec.
+  # So a user configured auth_token_provider, the pool was built and handed to the
+  # runner, `headers_for_next` returned {} because the tokens had never been
+  # resolved, and every request went out unauthenticated. Every endpoint then came
+  # back 401/403, and the report told them their token was probably misconfigured.
+  #
+  # It was not. The tool never sent it. That is the number-one documented first-run
+  # failure, caused by the tool itself, and it is why this asserts on the header on
+  # the wire rather than on the pool in isolation.
+  describe "authentication" do
+    let(:seen_headers) { [] }
+
+    def capturing_context
+      responder = lambda do |request|
+        seen_headers << request.headers
+        { status: 200, body: JSON.generate([{ "id" => 1 }]) }
+      end
+      build_context(responder: responder)
+    end
+
+    before { config.auth_token_provider = -> { "SECRET-TOKEN" } }
+
+    it "sends the configured token on every request" do
+      runner(context: capturing_context,
+             identities: Loadwright::Seeding::IdentityPool.new(config: config))
+        .run(endpoints: [endpoint])
+
+      expect(seen_headers).not_to be_empty
+      expect(seen_headers).to all(include("Authorization" => "Bearer SECRET-TOKEN"))
+    end
+
+    it "resolves the pool exactly once, not per request" do
+      calls = 0
+      config.auth_token_provider = -> { calls += 1; "SECRET-TOKEN" }
+
+      runner(context: capturing_context,
+             identities: Loadwright::Seeding::IdentityPool.new(config: config))
+        .run(endpoints: [endpoint])
+
+      expect(calls).to eq(1)
+    end
+
+    # A provider that returns nothing means every request is unauthenticated and the
+    # whole run is a wall of 401s that says nothing about the app. Better to stop.
+    it "aborts before issuing anything when the provider yields no token" do
+      config.auth_token_provider = -> { nil }
+
+      expect do
+        runner(context: capturing_context,
+               identities: Loadwright::Seeding::IdentityPool.new(config: config))
+          .run(endpoints: [endpoint])
+      end.to raise_error(Loadwright::SeedingError, /no usable token/)
+
+      expect(seen_headers).to be_empty
+    end
+
+    it "sends nothing extra for a genuinely public API" do
+      config.auth_token_provider = nil
+
+      runner(context: capturing_context,
+             identities: Loadwright::Seeding::IdentityPool.new(config: config))
+        .run(endpoints: [endpoint])
+
+      expect(seen_headers.first.keys).not_to include("Authorization")
+    end
+  end
+
   # MATRIX SHAPE. response-analysis.md requires a spec asserting on the cells the
   # engine actually generates, so a future change cannot quietly reintroduce a
   # combined matrix whose slope is unattributable.

@@ -272,7 +272,12 @@ if defined?(Loadwright)
     # AUTH
     # =========================================================================
 
-    # :none, :bearer_token, :session, or :custom
+    # How the token below is attached to each request:
+    #   :bearer_token  Authorization: Bearer <token>   (JWT, Doorkeeper, most APIs)
+    #   :session       Cookie: <token>                 (Devise and friends)
+    #   :header        X-Api-Key: <token>              (API-key APIs)
+    # For a fully public API, leave auth_token_provider nil below and no auth
+    # header is sent; this setting is then unused.
     config.auth_strategy = :bearer_token
 
     # Replace with your app's own token logic. May return a single token or a
@@ -280,6 +285,17 @@ if defined?(Loadwright)
     # matters for multi-tenant apps where single-identity traffic can make a
     # badly-scoped query look fine.
     config.auth_token_provider = -> { ENV.fetch("LOADWRIGHT_TOKEN", nil) }
+
+    # ...or log in the way your own clients do, and let Loadwright keep the token.
+    # Issued once per credential before the run, through the same transport; these
+    # requests are setup and are never measured or reported as endpoints. Set this
+    # OR auth_token_provider above, not both.
+    # config.auth_login = {
+    #   path: "/api/v1/login",
+    #   verb: :post,
+    #   credentials: [{ email: "dev@example.com", password: "password" }],
+    #   extract: { json: "token" }   # or { header: "Set-Cookie" } for session auth
+    # }
 
     # Seed and rotate across this many identities when the provider doesn't
     # supply its own collection.
@@ -315,6 +331,15 @@ if defined?(Loadwright)
     #   so pool findings are less trustworthy. Unavailable in :http mode.
     # :leave — do nothing; useful for inspecting seeded state afterward.
     config.seed_cleanup_strategy = :delete_created_rows
+
+    # Also clean up rows your APP created while answering requests -- a POST that
+    # writes three tables, or a GET that logs an audit row. Same id-bounded
+    # watermark mechanism as above; never a TRUNCATE.
+    # On a database you share with other people, setting this to false narrows the
+    # sweep to tables only your factories wrote to. It does not remove it: those
+    # tables are swept above a watermark either way. `:leave` above is the setting
+    # that cleans up nothing at all.
+    config.cleanup_request_created_rows = true
 
     # Escape hatch for resources with no factory at all. Not the primary
     # uniqueness mechanism — that's your factories' own sequences.

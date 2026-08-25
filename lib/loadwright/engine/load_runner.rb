@@ -238,6 +238,15 @@ module Loadwright
         return dry_run(endpoints) if @context.transport.dry_run
 
         @started_at = Time.now
+
+        # BEFORE ANY REQUEST GOES OUT. Nothing called this, so a configured
+        # auth_token_provider was built into a pool, handed here, and never resolved:
+        # `headers_for_next` returned {} and every request went out unauthenticated.
+        # The run then reported every endpoint 401/403 and told the user their token
+        # was probably misconfigured -- the tool's own doing, and the single most
+        # common first-run failure it documents.
+        resolve_identities!
+
         run_seed_scale_sweep(endpoints)
         run_page_size_sweep(endpoints)
 
@@ -261,6 +270,15 @@ module Loadwright
       # Returns nil when there is nothing yet to report, because an empty report
       # written by an interrupt during startup reads as an API where nothing was
       # found rather than as a run that never began.
+      def resolve_identities!
+        return if @identities.nil?
+
+        # The transport is only used when config.auth_login is set, which issues a real
+        # login request through the same path the run itself uses.
+        @identities.resolve!(transport: @context.transport)
+        @identities.warnings.each { |warning| @stdout.puts "loadwright: #{warning}" }
+      end
+
       def partial_result
         return nil if @completed
         return nil if @cells.empty? && @outcomes.empty?
@@ -526,6 +544,14 @@ module Loadwright
         metrics.queries.each do |query|
           table = table_in(query[:fingerprint])
           cell.tables << table if table && !cell.tables.include?(table)
+
+          # Rows the APP created answering this request. Read off the fingerprints
+          # already being collected, which works in BOTH modes without new plumbing:
+          # under :http the query data has crossed the collection endpoint from the
+          # app's own process, and a table name survives normalisation even though the
+          # values do not.
+          @seeder&.note_request_written_table(inserted_table_in(query[:fingerprint]))
+
           remember_slow_query(endpoint.to_s, query)
         end
 
@@ -858,6 +884,12 @@ module Loadwright
 
       def table_in(fingerprint)
         fingerprint.to_s[/(?:FROM|JOIN)\s+[`"']?([A-Za-z0-9_]+)/i, 1]
+      end
+
+      # Deliberately separate from `table_in`, which feeds the over-fetch signal and
+      # must stay about tables that were READ. An INSERT is not a read.
+      def inserted_table_in(fingerprint)
+        fingerprint.to_s[/\AINSERT\s+INTO\s+[`"']?([A-Za-z0-9_]+)/i, 1]
       end
 
       # The slowest example of each distinct query shape, kept for the EXPLAIN phase.

@@ -346,10 +346,19 @@ module Loadwright
         items = findings.map do |finding|
           finding = finding.to_h if finding.respond_to?(:to_h)
           "<li class=\"confidence-#{h(finding[:confidence])}\"><span class=\"kind\">#{h(finding[:kind])}</span>" \
-            "<span class=\"detail\">#{h(finding[:detail])}</span></li>"
+            "<span class=\"detail\">#{h(finding[:detail])}</span>" \
+              "#{suggestion_html(finding)}</li>"
         end
 
         "<ul class=\"findings\">#{items.join}</ul>"
+      end
+
+      # Visually subordinate to the finding, and labelled "Try", because it is a
+      # starting point read off a query shape rather than a verdict about the code.
+      def suggestion_html(finding)
+        return "" if finding[:suggestion].to_s.empty?
+
+        "<span class=\"suggestion\"><strong>Try:</strong> #{h(finding[:suggestion])}</span>"
       end
 
       # REPORTED ON EVERY ENDPOINT, whatever its state. A reader can then see that an
@@ -744,6 +753,9 @@ module Loadwright
                   font-weight: 700; margin-right: .5rem; }
           .confidence-high .kind { color: var(--findings); }
           .confidence-low .kind { color: var(--muted); }
+          .suggestion { display: block; margin-top: .4rem; padding-left: .7rem;
+                        border-left: 2px solid var(--muted); color: var(--muted);
+                        font-size: .88rem; }
           .bar { display: flex; height: 1.4rem; border-radius: 4px; overflow: hidden; background: var(--panel); }
           .seg { display: block; }
           .seg-db { background: var(--db); } .seg-view { background: var(--view); }
