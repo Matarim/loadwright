@@ -25,13 +25,11 @@ RSpec.describe Loadwright::Analysis::ColdWarm do
       expect(cache.clears).to eq(1)
     end
 
-    # ==========================================================================
     # THE ONE THAT MATTERS. Rails.cache.clear against Redis or Memcached wipes a cache
     # other processes are using -- possibly a colleague's, on a shared development
     # instance. A diagnostic tool damaging the environment it was pointed at is the
     # category of harm the whole safety design exists to prevent, and a slightly weaker
     # measurement is a trivial price beside it.
-    # ==========================================================================
     # The allowlist names the two stores that are provably process-local. EVERYTHING
     # else is treated as shared -- a Redis or Memcached store by name, and equally a
     # store nobody here has heard of, because guessing wrong destroys someone's data

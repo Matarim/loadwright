@@ -166,8 +166,19 @@ RSpec.describe Loadwright::Coverage do
       expect(source).to match(/NOT grounds/)
     end
 
+    # SKIPS WHERE THE DESIGN DOCS ARE NOT PRESENT, rather than failing. They are
+    # internal notes and are not published with the gem, so a fresh clone of the
+    # public repository does not have them -- and a suite that fails on checkout for
+    # a missing private file teaches the first contributor that red is normal.
+    #
+    # The check still runs wherever the docs ARE present, which is where the rule it
+    # guards can actually be violated. Found by cloning the published repository and
+    # running the suite, which is the only way this shows up.
     it "is stated in the reference doc, since admission is a documentation change first" do
-      doc = SpecPaths.read(File.join(SpecPaths::REFERENCES, "response-analysis.md"))
+      path = File.join(SpecPaths::REFERENCES, "response-analysis.md")
+      skip "design references are not part of the published repository" unless File.exist?(path)
+
+      doc = SpecPaths.read(path)
 
       expect(doc).to include("Admission rule")
       # Whitespace-tolerant: the phrase wraps across lines inside a blockquote, and a

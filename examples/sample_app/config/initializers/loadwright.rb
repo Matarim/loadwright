@@ -9,7 +9,6 @@
 # subject -- the drift check reads real generated initializers, and this one is the
 # only initializer in the repo that a real Rails app actually evaluates.
 #
-# ===========================================================================
 # WHY THE ENV VAR. Everything else in the suite boots this app IN THE SUITE'S OWN
 # PROCESS and builds its own `Configuration.new`. If this block ran there too it
 # would mutate the global `Loadwright.configuration` for every example that came
@@ -18,7 +17,6 @@
 # once silently disabled 22 of the safety guard's examples.
 #
 # The CLI runs in a subprocess and sets the variable; the in-process suite does not.
-# ===========================================================================
 if defined?(Loadwright) && ENV["SAMPLE_APP_LOADWRIGHT_CONFIG"]
   Loadwright.configure do |config|
     config.execution_mode = (ENV["SAMPLE_APP_LOADWRIGHT_MODE"] || "in_process").to_sym

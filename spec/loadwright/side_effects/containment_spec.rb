@@ -23,7 +23,6 @@ RSpec.describe Loadwright::SideEffects::Containment do
     ActionMailer::Base
   end
 
-  # ==========================================================================
   # STATE THE ABSENCE, never rely on it. These examples' premise is "ActionMailer /
   # ActiveJob is not loaded", and for a while that held only because those gems were
   # not in the bundle. They are now -- examples/sample_app requires them so the
@@ -31,7 +30,6 @@ RSpec.describe Loadwright::SideEffects::Containment do
   # defined for every example that runs afterwards. The premise then passes or fails
   # on spec ORDER, which is precisely the failure that silently disabled twenty-two of
   # the safety guard's examples (CLAUDE.md, working conventions).
-  # ==========================================================================
   def without_action_mailer = hide_const("ActionMailer::Base")
 
   def without_active_job = hide_const("ActiveJob::Base")

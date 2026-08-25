@@ -4,7 +4,6 @@ require "tmpdir"
 require "open3"
 require "json"
 
-# ===========================================================================
 # THE CLI, DRIVEN THE WAY A USER DRIVES IT: as a subprocess, from a Rails app's root,
 # through exe/loadwright.
 #
@@ -24,14 +23,13 @@ require "json"
 # It is slow -- each invocation boots Rails -- so the runs are shared across the
 # whole file rather than repeated per example, the same way end_to_end_spec.rb shares
 # one run per transport.
-# ===========================================================================
 RSpec.describe "the loadwright CLI, end to end" do
   # Distinctively named on purpose. A constant assigned inside an `RSpec.describe`
   # block lands on Object, not on the example group -- so a bare `ROOT` or
   # `Invocation` here would silently overwrite, or be overwritten by, any other spec
   # file that declared the same name, and which won would depend on load order.
-  # architecture_spec enforces this; last session lost an afternoon to two files
-  # declaring `ASSIGNMENT` with different regexes.
+  # architecture_spec enforces this, after two spec files declaring `ASSIGNMENT`
+  # with different regexes made the drift spec pass or fail by seed.
   CLI_E2E_ROOT = File.expand_path("../..", __dir__)
   CLI_E2E_APP = File.join(CLI_E2E_ROOT, "examples", "sample_app")
   # Created once for the whole file and removed at the end, rather than per example
@@ -80,7 +78,6 @@ RSpec.describe "the loadwright CLI, end to end" do
 
   after(:context) { FileUtils.remove_entry(CLI_E2E_WORKSPACE) if File.directory?(CLI_E2E_WORKSPACE) }
 
-  # ===========================================================================
   describe "run --dry-run" do
     let(:invocation) { self.class.dry_run }
 
@@ -98,7 +95,6 @@ RSpec.describe "the loadwright CLI, end to end" do
       expect(invocation.stdout).to include("GET /api/v1/posts")
     end
 
-    # ===========================================================================
     # THE DRY RUN LEAVES NO ARTIFACT. It issues zero requests, so every endpoint in
     # such a report is `inconclusive` and every measurement absent -- a document
     # indistinguishable from a real run that found an API-wide problem, sitting in
@@ -106,13 +102,11 @@ RSpec.describe "the loadwright CLI, end to end" do
     #
     # Found by running the command rather than by reasoning about it: the first real
     # --dry-run wrote three of them.
-    # ===========================================================================
     it "writes no report file" do
       expect(invocation.reports).to be_empty
     end
   end
 
-  # ===========================================================================
   describe "run --execute" do
     let(:invocation) { self.class.real_run }
 
@@ -144,13 +138,11 @@ RSpec.describe "the loadwright CLI, end to end" do
       expect(stats["state"]).to eq("inconclusive")
     end
 
-    # ===========================================================================
     # THE AUDIT TRAIL. production-safety.md requires every guard decision to reach
     # the report, so a run's authority to have happened is auditable after the
     # terminal is gone. RunResult has always accepted it -- but nothing passed it in,
     # because until the CLI existed nothing drove a run end to end. It was nil in
     # every report the gem could produce.
-    # ===========================================================================
     it "records the safety decision that permitted the run" do
       safety = invocation.json.dig("metadata", "safety")
 
@@ -182,12 +174,10 @@ RSpec.describe "the loadwright CLI, end to end" do
     end
   end
 
-  # ===========================================================================
   # THE ADOPTION LOOP. `record` exists so discovery can resolve path parameters from
   # requests the app's own specs really make. The proof that it worked is not the
   # file it wrote -- it is that an endpoint which was INCONCLUSIVE for want of a
   # resolvable {id} becomes measurable afterwards.
-  # ===========================================================================
   describe "record --specs" do
     let(:invocation) do
       @record ||= begin

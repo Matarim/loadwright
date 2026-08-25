@@ -2,7 +2,6 @@
 
 # The shipped examples, checked against the real configuration surface.
 #
-# ===========================================================================
 # WHY THESE ARE TESTED AT ALL. An example initializer is the thing people COPY. A
 # config key renamed in lib/ leaves every example still parsing, still looking
 # authoritative, and silently setting nothing — `config.some_renamed_key = true`
@@ -13,7 +12,6 @@
 # has no reason to doubt it, and the setting they believed they enabled is simply
 # absent. Someone who copies `mutating_endpoints/` and loses a containment key finds
 # out when the run mails their customers.
-# ===========================================================================
 require "pathname"
 
 # NAMESPACED, not bare. A constant assigned inside an `RSpec.describe` block lands on

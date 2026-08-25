@@ -366,10 +366,10 @@ every downgrade — do not infer it from the configured mode.
   explain_index_analysis:      available          available        UNAVAILABLE
   cold_vs_warm_cache:          available          available        available
   latency_under_concurrency:   UNAVAILABLE        available        available
-  connection_pool_exhaustion:  UNAVAILABLE        available        UNAVAILABLE
+  connection_pool_exhaustion:  UNAVAILABLE        UNAVAILABLE      UNAVAILABLE
   pool_vs_threads_static_check: partial           available        UNAVAILABLE
   true_client_latency:         UNAVAILABLE        available        available
-  clean_memory_attribution:    UNAVAILABLE        available        UNAVAILABLE
+  clean_memory_attribution:    UNAVAILABLE        UNAVAILABLE      UNAVAILABLE
 ```
 
 ```yaml
@@ -384,7 +384,22 @@ unavailability_reasons:
     sharing a GVL do not measure anything a user would experience.
   no_app_process: |
     "harness shares the app's process; use execution_mode = :http"
-    Applies to clean_memory_attribution under in_process.
+    The in-process reason for clean_memory_attribution. Superseded in every mode by
+    not_collected_yet below.
+  not_collected_yet: |
+    "allocation figures are not collected yet..." / "pool samples are not collected yet..."
+    MEMORY AND CONNECTION POOL ARE NOT MEASURED IN ANY MODE. MemoryTracker and
+    ConnectionPoolTracker exist, are specced, and are instantiated by nothing in a
+    run -- so no allocation figure and no pool sample reaches any report.
+    This is the gem's own unfinished work, not a property of the transport.
+
+    AGENT CONSEQUENCE: never tell a user this tool measured their memory usage or
+    their connection pool utilisation. It does not. `pool_vs_threads_static_check`
+    still works and is a real finding -- it compares configured server threads
+    against pool size, per process -- but it is a STATIC config comparison, not an
+    observation of pressure. Do not present it as one.
+    Contention that manifests as pool-exhaustion ERRORS is still caught, separately,
+    by the resource guard (see section 8) -- that path is unaffected.
 
 partial_is_a_third_state: |
   pool_vs_threads_static_check under in_process is "partial": the STATIC config
@@ -615,7 +630,11 @@ flags:
   --only PATTERN:            restrict to matching paths
   --mode in_process|http:    override config.execution_mode for this run
 
-ALWAYS_DRY_RUN_FIRST: true
+ALWAYS_DRY_RUN_FIRST: true   # agent behaviour, NOT a tool-enforced gate
+enforcement: >
+  The tool DEFAULTS to a dry run; it does not require one. --execute overrides it
+  in the same invocation and nothing records whether a dry run ever happened. This
+  key is an instruction to you, not a guarantee to repeat to the user.
 reason: >
   Shows the endpoint list, mutating-request count, estimated duration, and
   worst-case backoff budget before anything is sent. Cheap insurance.
@@ -676,6 +695,18 @@ COMP-02:
   capability_handling: >
     Capability mismatch EXCLUDES the affected metric and names it, rather than
     refusing the whole comparison. Config or page-size mismatch refuses outright.
+  observed_page_size_is_run_level_only: >
+    The observed-page-size dimension is sampled from the LARGEST scale factor's
+    seed-scale cells only. Record counts can still move in page-size-sweep cells, or
+    at smaller scales, without tripping it -- which is what COMP-03b covers per cell.
+    The two are complementary; neither replaces the other.
+
+metrics_actually_compared: [queries, records, bytes, latency_ms]
+metrics_NOT_compared:
+  allocations: >
+    Not persisted per cell, so no allocation delta exists. Do NOT tell a user their
+    memory usage was compared between two runs -- nothing compared it. This is why
+    clean_memory_attribution gates nothing.
 
 COMP-03:
   rule: A finding that disappeared because the endpoint became inconclusive is NOT a fix.
@@ -683,6 +714,27 @@ COMP-03:
     healthy/has_findings -> inconclusive is its own event: the endpoint became
     unmeasurable, which is neither an improvement nor a regression. Never report
     it as "resolved". Loadwright marks these `resolved: false` with a note.
+
+COMP-03b:
+  rule: >
+    A query-count change whose RECORD COUNT also moved is not a regression and not
+    an improvement. Never report it as either.
+  detail: |
+    A query count only means something next to the number of records that produced
+    it. Narrow a scope, break a filter, or cap a page size, and a collection returns
+    5 records instead of 30 -- queries fall 31 -> 6 and it looks like the N+1 got
+    fixed. It did not: that is the same queries-per-record over less data, and the
+    endpoint is arguably broken.
+  how_it_appears: |
+    verdict: :unattributable, rendered in its own report section, "Changed, but not
+    like-for-like", placed directly after Regressions and BEFORE anything that reads
+    as good news. A drop in returned records at an unchanged scale factor and page
+    size is separately reported as a REGRESSION in its own right.
+  agent_instruction: >
+    If you see a query drop in that section, do not tell the user their query count
+    improved. Tell them the endpoint returned fewer records and that the two facts
+    have to be read together. Absent record counts on BOTH sides are not a change --
+    error responses and older run records carry none.
 
 COMP-04:
   rule: The noise floor is measured, not assumed.
@@ -704,11 +756,26 @@ DIAG-01:
   symptom: "Every endpoint reports inconclusive; uniform 401 or 403"
   probability: VERY_HIGH  # most common first-run failure
   cause: auth_token_provider not configured or returning an invalid token
+  second_cause_check_it_before_concluding: >
+    Rails' HostAuthorization middleware answers 403 BEFORE the request reaches the
+    app, and from outside it is indistinguishable from an auth failure. Loadwright
+    sends Host: localhost under :in_process precisely because that is on Rails'
+    development allow-list -- but an app with a custom Rails host allow-list excluding
+    it will 403 every request, including endpoints that need no auth at all.
+    TELL THEM APART: if endpoints that require NO authentication also return 403,
+    it is the host guard, not the token. Chasing auth there wastes the user's time
+    on something that was never the problem.
+    NOTE: the host allow-list is a RAILS setting (`Rails.application.config`
+    -> `hosts`), NOT a Loadwright config key. Do not try to set it through
+    Loadwright.configure; it does not exist there and would silently do nothing.
   fix: |
     1. Verify the lambda returns a usable token:
        rails runner 'puts Loadwright.config.auth_token_provider.call.inspect'
     2. Confirm auth_strategy matches the app (:bearer_token vs :session)
     3. Check default_headers includes anything else the API requires
+    4. If public endpoints 403 too, check the app's Rails host allow-list
+       (a `hosts` entry in config/environments/*.rb), and set
+       config.default_headers["Host"] to a host that app permits
   do_not: >
     Do not conclude the API is broken. Do not disable
     require_successful_response to "get results" — that produces
@@ -1257,9 +1324,13 @@ Q: "Can I run this in production?"
 A: >
   By default, no — it refuses outside development and test. There is an
   explicit four-layer opt-in path (config flag + typed confirmation phrase +
-  --i-understand-the-risk + mandatory dry-run first), which exists for
-  production-data-shaped staging boxes, not production. I won't enable it
-  for you; that's a decision for you to make deliberately. (INV-01)
+  --i-understand-the-risk + a dry run that only --execute overrides), which
+  exists for production-data-shaped staging boxes, not production. I won't
+  enable it for you; that's a decision for you to make deliberately. (INV-01)
+  Say "a dry run by default", never "a mandatory dry run first": nothing
+  tracks whether an earlier dry run happened, and --execute is accepted in
+  the same invocation. Overstating a safety control is its own failure --
+  a user who believes a rehearsal is enforced will skip checking for one.
 
 Q: "Will this delete my dev data?"
 A: >

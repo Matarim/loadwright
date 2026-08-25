@@ -20,11 +20,9 @@ RSpec.describe Loadwright::Reporting::ComparisonReport do
     )
   end
 
-  # ==========================================================================
   # A REFUSAL RENDERS NOTHING ELSE. Showing deltas below a notice saying they are
   # meaningless is an invitation to read them anyway, and the reader who skims is
   # exactly the reader the gate exists to protect.
-  # ==========================================================================
   describe "when the runs are not comparable" do
     let(:refused) do
       comparison(
@@ -81,6 +79,49 @@ RSpec.describe Loadwright::Reporting::ComparisonReport do
       text = report.render(full)
 
       expect(text.index("State changes")).to be < text.index("Resolved")
+    end
+
+    # THE ROWS MOST LIKELY TO BE MISREAD AS WINS. A query count that fell because
+    # the endpoint returned fewer records looks like a fix and is not one. A reader
+    # who reaches "Resolved" -- or just the "No regressions." line -- without passing
+    # these concludes their change worked.
+    describe "changes whose basis moved" do
+      let(:with_unattributable) do
+        comparison(
+          deltas: [delta(verdict: :unattributable, metric: "queries (seed_scale scale=10)",
+                         before: 31, after: 6,
+                         note: "the number of records returned changed too")],
+          resolved_findings: [{ endpoint: "GET /a", finding: "n_plus_one_slope", resolved: true }]
+        )
+      end
+
+      it "renders them rather than dropping them for having no verdict" do
+        text = report.render(with_unattributable)
+
+        expect(text).to include("Changed, but not like-for-like")
+        expect(text).to include("31")
+        expect(text).to include("6")
+      end
+
+      it "says why the comparison does not hold" do
+        expect(report.render(with_unattributable)).to include("the number of records returned changed too")
+      end
+
+      it "places them above anything that reads as good news" do
+        text = report.render(with_unattributable)
+
+        expect(text.index("Changed, but not like-for-like")).to be < text.index("Resolved")
+      end
+
+      # Neither bucket. Filing it as either would be the verdict the data cannot
+      # support, which is the whole reason the state exists.
+      it "keeps them out of both the regression and the within-noise tables" do
+        result = with_unattributable
+
+        expect(result.regressions).to be_empty
+        expect(result.within_noise).to be_empty
+        expect(result.unattributable.length).to eq(1)
+      end
     end
 
     it "puts within-noise changes last and separates them from regressions" do

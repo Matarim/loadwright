@@ -94,11 +94,9 @@ RSpec.describe Loadwright::Analysis::TrafficDiagnosis do
         .to include("expired, wrong scope, or for a user that does not exist")
     end
 
-    # ==========================================================================
     # THE FALSE POSITIVE TO AVOID. An API with an admin section is not a
     # misconfiguration, and telling someone their credentials are wrong when they are
     # not sends them to fix something that works.
-    # ==========================================================================
     it "does not blame the token for one forbidden endpoint among many" do
       map = { "GET /admin" => [403] }
       10.times { |i| map["GET /ok#{i}"] = [200] }

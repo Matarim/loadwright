@@ -6,7 +6,6 @@ module Loadwright
   module Analysis
     # What containment did to the numbers, said out loud.
     #
-    # ===========================================================================
     # THIS IS REQUIRED, NOT OPTIONAL (performance-signals.md Part 1).
     #
     # `suppress_background_jobs` and `block_outbound_http` make the app FASTER than
@@ -20,7 +19,6 @@ module Loadwright
     # outbound call contributes nothing to db, view, GC, or other, so the components
     # still sum to the total and the total is simply lower. Nothing in the numbers
     # hints at what is missing, which is exactly why it has to be stated in words.
-    # ===========================================================================
     #
     # The disclosure is attached to run metadata AND to each endpoint's time breakdown,
     # because those get read separately -- someone skimming one endpoint's section must

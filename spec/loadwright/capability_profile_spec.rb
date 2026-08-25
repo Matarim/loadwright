@@ -36,9 +36,24 @@ RSpec.describe Loadwright::CapabilityProfile do
     context "with :http transport and the collector middleware installed" do
       subject(:profile) { described_class.derive(transport: :http, collector: :middleware) }
 
-      it "measures everything" do
-        expect(profile.unavailable_signals).to be_empty
-        expect(profile.available_signals).to match_array(described_class::SIGNALS)
+      it "measures every signal the collector actually carries" do
+        expect(profile.available_signals)
+          .to match_array(described_class::SIGNALS - described_class::NOT_COLLECTED_SIGNALS)
+      end
+
+      # THE TWO THIS RUN CANNOT ANSWER EITHER, and the reason is the gem's own
+      # unfinished work rather than anything about the transport. MemoryTracker and
+      # ConnectionPoolTracker are built and specced and nothing in a run instantiates
+      # either, so advertising these as `available` put a claim in the report's "what
+      # this run could measure" section that no number in the report supported.
+      #
+      # Stated here rather than left implicit, so wiring the collectors up has to
+      # come back and delete this example on purpose.
+      it "does not advertise the signals nothing collects yet" do
+        described_class::NOT_COLLECTED_SIGNALS.each do |signal|
+          expect(profile).to be_unavailable(signal)
+          expect(profile.reason_for(signal)).to include("not collected yet")
+        end
       end
     end
 
@@ -139,7 +154,6 @@ RSpec.describe Loadwright::CapabilityProfile do
       expect(documented).to match_array(described_class::SIGNALS)
     end
 
-    # ===========================================================================
     # THE VALUES, not just the signal names. The example above only proves the
     # table lists the right rows -- it passed happily while the table claimed
     # explain_index_analysis and connection_pool_exhaustion were available under
@@ -148,7 +162,6 @@ RSpec.describe Loadwright::CapabilityProfile do
     # That is the exact failure this file exists to prevent: an agent reading a
     # stale matrix tells a user a signal is trustworthy when the run never
     # measured it. Names drifting is cosmetic; values drifting is a wrong answer.
-    # ===========================================================================
     it "states each signal's real availability in each transport+collector pairing" do
       matrix = SpecPaths.read(SpecPaths::AGENTS_MD)[/### 5\.1.*?```yaml\n(.*?)```/m, 1]
 

@@ -128,9 +128,26 @@ module Loadwright
       # is exactly the kind of thing the dry run exists to tell you BEFORE you type
       # --execute, and discovering it only on the real run defeats the point of having
       # a rehearsal at all.
+      #
+      # IT MUST NOT ABORT ONE, THOUGH. A dry run sends nothing: no mail, no job, no
+      # outbound call. Refusing it guards against something that cannot happen, and
+      # costs the user the endpoint list -- the whole output of the command, and the
+      # first thing the tool tells them to look at.
+      #
+      # This is not hypothetical. `block_outbound_http` is on by default and needs
+      # webmock, webmock is not a runtime dependency, and
+      # `abort_if_containment_unavailable` is also on by default. So a new user
+      # following the README hit a refusal on their very first command, before seeing
+      # a single endpoint. Found by installing the built gem into a fresh Rails app.
       def install_containment!
         @containment = SideEffects::Containment.new(config: config, lifecycle: lifecycle, stdout: @stdout)
         @containment.install!
+      rescue ContainmentError => e
+        raise unless dry_run?
+
+        @stdout.puts "loadwright: #{e.message}"
+        @stdout.puts "loadwright: continuing anyway — a dry run issues no requests, so nothing can " \
+                     "escape. Fix the above before you use --execute, which will refuse."
       end
 
       def discover!
@@ -229,7 +246,6 @@ module Loadwright
         )
       end
 
-      # ===========================================================================
       # CLAUDE.md corollary 7: nobody should discover a four-hour run by waiting
       # through it. The estimate is printed for every real run and gated above the
       # configured threshold.
@@ -239,7 +255,6 @@ module Loadwright
       # cannot prompt -- that one is a safety decision about irreversible harm, this
       # one is a courtesy about someone's afternoon. Refusing here would break every
       # piped or scripted invocation of a tool whose whole point is to be run locally.
-      # ===========================================================================
       def confirm_duration!(runner, endpoints)
         return true if dry_run?
 
@@ -294,7 +309,6 @@ module Loadwright
         exit_code_for(result)
       end
 
-      # ===========================================================================
       # THE INTERRUPT HANDOFF.
       #
       # Runs on the signal watcher thread, before Lifecycle tears anything down.
@@ -312,7 +326,6 @@ module Loadwright
       # The timeout is what keeps this from turning a Ctrl-C into a hang. If it
       # expires the main thread really is wedged, and the last-resort hook below
       # writes whatever was measured.
-      # ===========================================================================
       def await_main_thread
         deadline = Time.now + FINISH_GRACE_SECONDS
         @finish_lock.synchronize do
@@ -375,7 +388,6 @@ module Loadwright
         end
       end
 
-      # ===========================================================================
       # reporting.md: the exit code is a convenience for someone scripting around it,
       # not the tool's interface. So it is deliberately conservative.
       #
@@ -387,7 +399,6 @@ module Loadwright
       # ADVISORY FINDINGS DO NOT FAIL EITHER (response-analysis.md): an over-fetch
       # hint may never veto a clean verdict, and that has to hold for the exit code
       # as much as for the outcome state.
-      # ===========================================================================
       FAILING_KINDS = %i[n_plus_one_slope n_plus_one_pattern_match].freeze
 
       def exit_code_for(result)

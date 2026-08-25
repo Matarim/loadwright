@@ -52,7 +52,6 @@ module Loadwright
 
       def body(value) = params(value)
 
-      # =====================================================================
       # THE TWO PLACES REDACTION HAS TO REACH THAT ARE NOT OBVIOUS.
       #
       # Measurement.unavailable(reason) and CapabilityProfile's downgrade causes are
@@ -67,7 +66,6 @@ module Loadwright
       # http://127.0.0.1:52341 did not become healthy" is the whole value of the
       # message and names nothing private. It is the NON-loopback host that can name a
       # company's internal infrastructure, and that is what goes.
-      # =====================================================================
       LOOPBACK_HOSTS = %w[localhost 127.0.0.1 0.0.0.0 ::1].freeze
 
       # user:password@host in a URL or a connection string. Always redacted, whatever

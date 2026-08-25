@@ -90,7 +90,6 @@ RSpec.describe Loadwright::CLI do
     end
   end
 
-  # ==========================================================================
   describe "the history commands" do
     require "tmpdir"
 
@@ -197,10 +196,8 @@ RSpec.describe Loadwright::CLI do
         expect(stdout.string).to include("No regressions.")
       end
 
-      # ====================================================================
       # A comparison that CANNOT BE COMPUTED is an error, never a silent pass --
       # including where someone has wired this into a script.
-      # ====================================================================
       it "exits 2 and refuses when the runs are not comparable" do
         first = write_run
         Loadwright.configure { |c| c.concurrency_levels = [1, 20] }

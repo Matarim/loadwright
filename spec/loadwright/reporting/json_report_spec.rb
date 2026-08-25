@@ -13,11 +13,9 @@ RSpec.describe Loadwright::Reporting::JsonReport do
     expect(document.keys).to include("metadata", "summary", "endpoints", "cells")
   end
 
-  # ==========================================================================
   # THE PROPERTY THIS FORMAT MUST NOT LOSE. A null in a JSON document is read as zero
   # or missing by whatever consumes it next, which reintroduces the confidently-wrong
   # number at the one point where the type information would otherwise be gone.
-  # ==========================================================================
   describe "unavailable measurements" do
     it "serialises as a reason, never as null" do
       metrics = Loadwright::Execution::RequestMetrics.unavailable(

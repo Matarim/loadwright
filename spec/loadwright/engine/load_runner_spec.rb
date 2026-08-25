@@ -23,11 +23,9 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     described_class.new(config: config, context: context, stdout: stdout, **rest)
   end
 
-  # ===========================================================================
   # MATRIX SHAPE. response-analysis.md requires a spec asserting on the cells the
   # engine actually generates, so a future change cannot quietly reintroduce a
   # combined matrix whose slope is unattributable.
-  # ===========================================================================
   describe "#matrix" do
     before do
       config.scale_factors = [10, 100]
@@ -402,7 +400,6 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     end
   end
 
-  # =========================================================================
   # REGRESSION: a clean endpoint must not be reported as having no coverage.
   #
   # The bug this guards against, in full, because the shape of it is the point and a
@@ -424,7 +421,6 @@ RSpec.describe Loadwright::Engine::LoadRunner do
   # without changing the state. Verified by reintroducing it: only `be_covered` fails.
   # The healthy expectation is kept as documentation of the original harm, but the
   # coverage expectation is what would catch a regression now.
-  # =========================================================================
   describe "over-fetch coverage on an endpoint with no duplicate queries" do
     before do
       config.scale_factors = [10, 100]
@@ -582,13 +578,11 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(store.latest.metadata["aborted"]).to be(true)
     end
 
-    # ======================================================================
     # A COMPLETED RUN MUST NOT ALSO WRITE AN "INTERRUPTED" RECORD. The armed teardown
     # fires on every Lifecycle teardown, including the ordinary one at the end of a
     # successful run -- so without this it wrote a second record per run, marked
     # aborted. Those then appeared in `runs list` and made every comparison warn that
     # a perfectly healthy run had been aborted partway.
-    # ======================================================================
     it "writes exactly one record for a run that finished" do
       responder = ->(_) { { status: 200, body: '[{"id":1}]' } }
       runner(context: build_context(responder: responder), run_store: store, lifecycle: lifecycle)

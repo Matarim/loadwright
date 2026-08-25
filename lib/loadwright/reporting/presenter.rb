@@ -6,7 +6,6 @@ module Loadwright
   module Reporting
     # The one place a value becomes a string.
     #
-    # ===========================================================================
     # WHY A SHARED LAYER RATHER THAN THREE RENDERERS. Every format has to make the
     # same handful of judgement calls, and each of them is a place the tool can lie:
     #
@@ -22,7 +21,6 @@ module Loadwright
     #
     # Putting these in one module means a new format inherits the honesty rather
     # than having to re-derive it.
-    # ===========================================================================
     #
     # NOTHING HERE READS config.execution_mode. The mode is a value carried in run
     # metadata and displayed; every decision about what is measurable comes from

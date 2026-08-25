@@ -21,7 +21,7 @@ Gem::Specification.new do |spec|
     database sessions, and contains mail/job/outbound-HTTP side effects.
   DESC
 
-  spec.homepage = "https://github.com/thepoorman/loadwright"
+  spec.homepage = "https://github.com/Matarim/loadwright"
   spec.license  = "MIT"
 
   # ActiveSupport::IsolatedExecutionState (Rails 7.0+) is what makes per-request
@@ -32,16 +32,18 @@ Gem::Specification.new do |spec|
   spec.required_ruby_version = ">= 3.1.0"
 
   spec.metadata["source_code_uri"] = spec.homepage
+  spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/CHANGELOG.md"
+  spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
   spec.metadata["rubygems_mfa_required"] = "true"
 
   # AGENTS.md ships: the README points agents at it, and it is the
-  # operational reference they act on. CLAUDE.md deliberately does not — it is
-  # internal guidance for developing this gem, not for using it.
+  # operational reference they act on.
   spec.files = Dir[
     "lib/**/*.rb",
     "lib/**/*.tt",
     "README.md",
     "AGENTS.md",
+    "CHANGELOG.md",
     "LICENSE.txt"
   ]
   spec.require_paths = ["lib"]

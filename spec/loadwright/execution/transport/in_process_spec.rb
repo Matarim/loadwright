@@ -15,7 +15,8 @@ RSpec.describe Loadwright::Execution::Transport::InProcess do
         "query" => env["QUERY_STRING"],
         "method" => env["REQUEST_METHOD"],
         "correlation_id" => env["HTTP_X_LOADWRIGHT_REQUEST_ID"],
-        "accept" => env["HTTP_ACCEPT"]
+        "accept" => env["HTTP_ACCEPT"],
+        "host" => env["HTTP_HOST"]
       )
       [200, { "content-type" => "application/json" }, [body]]
     end
@@ -45,6 +46,33 @@ RSpec.describe Loadwright::Execution::Transport::InProcess do
       expect(response.transport).to eq(:in_process)
       expect(JSON.parse(response.body)).to include("path" => "/api/v1/posts", "method" => "GET")
       expect(response.latency_ms).to be >= 0
+    end
+
+    # THE FIRST REAL RUN AGAINST ANY MODERN RAILS APP DEPENDED ON THIS.
+    # ActionDispatch::Integration defaults the Host header to "www.example.com", and
+    # Rails' HostAuthorization middleware blocks it outside the permitted list --
+    # which in development is localhost, 127.0.0.1, ::1, .localhost and .test.
+    #
+    # So every endpoint came back 403 from the middleware, never reaching the app,
+    # and the run reported them all `inconclusive` with the run-level diagnosis
+    # "a uniform 401/403 across endpoints almost always means auth_token_provider is
+    # unset" -- confidently pointing the user at the wrong thing entirely. Found by
+    # installing the built gem into a fresh Rails 8 app.
+    #
+    # examples/sample_app never caught it: it clears config.hosts, as a fixture
+    # reasonably does.
+    it "sends a Host the Rails host guard permits, not ActionDispatch's default" do
+      response = transport.issue(build_request(path: "/api/v1/posts"))
+
+      expect(JSON.parse(response.body)["host"]).to eq("localhost")
+    end
+
+    it "lets an explicitly configured Host win, for an app with its own allowed hosts" do
+      config.default_headers = { "Host" => "api.internal.test" }
+
+      response = transport.issue(build_request(path: "/api/v1/posts"))
+
+      expect(JSON.parse(response.body)["host"]).to eq("api.internal.test")
     end
 
     it "sends the query string as part of the path" do

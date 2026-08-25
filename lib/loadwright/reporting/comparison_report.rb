@@ -8,7 +8,6 @@ module Loadwright
   module Reporting
     # "Did my change make it worse?" rendered for a human.
     #
-    # ===========================================================================
     # SECTION ORDER IS THE DESIGN. A comparison report is read in about four seconds
     # before someone decides whether to merge, so the ordering decides what they
     # actually learn:
@@ -26,7 +25,6 @@ module Loadwright
     #
     # Resolved findings are NOT netted against new ones anywhere in this file. A fix
     # and a regression in one run are two facts, not zero.
-    # ===========================================================================
     class ComparisonReport
       include Presenter
 
@@ -46,6 +44,15 @@ module Loadwright
           warnings_block,
           section("New findings", new_finding_rows, empty: "None. Nothing broke that was not already broken."),
           section("Regressions", regression_rows, empty: "None."),
+          # DIRECTLY AFTER REGRESSIONS, and before anything that reads as good news.
+          # These are the rows most likely to be misread as wins: a query count that
+          # fell because the endpoint returned fewer records. A reader who reaches
+          # "Resolved" or a bare "No regressions." without passing these concludes
+          # their fix worked.
+          section("Changed, but not like-for-like", unattributable_rows, empty: nil,
+                  note: "The basis for comparing these moved between the two runs, so none of " \
+                        "them is reported as a regression or an improvement. The numbers are real; " \
+                        "the comparison is not."),
           section("State changes", transition_rows, empty: nil),
           section("Resolved", resolved_rows, empty: nil),
           section("Within noise", noise_rows, empty: nil,
@@ -85,11 +92,9 @@ module Loadwright
         ids.empty? ? "# Loadwright comparison" : "# Loadwright comparison\n\n`#{ids.join('` → `')}`"
       end
 
-      # ===========================================================================
       # A REFUSAL RENDERS NOTHING ELSE. Putting the deltas underneath a notice saying
       # they are meaningless is an invitation to read them anyway, and the reader who
       # skims is exactly the reader the gate exists to protect.
-      # ===========================================================================
       def refusal_markdown(before, after)
         rows = @comparison.divergences.map { |d| [d.dimension, d.before.inspect, d.after.inspect] }
 
@@ -150,6 +155,14 @@ module Loadwright
         end
 
         rows.empty? ? nil : table(%w[Endpoint Finding Outcome], rows)
+      end
+
+      def unattributable_rows
+        rows = @comparison.unattributable.map do |delta|
+          [delta.endpoint, delta.metric, delta.before, delta.after, change_text(delta), delta.note]
+        end
+
+        rows.empty? ? nil : table(["Endpoint", "Metric", "Before", "After", "Change", "Why not"], rows)
       end
 
       def noise_rows

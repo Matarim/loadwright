@@ -54,9 +54,7 @@ module Loadwright
       def keys = @settings.keys.freeze
     end
 
-    # =========================================================================
     # EXECUTION MODE — references/execution-modes.md
-    # =========================================================================
     setting :execution_mode, :in_process, section: :execution
     setting :allow_in_process_threading, false, section: :execution
     setting :http_server_command, nil, section: :execution
@@ -64,9 +62,7 @@ module Loadwright
     setting :http_target_url, nil, section: :execution
     setting :allow_remote_http_target, false, section: :execution
 
-    # =========================================================================
     # SAFETY — references/production-safety.md
-    # =========================================================================
     setting :enabled_environments, %i[development test], section: :safety
     setting :production_hostname_patterns,
             [/\.rds\.amazonaws\.com\z/, /^prod-/, /\.internal\z/].freeze,
@@ -107,23 +103,18 @@ module Loadwright
     setting :allow_mutating_requests, false, section: :safety
     setting :max_error_rate_before_abort, 0.20, section: :safety
 
-    # CLAUDE.md section 2 corollary 7 requires a duration estimate with a
-    # confirmation prompt above this threshold. It was specified there but
-    # missing from configuration.md's template; added here and to the template.
+    # A run longer than this prints its estimate and asks before starting, so nobody
+    # discovers a four-hour sweep by waiting through it.
     setting :long_run_confirmation_threshold_minutes, 10, section: :safety
 
-    # =========================================================================
     # SIDE-EFFECT CONTAINMENT
-    # =========================================================================
     setting :suppress_mail_delivery, true, section: :containment
     setting :suppress_background_jobs, true, section: :containment
     setting :block_outbound_http, true, section: :containment
     setting :outbound_http_allowlist, %w[localhost 127.0.0.1].freeze, section: :containment
     setting :abort_if_containment_unavailable, true, section: :containment
 
-    # =========================================================================
     # RESPONSE ANALYSIS — references/response-analysis.md
-    # =========================================================================
     setting :require_successful_response, true, section: :response_analysis
     setting :require_schema_valid_response, true, section: :response_analysis
     setting :warn_on_empty_response_with_seeded_data, true, section: :response_analysis
@@ -134,9 +125,7 @@ module Loadwright
     setting :payload_growth_correlation_threshold, 0.8, section: :response_analysis
     setting :serializer_attribution, true, section: :response_analysis
 
-    # =========================================================================
     # RESOURCE CONTENTION — references/resource-contention.md
-    # =========================================================================
     setting :contention_profile, :balanced, section: :contention
     setting :lock_timeout_ms, 3_000, section: :contention
     setting :statement_timeout_ms, 10_000, section: :contention
@@ -153,9 +142,7 @@ module Loadwright
     setting :max_consecutive_quarantines, 3, section: :contention
     setting :max_health_check_retries, 3, section: :contention
 
-    # =========================================================================
     # DISCOVERY — references/discovery-and-load-engine.md
-    # =========================================================================
     setting :openapi_spec_paths, section: :discovery, lazy: lambda {
       rails_root ? [rails_root.join("swagger/v1/swagger.yaml")] : []
     }
@@ -167,17 +154,13 @@ module Loadwright
     setting :included_paths, nil, section: :discovery
     setting :path_param_overrides, {}.freeze, section: :discovery
 
-    # =========================================================================
     # AUTH
-    # =========================================================================
     setting :auth_strategy, :bearer_token, section: :auth
     setting :auth_token_provider, nil, section: :auth
     setting :test_identity_pool_size, 5, section: :auth
     setting :default_headers, { "Accept" => "application/json" }.freeze, section: :auth
 
-    # =========================================================================
     # DATA SEEDING
-    # =========================================================================
     setting :factory_bot_enabled, true, section: :seeding
     setting :factory_map, {}.freeze, section: :seeding
     setting :scale_factors, [1, 10, 50, 200].freeze, section: :seeding
@@ -185,17 +168,13 @@ module Loadwright
     setting :seed_cleanup_strategy, :delete_created_rows, section: :seeding
     setting :unique_field_generator, nil, section: :seeding
 
-    # =========================================================================
     # LOAD SHAPE
-    # =========================================================================
     setting :concurrency_levels, [1, 5, 20].freeze, section: :load_shape
     setting :requests_per_endpoint_per_level, 25, section: :load_shape
     setting :request_timeout, 5, section: :load_shape
     setting :warmup_requests, 3, section: :load_shape
 
-    # =========================================================================
     # INSTRUMENTATION — references/performance-signals.md
-    # =========================================================================
     setting :detect_n_plus_one, true, section: :instrumentation
     setting :track_memory_allocations, true, section: :instrumentation
     setting :track_connection_pool, true, section: :instrumentation
@@ -219,9 +198,7 @@ module Loadwright
     # visible at all (the :test adapter records instead of performing).
     setting :jobs_enqueued_warning_threshold, 10, section: :instrumentation
 
-    # =========================================================================
     # RUN HISTORY & COMPARISON — references/run-comparison.md
-    # =========================================================================
     setting :run_history_dir, section: :history, lazy: lambda {
       rails_root ? rails_root.join("tmp/loadwright/runs") : "tmp/loadwright/runs"
     }
@@ -229,24 +206,18 @@ module Loadwright
     setting :regression_threshold_pct, 20, section: :history
     setting :fail_on_regression, false, section: :history
 
-    # =========================================================================
     # REDACTION — references/reporting.md
-    # =========================================================================
     setting :honor_rails_filter_parameters, true, section: :redaction
     setting :redact_header_patterns, [/authorization/i, /cookie/i, /api[-_]?key/i].freeze, section: :redaction
     setting :redact_sql_bind_values, true, section: :redaction
     setting :include_response_bodies, false, section: :redaction
     setting :redact_additional_patterns, [].freeze, section: :redaction
 
-    # =========================================================================
     # THRESHOLDS
-    # =========================================================================
     setting :fail_on_n_plus_one, false, section: :thresholds
     setting :p95_latency_budget_ms, { default: 500 }.freeze, section: :thresholds
 
-    # =========================================================================
     # REPORTING
-    # =========================================================================
     setting :report_formats, %i[html markdown].freeze, section: :reporting
     setting :report_output_dir, section: :reporting, lazy: lambda {
       rails_root ? rails_root.join("tmp/loadwright") : "tmp/loadwright"
@@ -254,9 +225,7 @@ module Loadwright
     setting :report_filename_pattern, "%Y%m%d-%H%M%S-report", section: :reporting
     setting :write_partial_report_on_abort, true, section: :reporting
 
-    # =========================================================================
     # NOTIFICATIONS
-    # =========================================================================
     setting :slack_webhook_url, nil, section: :notifications
 
     # Contention presets are data, applied once at resolve time to keys the user

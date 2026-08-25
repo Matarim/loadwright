@@ -142,7 +142,6 @@ RSpec.describe Loadwright::History::Redactor do
     end
   end
 
-  # =========================================================================
   # THE TWO PLACES REDACTION HAS TO REACH THAT ARE NOT OBVIOUS.
   #
   # Measurement.unavailable(reason) and CapabilityProfile's downgrade causes read as
@@ -150,7 +149,6 @@ RSpec.describe Loadwright::History::Redactor do
   # written by the code that failed, which knows exactly the things worth protecting --
   # the target URL, the database host, the path the secret was at -- and they are
   # persisted into every run record and rendered into every report.
-  # =========================================================================
   describe "#reason" do
     it "redacts a non-loopback host, which can name internal infrastructure" do
       expect(redactor.reason("the app under test at http://staging.acme.internal:3000 did not answer"))

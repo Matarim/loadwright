@@ -49,7 +49,6 @@ RSpec.describe "architecture invariants" do
     expect(sample.include?(EXEMPTION_MARKER)).to be(true)
   end
 
-  # ==========================================================================
   # SPEC FILES MUST NOT DECLARE COLLIDING TOP-LEVEL CONSTANTS.
   #
   # A constant assigned inside an `RSpec.describe` block lands on Object, not on the
@@ -63,7 +62,6 @@ RSpec.describe "architecture invariants" do
   # passing or failing by seed. It is the same order-dependence class that once
   # disabled twenty-two of the safety guard's examples, and it is invisible in a
   # single-seed run.
-  # ==========================================================================
   describe "spec files" do
     it "declare no colliding top-level constants" do
       declarations = Hash.new { |hash, key| hash[key] = [] }

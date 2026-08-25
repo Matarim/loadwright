@@ -125,7 +125,6 @@ RSpec.describe "end-to-end against examples/sample_app", :sample_app do
     outcome.findings.map(&:kind)
   end
 
-  # ===========================================================================
   shared_examples "a real run that finds the planted defects" do
     let(:recording) { recording_for(mode) }
     let(:result) { recording.result }
@@ -195,8 +194,8 @@ RSpec.describe "end-to-end against examples/sample_app", :sample_app do
 
     # ---------------------------------------------------------------- new detectors
     #
-    # Both of these classes read `not_applicable` until this session shipped their
-    # detectors. These examples are what stops them silently regressing back to it:
+    # Both of these classes read `not_applicable` before their detectors existed.
+    # These examples are what stops them silently regressing back to it:
     # `not_applicable` never escalates, so a broken detector would look like a clean
     # report rather than a failure.
 
@@ -226,8 +225,8 @@ RSpec.describe "end-to-end against examples/sample_app", :sample_app do
       expect(endpoint[:explain][:adapter]).to match(/SQLite/i)
     end
 
-    # The two classes this session activated are now genuinely checked, on every
-    # endpoint that was measurable at all.
+    # Both classes are now genuinely checked, on every endpoint that was measurable
+    # at all.
     # THE FINDING THIS ENABLES. An endpoint at 340ms with 3 queries has no query-count
     # finding at all; if most of it is view time, the advice is "your serialiser" rather
     # than anything about SQL. Without view_runtime that verdict is impossible.
@@ -268,7 +267,6 @@ RSpec.describe "end-to-end against examples/sample_app", :sample_app do
     end
   end
 
-  # ===========================================================================
   describe ":in_process" do
     let(:mode) { :in_process }
     let(:expected_transport) { :in_process }
@@ -310,7 +308,6 @@ RSpec.describe "end-to-end against examples/sample_app", :sample_app do
     end
   end
 
-  # ===========================================================================
   describe ":http" do
     let(:mode) { :http }
     let(:expected_transport) { :http }

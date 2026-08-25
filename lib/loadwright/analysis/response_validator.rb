@@ -182,8 +182,14 @@ module Loadwright
         detail += ". An error path was measured, not the endpoint."
 
         if [401, 403].include?(response.status)
-          detail += " A uniform 401/403 across endpoints almost always means auth_token_provider is " \
-                    "unset or returning an invalid token."
+          # TWO causes, named in order of likelihood, because naming only the first
+          # sends a reader with the second one to configure something that was never
+          # the problem. A 403 from Rails' HostAuthorization middleware never reaches
+          # the application at all, and looks identical from out here.
+          detail += " A uniform 401/403 across endpoints usually means auth_token_provider is " \
+                    "unset or returning an invalid token. If it is every endpoint including " \
+                    "public ones, check config.hosts too: Rails' host guard answers 403 before " \
+                    "the request reaches your app."
         end
 
         detail

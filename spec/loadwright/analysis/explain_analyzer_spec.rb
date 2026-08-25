@@ -39,11 +39,9 @@ RSpec.describe Loadwright::Analysis::ExplainAnalyzer do
 
   def analyzer(connection) = described_class.new(config: config, connection: connection, stdout: StringIO.new)
 
-  # =========================================================================
   # THE RULE THAT MATTERS MOST. EXPLAIN ANALYZE *executes* the statement, so
   # running it on a write performs the write -- on a developer's database, from a
   # tool whose whole premise is that it is safe to run locally.
-  # =========================================================================
   describe "the SELECT-only rule" do
     %w[
       INSERT\ INTO\ posts\ (title)\ VALUES\ ('x')
@@ -140,7 +138,6 @@ RSpec.describe Loadwright::Analysis::ExplainAnalyzer do
     end
   end
 
-  # =========================================================================
   describe "PostgreSQL" do
     def plan_rows(plan) = [{ "QUERY PLAN" => JSON.generate([{ "Plan" => plan }]) }]
 

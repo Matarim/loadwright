@@ -175,14 +175,12 @@ module Loadwright
       0
     end
 
-    # ===========================================================================
     # THE NOISE FLOOR. run-comparison.md: without one, regression_threshold_pct is a
     # guess about what this machine's jitter looks like. With one, the tool knows.
     #
     # It is measured from a SECOND run on the same commit -- two runs of identical code
     # differ only by noise, so the spread between them IS the noise. Nothing is
     # fabricated when there is no second run; the user is told what to do instead.
-    # ===========================================================================
     def measure_noise_floor(baseline)
       sibling = store.list.find do |record|
         record.run_id != baseline.run_id && record.git_sha == baseline.git_sha &&

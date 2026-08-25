@@ -9,7 +9,6 @@ RSpec.describe Loadwright::CLI::AppLoader do
 
   def loader(root) = described_class.new(root: root, stdout: stdout)
 
-  # ===========================================================================
   # STATED, NOT ASSUMED. Every example below whose premise is "no Rails application
   # is loaded" needs that premise to be true, and in this suite it is not: anything
   # tagged :sample_app boots a real Rails app into the suite's own process and leaves
@@ -21,7 +20,6 @@ RSpec.describe Loadwright::CLI::AppLoader do
   # This is the exact failure mode CLAUDE.md's `rake spec:seeds` rule exists for, and
   # it was reproduced here before being fixed: running this file after a :sample_app
   # example turned three green examples red.
-  # ===========================================================================
   shared_context "with no Rails application loaded" do
     before { hide_const("::Rails") }
   end

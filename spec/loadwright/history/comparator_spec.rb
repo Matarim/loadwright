@@ -36,16 +36,14 @@ RSpec.describe Loadwright::History::Comparator do
       "findings" => findings.map { |f| f.is_a?(Hash) ? f : { "kind" => f.to_s } } }
   end
 
-  def cell(key, queries: 3, latency: 100.0, bytes: 1_000, concurrency: 1)
+  def cell(key, queries: 3, latency: 100.0, bytes: 1_000, concurrency: 1, records: nil)
     { "endpoint" => key, "sweep" => "seed_scale", "scale_factor" => 10, "page_size" => nil,
       "requested_concurrency" => concurrency, "queries" => queries, "bytes" => bytes,
-      "latency_ms" => { "p50" => latency } }
+      "records" => records, "latency_ms" => { "p50" => latency } }
   end
 
-  # ==========================================================================
   # THE COMPARABILITY GATE. A plausible-looking meaningless delta is worse than no
   # comparison, because it gets acted on.
-  # ==========================================================================
   describe "the comparability gate" do
     it "refuses two runs at different concurrency levels" do
       result = comparator.compare(record, record(config_overrides: { concurrency_levels: [1, 20] }))
@@ -75,12 +73,10 @@ RSpec.describe Loadwright::History::Comparator do
       expect(result.refusal).to include("config.block_outbound_http")
     end
 
-    # ========================================================================
     # THE DIMENSION THAT IS NOT IN THE CONFIG FINGERPRINT. The seed-scale sweep sends no
     # page-size parameter, so what it holds fixed is the APP's default -- a property of
     # the app, not the run. Both fingerprints match and the runs still measure different
     # things.
-    # ========================================================================
     it "refuses when the app's own default page size changed underneath the run" do
       before = record(page_sizes: { "GET /a" => 25 })
       after = record(page_sizes: { "GET /a" => 50 })
@@ -99,11 +95,9 @@ RSpec.describe Loadwright::History::Comparator do
     end
   end
 
-  # ==========================================================================
   # CAPABILITY, NOT JUST CONFIG. Two runs with identical config are not comparable on
   # query counts if one of them lost query collection partway. Rather than refusing
   # outright, the affected metric is EXCLUDED and named.
-  # ==========================================================================
   describe "the capability intersection" do
     def degraded_capabilities
       timeline = Loadwright::CapabilityTimeline.new(
@@ -164,9 +158,154 @@ RSpec.describe Loadwright::History::Comparator do
     end
   end
 
-  # ==========================================================================
+  # THE TABLE THAT DECIDES WHAT IS COMPARABLE. It sat with three nil entries for a
+  # whole milestone, and nil meant two different things: "needs no capability" and
+  # "nobody has decided yet". `records` was in the second category -- persisted by
+  # every cell, listed here, and compared by nothing at all.
+  #
+  # These examples exist so the next metric cannot be added the same way.
+  describe "the capability requirements table" do
+    it "gives every compared metric an explicit answer, never nil" do
+      expect(described_class::SIGNAL_REQUIREMENTS.values).to all(be_a(Symbol))
+    end
+
+    it "names only capabilities that actually exist" do
+      gated = described_class::SIGNAL_REQUIREMENTS.values
+                                                  .reject { |v| v == described_class::NO_CAPABILITY_REQUIRED }
+
+      expect(gated - Loadwright::CapabilityProfile::SIGNALS).to be_empty
+    end
+
+    # The raise is the point. Comparing an unlisted metric anyway -- the convenient
+    # default -- is exactly the hole the table exists to close.
+    it "refuses to compare a metric it has no entry for" do
+      expect { comparator.send(:comparable?, :allocations, []) }
+        .to raise_error(ArgumentError, /no SIGNAL_REQUIREMENTS entry/)
+    end
+
+    # Documented as uncompared rather than silently absent, so the next reader knows
+    # it was a decision and what unblocks it.
+    it "records which capabilities are deliberately not compared, and why" do
+      expect(described_class::UNCOMPARED_SIGNALS).to include(:clean_memory_attribution)
+      expect(described_class::UNCOMPARED_SIGNALS)
+        .to all(satisfy { |signal| Loadwright::CapabilityProfile::SIGNALS.include?(signal) })
+    end
+
+    it "does not gate a metric on a capability it does not actually need" do
+      # Latency under :in_process is real and comparable to another :in_process run,
+      # even though :true_client_latency is unavailable there. Gating it would exclude
+      # every in-process comparison the tool makes by default.
+      expect(described_class::SIGNAL_REQUIREMENTS[:latency_ms])
+        .to eq(described_class::NO_CAPABILITY_REQUIRED)
+    end
+  end
+
+  # THE DENOMINATOR. A query count only means something next to the number of
+  # records that produced it, and every cell has carried a `records` figure all
+  # along -- it was simply never compared.
+  #
+  # The failure this prevents is the most flattering one a comparison tool can
+  # produce: a developer narrows a scope, breaks a filter, or ships a bug that makes
+  # a collection endpoint return five records instead of thirty. Queries fall 31 ->
+  # 6 and the report says "improvement". It is not an improvement. It is the same
+  # queries-per-record over less data, and the endpoint is arguably broken.
+  describe "a query count whose record count moved underneath it" do
+    it "does not call a proportional query drop an improvement" do
+      before = record(cells: [cell("GET /a", queries: 31, records: 30)], endpoints: [endpoint("GET /a")])
+      after = record(cells: [cell("GET /a", queries: 6, records: 5)], endpoints: [endpoint("GET /a")])
+
+      result = comparator.compare(before, after)
+      queries = result.deltas.find { |d| d.metric.start_with?("queries") }
+
+      expect(queries).not_to be_improvement
+      expect(queries.note).to include("records")
+    end
+
+    # Still SHOWN. run-comparison.md wants the number visible; what it must not carry
+    # is a verdict the denominator does not support.
+    it "still reports the query change, without a verdict it cannot support" do
+      before = record(cells: [cell("GET /a", queries: 31, records: 30)], endpoints: [endpoint("GET /a")])
+      after = record(cells: [cell("GET /a", queries: 6, records: 5)], endpoints: [endpoint("GET /a")])
+
+      queries = comparator.compare(before, after).deltas.find { |d| d.metric.start_with?("queries") }
+
+      expect(queries.before).to eq(31)
+      expect(queries.after).to eq(6)
+      expect(queries).not_to be_regression
+    end
+
+    # The mirror image, and the more dangerous direction: MORE records and more
+    # queries is not automatically an N+1 regression either.
+    it "does not call a query rise a regression when more records were returned" do
+      before = record(cells: [cell("GET /a", queries: 6, records: 5)], endpoints: [endpoint("GET /a")])
+      after = record(cells: [cell("GET /a", queries: 31, records: 30)], endpoints: [endpoint("GET /a")])
+
+      queries = comparator.compare(before, after).deltas.find { |d| d.metric.start_with?("queries") }
+
+      expect(queries).not_to be_regression
+    end
+
+    # The real regression must survive all of this: same records, more queries.
+    it "still calls a query rise at an unchanged record count a regression" do
+      before = record(cells: [cell("GET /a", queries: 3, records: 30)], endpoints: [endpoint("GET /a")])
+      after = record(cells: [cell("GET /a", queries: 47, records: 30)], endpoints: [endpoint("GET /a")])
+
+      queries = comparator.compare(before, after).deltas.find { |d| d.metric.start_with?("queries") }
+
+      expect(queries).to be_regression
+    end
+
+    # Older records, and error responses, carry no record count at all. Absent is not
+    # "changed" -- treating it as such would strip the verdict off every comparison
+    # against a run written before the field existed.
+    it "compares normally when neither run recorded a record count" do
+      before = record(cells: [cell("GET /a", queries: 3, records: nil)], endpoints: [endpoint("GET /a")])
+      after = record(cells: [cell("GET /a", queries: 47, records: nil)], endpoints: [endpoint("GET /a")])
+
+      queries = comparator.compare(before, after).deltas.find { |d| d.metric.start_with?("queries") }
+
+      expect(queries).to be_regression
+    end
+
+    # Growth carries no verdict -- more records is neither better nor worse -- but it
+    # still has to say why the cell is not comparable, or it renders as a bare row
+    # with an empty reason in a section whose entire purpose is giving reasons.
+    it "explains a record-count increase rather than leaving the reason blank" do
+      before = record(cells: [cell("GET /a", queries: 6, records: 5)], endpoints: [endpoint("GET /a")])
+      after = record(cells: [cell("GET /a", queries: 31, records: 30)], endpoints: [endpoint("GET /a")])
+
+      records = comparator.compare(before, after).deltas.find { |d| d.metric.start_with?("returned records") }
+
+      expect(records).to be_unattributable
+      expect(records.note).to include("page size")
+    end
+
+    it "reports the record count change in its own right" do
+      before = record(cells: [cell("GET /a", queries: 31, records: 30)], endpoints: [endpoint("GET /a")])
+      after = record(cells: [cell("GET /a", queries: 6, records: 5)], endpoints: [endpoint("GET /a")])
+
+      records = comparator.compare(before, after).deltas.find { |d| d.metric.start_with?("returned records") }
+
+      expect(records).not_to be_nil
+      expect(records.before).to eq(30)
+      expect(records.after).to eq(5)
+    end
+
+    # An endpoint that stopped returning anything is the strongest version of this,
+    # and it must not be filed as a win.
+    it "treats a collapse to zero records as a regression, not a query improvement" do
+      before = record(cells: [cell("GET /a", queries: 31, records: 30)], endpoints: [endpoint("GET /a")])
+      after = record(cells: [cell("GET /a", queries: 1, records: 0)], endpoints: [endpoint("GET /a")])
+
+      result = comparator.compare(before, after)
+      records = result.deltas.find { |d| d.metric.start_with?("returned records") }
+
+      expect(records).to be_regression
+      expect(result).to be_regressed
+    end
+  end
+
   # QUERY COUNTS ARE THE SIGNAL. Near-deterministic, reproducible on any machine.
-  # ==========================================================================
   describe "query count deltas" do
     it "reports 3 -> 47 as a regression, with no statistical treatment" do
       before = record(cells: [cell("GET /a", queries: 3)], endpoints: [endpoint("GET /a")])
@@ -207,9 +346,7 @@ RSpec.describe Loadwright::History::Comparator do
     end
   end
 
-  # ==========================================================================
   # LATENCY IS MOSTLY NOISE. A tool that cries wolf gets ignored within a week.
-  # ==========================================================================
   describe "latency deltas" do
     def latency_result(before_ms, after_ms, noise_floor: nil)
       comparator.compare(
@@ -243,12 +380,10 @@ RSpec.describe Loadwright::History::Comparator do
       expect(latency_result(100.0, 140.0).regressions.map(&:metric).join).to include("latency")
     end
 
-    # ======================================================================
     # A PERCENTAGE ON SUB-MILLISECOND VALUES IS JITTER WEARING A DECIMAL POINT.
     # 0.65ms -> 0.91ms is "40% slower" and is also a quarter of a millisecond. Local
     # endpoints against a small dev database live in exactly that range, so without an
     # absolute floor the threshold fires on scheduler noise for every fast endpoint.
-    # ======================================================================
     it "does not call a sub-millisecond move a regression, however large the percentage" do
       result = latency_result(0.65, 0.91)
 
@@ -319,11 +454,9 @@ RSpec.describe Loadwright::History::Comparator do
     end
   end
 
-  # ==========================================================================
   # THE TRANSITION THAT MUST NOT READ AS A FIX. An endpoint that went from
   # has_findings to inconclusive lost its findings in the arithmetic. Reporting that as
   # "resolved" tells a developer their fix worked when nothing was even checked.
-  # ==========================================================================
   describe "state transitions" do
     let(:before) do
       record(endpoints: [endpoint("GET /a", state: "has_findings", findings: [:n_plus_one_slope])])
@@ -365,8 +498,20 @@ RSpec.describe Loadwright::History::Comparator do
 
       warning = comparator.compare(record, after).warnings.find { |w| w.include?("different machines") }
 
-      expect(warning).to include("Query, allocation and payload deltas are still reliable")
+      expect(warning).to include("still reliable")
       expect(warning).to include("LATENCY deltas are not")
+    end
+
+    # This line used to promise "allocation deltas", which the comparator does not
+    # compute -- allocations are not persisted per cell. Naming a comparison the
+    # report does not contain tells a reader their memory was checked when nothing
+    # checked it, which is the same confidently-wrong shape as the rest of this file.
+    it "promises no comparison it does not actually perform" do
+      after = record(machine: { "cpu_count" => 2, "os" => "linux", "ruby_version" => "3.3.0" })
+
+      warning = comparator.compare(record, after).warnings.find { |w| w.include?("different machines") }
+
+      expect(warning).not_to include("allocation")
     end
 
     it "warns about a dirty worktree on either side" do

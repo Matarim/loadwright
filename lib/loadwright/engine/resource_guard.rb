@@ -18,7 +18,6 @@ module Loadwright
     # engine is the thing that generates concurrent load, and it must not exist in a
     # form that can generate load without a working guard around it.
     #
-    # ---------------------------------------------------------------------------
     # THE BREAKER/GUARD SPLIT, which is structural rather than something an operator
     # tunes:
     #
@@ -42,7 +41,6 @@ module Loadwright
     #      one request in flight is almost certainly an application connection LEAK —
     #      the endpoint checked out a connection it never returned. Completely
     #      different diagnosis, and the concurrency level is what distinguishes them.
-    # ---------------------------------------------------------------------------
     class ResourceGuard
       # Tier 1 — definitive contention signals on the request path. Resolved by NAME
       # rather than by constant, so the guard loads and behaves sanely in a process

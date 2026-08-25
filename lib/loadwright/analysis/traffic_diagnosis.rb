@@ -6,7 +6,6 @@ module Loadwright
   module Analysis
     # The two things that go wrong on a first run, diagnosed in plain language.
     #
-    # ===========================================================================
     # WHY THIS EXISTS AT ALL. The response validity gate is correct to mark a 429 or a
     # 403 `inconclusive` — no performance verdict may be attached to a response that
     # did not prove it did the work. But correct is not the same as useful. A first-time
@@ -18,7 +17,6 @@ module Loadwright
     # diagnosis rather than a per-endpoint one. A single 403 means an admin endpoint.
     # Every endpoint returning 403 means the token is wrong, and saying so turns a
     # baffling report into a one-line fix.
-    # ===========================================================================
     #
     # It also RE-LABELS the affected endpoints. EndpointOutcome already enumerates
     # `:auth_failed` and `:rate_limited` for exactly this, and their explanations name

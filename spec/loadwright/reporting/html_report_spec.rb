@@ -27,10 +27,8 @@ RSpec.describe Loadwright::Reporting::HtmlReport do
     end
   end
 
-  # ==========================================================================
   # THE THREE STATES. An endpoint we could not validly measure must never render
   # like one that passed.
-  # ==========================================================================
   describe "endpoint states" do
     let(:inconclusive) do
       build_outcome(endpoint: build_endpoint(path: "/admin/stats"), state: :inconclusive,
@@ -83,10 +81,8 @@ RSpec.describe Loadwright::Reporting::HtmlReport do
     end
   end
 
-  # ==========================================================================
   # CAPABILITY PER WINDOW. A single "this mode supports X" banner is a lie in any
   # degraded run -- which is the run where a wrong claim does the most damage.
-  # ==========================================================================
   describe "capability rendering" do
     it "renders one window for a run that never degraded" do
       text = visible_text(render)

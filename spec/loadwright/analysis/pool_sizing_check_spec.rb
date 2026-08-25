@@ -24,6 +24,22 @@ RSpec.describe Loadwright::Analysis::PoolSizingCheck do
   # The pool size is INJECTED rather than stubbed onto ActiveRecord. These examples run
   # in a process where the sample app may or may not have booted, and a premise that
   # depends on that is a premise that passes or fails on spec order.
+  # CONSTRUCTED, not derived, and that is the point. No profile derives
+  # connection_pool_exhaustion as available any more: nothing in a run collects pool
+  # samples, so advertising the signal would be a claim the tool cannot support, and
+  # CapabilityProfile now says so outright.
+  #
+  # The observed half below is still correct code and still has to keep working, for
+  # when the collection endpoint carries pool stats back from the app process the way
+  # it already carries time breakdowns. So these examples state the precondition
+  # explicitly rather than borrowing a derived profile that no longer offers it.
+  def capability_with_pool_observation
+    signals = http_capability.signals.merge(
+      connection_pool_exhaustion: Loadwright::CapabilityProfile::Capability.new(:available, nil)
+    )
+    Loadwright::CapabilityProfile.new(signals)
+  end
+
   def check(capability: nil, pool_tracker: nil, pool_size: 5)
     described_class.new(config: config, capability: capability || http_capability,
                         pool_tracker: pool_tracker, pool_provider: -> { pool_size }).check
@@ -102,12 +118,10 @@ RSpec.describe Loadwright::Analysis::PoolSizingCheck do
     end
   end
 
-  # =========================================================================
   # THE SPLIT. performance-signals.md Part 4: under :in_process the static comparison
   # still works and the observed half does not. Two different Measurement results from
   # one check, never one blanket unavailable -- collapsing them throws away the half
   # that works in the DEFAULT execution mode.
-  # =========================================================================
   describe "under :in_process" do
     it "still performs the static comparison, because it needs no observation" do
       config.http_server_command = "bundle exec puma --threads 1:16"
@@ -141,7 +155,7 @@ RSpec.describe Loadwright::Analysis::PoolSizingCheck do
       config.http_server_command = "bundle exec puma --threads 1:4"
       tracker = FakePoolTracker.new(peak_busy: 4, peak_waiting: 2)
 
-      result = check(pool_tracker: tracker, pool_size: 5)
+      result = check(capability: capability_with_pool_observation, pool_tracker: tracker, pool_size: 5)
 
       expect(result.peak_busy.value).to eq(4)
       expect(result.peak_waiting.value).to eq(2)
@@ -151,8 +165,8 @@ RSpec.describe Loadwright::Analysis::PoolSizingCheck do
       config.http_server_command = "bundle exec puma --threads 1:16"
       tracker = FakePoolTracker.new(peak_waiting: 7)
 
-      expect(check(pool_tracker: tracker, pool_size: 5).findings.first.detail)
-        .to include("This run observed it: 7 thread(s) waiting")
+      expect(check(capability: capability_with_pool_observation, pool_tracker: tracker, pool_size: 5)
+        .findings.first.detail).to include("This run observed it: 7 thread(s) waiting")
     end
 
     # A latent misconfiguration alongside "no contention seen" reads as a contradiction
@@ -161,8 +175,8 @@ RSpec.describe Loadwright::Analysis::PoolSizingCheck do
       config.http_server_command = "bundle exec puma --threads 1:16"
       tracker = FakePoolTracker.new(peak_waiting: 0)
 
-      expect(check(pool_tracker: tracker, pool_size: 5).findings.first.detail)
-        .to include("does not clear it")
+      expect(check(capability: capability_with_pool_observation, pool_tracker: tracker, pool_size: 5)
+        .findings.first.detail).to include("does not clear it")
     end
 
     it "is unavailable against a remote target, where there is no pool to see" do

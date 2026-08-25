@@ -74,14 +74,12 @@ RSpec.describe Loadwright::CLI::RunCommand do
       )
     end
 
-    # ===========================================================================
     # A REFUSAL IS A DESIGNED OUTCOME, NOT A CRASH. Two things matter here and they
     # are easy to get wrong together: the exit code must be distinguishable from
     # "ran fine" AND from "found problems", and the output must not be a backtrace.
     # A stack trace reads as a bug in the tool and sends the user to the wrong
     # codebase; a zero exit reads as a clean bill of health for a run that never
     # happened, which is the single worst thing this tool could report.
-    # ===========================================================================
     it "exits 3 — distinct from both success and findings" do
       expect(refusing_command.call).to eq(described_class::REFUSED)
       expect(described_class::REFUSED).not_to eq(described_class::OK)
@@ -123,11 +121,9 @@ RSpec.describe Loadwright::CLI::RunCommand do
     end
   end
 
-  # ===========================================================================
   # Every designed refusal prints its message, not a backtrace. Catching only
   # SafetyError left three of these escaping as stack traces -- and all three have
   # carefully written messages that exist precisely so the user does not need one.
-  # ===========================================================================
   describe "the other designed refusals" do
     {
       "a named OpenAPI document that is not there" =>
@@ -156,6 +152,50 @@ RSpec.describe Loadwright::CLI::RunCommand do
     end
   end
 
+  # THE FIRST COMMAND A NEW USER RUNS. Found by installing the built gem into a
+  # fresh Rails app and following the README quickstart: `run --dry-run` aborted
+  # outright, because block_outbound_http needs webmock, webmock is not a runtime
+  # dependency, and abort_if_containment_unavailable defaults to true.
+  #
+  # A dry run issues ZERO requests. There is no mail to send, no job to enqueue and
+  # no outbound call to make, so aborting one protects against a risk that cannot
+  # occur -- while blocking the user from the endpoint list, which is the entire
+  # point of the command and the thing the tool tells them to look at first.
+  #
+  # The warning is still printed, loudly, because learning this BEFORE typing
+  # --execute is exactly why containment is installed during a dry run at all.
+  # --execute still aborts; that path issues real requests.
+  describe "when containment cannot be enforced" do
+    before do
+      allow_any_instance_of(Loadwright::SideEffects::Containment)
+        .to receive(:install!).and_raise(Loadwright::ContainmentError, "webmock is not available")
+      allow_any_instance_of(Loadwright::Discovery::Pipeline).to receive(:discover).and_return(
+        Loadwright::Discovery::Pipeline::Result.new(
+          endpoints: [Loadwright::Discovery::Endpoint.new(path: "/api/posts", verb: :get, source: :openapi)],
+          skipped: [], warnings: [], by_source: { openapi: 1 }
+        )
+      )
+    end
+
+    it "still shows a dry run's endpoint list, rather than refusing" do
+      expect(command(execute: false).call).to eq(described_class::OK)
+      expect(stdout.string).to include("DRY RUN")
+    end
+
+    it "says loudly that containment could not be enforced" do
+      command(execute: false).call
+
+      expect(stdout.string).to include("webmock is not available")
+      expect(stdout.string).to include("--execute")
+    end
+
+    # The safety guarantee is unchanged where it means something.
+    it "still refuses a real run" do
+      expect(command(execute: true).call).to eq(described_class::REFUSED)
+      expect(stderr.string).to include("webmock is not available")
+    end
+  end
+
   describe "a dry run" do
     let(:endpoints) do
       [Loadwright::Discovery::Endpoint.new(path: "/api/posts", verb: :get, source: :openapi)]
@@ -169,7 +209,6 @@ RSpec.describe Loadwright::CLI::RunCommand do
       )
     end
 
-    # ===========================================================================
     # A DRY RUN WRITES NO REPORT FILE, for the same reason LoadRunner persists no
     # history record for one: it issues zero requests, so every endpoint in it is
     # `inconclusive` and every measurement absent. Such a file is indistinguishable
@@ -179,7 +218,6 @@ RSpec.describe Loadwright::CLI::RunCommand do
     #
     # This was a live bug, found by running the command rather than by unit-testing
     # it: the first real --dry-run wrote three report files.
-    # ===========================================================================
     it "writes no report file" do
       expect(command(execute: false).call).to eq(described_class::OK)
       expect(report_files).to be_empty
@@ -248,13 +286,11 @@ RSpec.describe Loadwright::CLI::RunCommand do
       expect(exit_code_for(result_with(findings_kinds: [:n_plus_one_slope]))).to eq(described_class::FINDINGS)
     end
 
-    # ===========================================================================
     # INCONCLUSIVE MUST NOT FAIL THE EXIT CODE. An endpoint the run could not measure
     # is a gap in COVERAGE, not a defect in the app. Failing on it would mean the
     # first unauthenticated endpoint in a suite makes every run non-zero forever,
     # which trains people to ignore the exit code entirely -- and then the codes that
     # do mean something stop being read too.
-    # ===========================================================================
     it "is 0 for an inconclusive endpoint" do
       endpoint = Loadwright::Discovery::Endpoint.new(path: "/a", verb: :get, source: :openapi)
       inconclusive = [Loadwright::EndpointOutcome.inconclusive(

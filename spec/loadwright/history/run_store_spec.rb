@@ -58,11 +58,9 @@ RSpec.describe Loadwright::History::RunStore do
       expect(record.config_fingerprint).to eq(config.comparability_fingerprint)
     end
 
-    # =======================================================================
     # REDACTED ON THE WAY IN. The record lands in tmp/, where it can be committed,
     # attached to a ticket, or pasted into Slack. Redacting when something renders it
     # would leave the raw values sitting in the file.
-    # =======================================================================
     # A cell that serialises the things a record must not keep. Only the handful of
     # methods RunResult actually calls on a cell are stubbed; the point is what reaches
     # the FILE, not the cell's own shape.
@@ -131,11 +129,9 @@ RSpec.describe Loadwright::History::RunStore do
     end
   end
 
-  # ==========================================================================
   # `ensure` DOES NOT RUN ON A SIGNAL, and the partial record is often the most
   # interesting one -- the abort itself is usually the finding, and it is what the
   # partial-report path reads from.
-  # ==========================================================================
   describe "#arm! -- surviving an interruption" do
     it "writes whatever the run produced when Lifecycle tears down" do
       lifecycle = Loadwright::Lifecycle.new(stderr: StringIO.new)

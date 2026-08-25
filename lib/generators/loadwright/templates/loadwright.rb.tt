@@ -211,12 +211,19 @@ if defined?(Loadwright)
 <% end -%>
     ]
 <% else -%>
-    # No OpenAPI/Swagger document was found when this file was generated. The
-    # path below is the rswag/rspec-swagger convention; point it at yours, or
-    # leave it and rely on integration-spec recording plus route discovery.
-    config.openapi_spec_paths = [
-      Rails.root.join("swagger/v1/swagger.yaml"),
-    ]
+    # No OpenAPI/Swagger document was found when this file was generated, so this
+    # is COMMENTED OUT deliberately. Naming a document that is not there is a hard
+    # error, not a warning: Loadwright will not run a partial discovery, because an
+    # endpoint that was never tested would be reported as absent rather than
+    # skipped. That rule is right when YOU name the path -- but this generator
+    # guessed it, and a guess must not fail your first run.
+    #
+    # Uncomment and correct it if you have one. The path shown is the
+    # rswag/rspec-swagger convention. Until then, discovery uses integration-spec
+    # recording plus route introspection, which needs no configuration.
+    # config.openapi_spec_paths = [
+    #   Rails.root.join("swagger/v1/swagger.yaml"),
+    # ]
 <% end -%>
 
     # Scanned in "recording" mode to capture real requests from your own specs.
@@ -231,11 +238,13 @@ if defined?(Loadwright)
 <% end -%>
     ]
 <% else -%>
-    # No request-spec directory was found when this file was generated.
-    config.integration_spec_paths = [
-      Rails.root.join("spec/requests"),
-      Rails.root.join("spec/integration"),
-    ]
+    # No request-spec directory was found when this file was generated, so this is
+    # commented out. Setting it makes Loadwright tell you to run `loadwright
+    # record` against a directory that is not there, on every run.
+    # config.integration_spec_paths = [
+    #   Rails.root.join("spec/requests"),
+    #   Rails.root.join("spec/integration"),
+    # ]
 <% end -%>
 
     # Fall back to Rails route introspection for anything neither source

@@ -19,7 +19,6 @@ module Loadwright
   module Engine
     # Drives the matrix and turns responses into outcomes.
     #
-    # ===========================================================================
     # TWO SWEEPS, ONE AXIS FIXED IN EACH. This is the shape decision, not an
     # implementation detail (response-analysis.md Part 2):
     #
@@ -45,7 +44,6 @@ module Loadwright
     #     single-request property, and varying concurrency alongside page size would
     #     reintroduce exactly the unattributable-slope problem the split exists to
     #     avoid.
-    # ===========================================================================
     class LoadRunner
       # One cell of the matrix. Records the concurrency it ACTUALLY ran at, which may
       # be lower than requested after a guard step-down — a report must never present

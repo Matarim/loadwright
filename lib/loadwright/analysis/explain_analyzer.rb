@@ -14,7 +14,6 @@ module Loadwright
     # invisible to the slope heuristic, and the endpoint reads as clean while getting
     # linearly slower with the table. This is the signal that catches it.
     #
-    # ===========================================================================
     # THE SAFETY RULE. `EXPLAIN ANALYZE` EXECUTES THE STATEMENT. Running it on an
     # INSERT/UPDATE/DELETE performs the write — on a developer's database, from a
     # tool whose entire premise is that it is safe to run locally.
@@ -32,7 +31,6 @@ module Loadwright
     # statement touches through a foreign data wrapper — and the failure is a write
     # to a real table. The doc's own tiebreak applies: when in doubt, plain EXPLAIN
     # wins, and here there is always doubt.
-    # ===========================================================================
     #
     # ADAPTERS degrade rather than disappear:
     #

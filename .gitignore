@@ -21,3 +21,16 @@ examples/sample_app/tmp/
 # does not match it.
 examples/sample_app/db/*.sqlite3
 examples/sample_app/db/*.sqlite3-*
+
+# ---------------------------------------------------------------------------
+# Private working material. Not part of the gem and not published.
+#
+# CLAUDE.md and .claude/ are how this gem is BUILT -- design references, build
+# order, and the skill that drives the work. AGENTS.md is different and does
+# ship: it is how the gem is USED, and agents helping someone adopt it need it.
+# The numbered files are the phase briefs the work was done from.
+# ---------------------------------------------------------------------------
+/CLAUDE.md
+/.claude/
+/[0-9][0-9]*-*.md
+/COMMENT-PASS-NOTES.md

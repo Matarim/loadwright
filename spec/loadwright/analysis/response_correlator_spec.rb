@@ -15,14 +15,12 @@ RSpec.describe Loadwright::Analysis::ResponseCorrelator do
     )
   end
 
-  # ===========================================================================
   # THE REGRESSION TEST THIS SUBSYSTEM EXISTS FOR (response-analysis.md Part 2).
   #
   # A properly paginated endpoint with a severe N+1: it returns the same 25 records
   # whether the table holds 10 rows or 10,000, so its query count is FLAT against
   # seeded scale and a seeded-scale slope calls it perfectly healthy. Only varying the
   # RETURNED record count exposes it.
-  # ===========================================================================
   describe "a paginated endpoint with an N+1" do
     # The seed-scale sweep: seeded rows vary 10 -> 10,000, page size fixed. The
     # endpoint returns 25 records every time and issues 26 queries every time.

@@ -8,7 +8,6 @@ module Loadwright
   module History
     # "Did my change make it worse?" -- the question developers actually ask.
     #
-    # ===========================================================================
     # TWO THINGS GOVERN THIS CLASS, and both are about refusing to mislead.
     #
     # 1. THE COMPARABILITY GATE. Two runs are comparable only where their measurement
@@ -43,17 +42,39 @@ module Loadwright
     #    before it is called a regression. Everything below those bars is shown and
     #    labelled "within noise" -- a comparison tool that cries wolf is ignored inside
     #    a week.
-    # ===========================================================================
     class Comparator
-      # Which capability each compared metric depends on. Used for the intersection
-      # gate: a metric whose capability is missing on either side is excluded from the
-      # delta rather than compared against a hole.
+      # EVERY COMPARED METRIC APPEARS HERE, and the value is either the capability it
+      # depends on or NO_CAPABILITY_REQUIRED. There is no default and no nil: a metric
+      # compared without an entry raises, because the failure this table prevents is
+      # a metric being compared against a hole and reported as "no change".
+      #
+      # `nil` used to mean both "needs nothing" and "nobody decided yet", which is how
+      # `records` sat here for a whole milestone with no delta implemented at all.
+      # The sentinel forces the question to be answered rather than skipped.
+      NO_CAPABILITY_REQUIRED = :none
+
       SIGNAL_REQUIREMENTS = {
+        # Query data comes from the app's own instrumentation, and the External
+        # collector cannot retrieve any of it. All the query-derived signals go
+        # unavailable together, so any one of them stands for the group.
         queries: :n_plus_one_pattern_match,
-        bytes: nil,
-        records: nil,
-        latency_ms: nil
+
+        # Response-derived, all three of them: measured from the bytes that came back,
+        # so every collector has them, including External against a remote target.
+        # `latency_ms` deliberately does NOT depend on :true_client_latency -- that
+        # signal is unavailable under :in_process, but an in-process run's latency is
+        # still perfectly comparable to another in-process run's, and the config gate
+        # has already refused a cross-mode comparison.
+        records: NO_CAPABILITY_REQUIRED,
+        bytes: NO_CAPABILITY_REQUIRED,
+        latency_ms: NO_CAPABILITY_REQUIRED
       }.freeze
+
+      # NOT COMPARED, and deliberately so: allocations are not persisted per cell, so
+      # there is nothing to compare. This is why :clean_memory_attribution appears in
+      # no requirement above. Adding an allocation delta means persisting the figure
+      # first, and gating it on that capability when it is.
+      UNCOMPARED_SIGNALS = %i[clean_memory_attribution].freeze
 
       # Query counts are near-deterministic, so the tolerance exists only to absorb a
       # genuinely incidental difference (a cache warming one query earlier). Anything
@@ -97,6 +118,11 @@ module Loadwright
 
         def within_noise? = verdict == :within_noise
 
+        # Real, worth seeing, and carrying no verdict: the basis for comparing it
+        # changed underneath. Rendered in its own section rather than filed as either
+        # a regression or an improvement.
+        def unattributable? = verdict == :unattributable
+
         def to_h
           { endpoint: endpoint, metric: metric, before: before, after: after,
             change: change&.round(4), verdict: verdict, note: note }.compact
@@ -115,6 +141,8 @@ module Loadwright
         def regressions = deltas.select(&:regression?)
 
         def within_noise = deltas.select(&:within_noise?)
+
+        def unattributable = deltas.select(&:unattributable?)
 
         # A new finding is a regression; so is a query-count rise. Resolved findings are
         # deliberately NOT netted against them -- a fix and a regression in one run are
@@ -220,7 +248,7 @@ module Loadwright
         theirs = effective_capabilities(after)
 
         SIGNAL_REQUIREMENTS.filter_map do |metric, signal|
-          next if signal.nil?
+          next if signal == NO_CAPABILITY_REQUIRED
           next if available?(mine, signal) && available?(theirs, signal)
 
           missing = available?(mine, signal) ? "the later run" : "the earlier run"
@@ -235,9 +263,13 @@ module Loadwright
         warnings = []
 
         if before.fingerprint != after.fingerprint
+          # Named precisely. An earlier version of this line promised "allocation
+          # deltas", which are not computed at all -- allocations are not persisted
+          # per cell. Naming a comparison the report does not contain tells the reader
+          # their memory usage was checked when nothing checked it.
           warnings << "these runs were measured on different machines or Ruby/database versions. " \
-                      "Query, allocation and payload deltas are still reliable; LATENCY deltas are not, " \
-                      "and are labelled within-noise more readily as a result."
+                      "Query, record-count and payload deltas are still reliable; LATENCY deltas are " \
+                      "not, and are labelled within-noise more readily as a result."
         end
 
         [[before, "earlier"], [after, "later"]].each do |record, which|
@@ -275,13 +307,11 @@ module Loadwright
         end
       end
 
-      # ===========================================================================
       # A FINDING THAT DISAPPEARED BECAUSE THE ENDPOINT STOPPED BEING MEASURABLE IS NOT
       # A FIX. This is the failure this method exists to prevent: an endpoint that went
       # from `has_findings` to `inconclusive` has lost its findings in the arithmetic,
       # and reporting that as "resolved: N+1" tells a developer their fix worked when
       # nothing was even checked.
-      # ===========================================================================
       def resolved_for(_before, after, key, disappeared)
         state = endpoint_state(after, key)
 
@@ -348,28 +378,110 @@ module Loadwright
 
       def compare_cell(key, shape, old_cell, new_cell, excluded_metrics, noise_floor)
         deltas = []
+        records_moved = records_moved?(old_cell, new_cell)
 
-        unless excluded_metrics.include?(:queries)
-          deltas << count_delta(key, shape, :queries, old_cell["queries"], new_cell["queries"])
+        if comparable?(:queries, excluded_metrics)
+          deltas << count_delta(key, shape, :queries, old_cell["queries"], new_cell["queries"],
+                                records_moved: records_moved)
         end
-        deltas << bytes_delta(key, shape, old_cell["bytes"], new_cell["bytes"])
-        deltas << latency_delta(key, shape, old_cell, new_cell, noise_floor)
+        deltas << records_delta(key, shape, old_cell["records"], new_cell["records"]) if
+          comparable?(:records, excluded_metrics)
+        deltas << bytes_delta(key, shape, old_cell["bytes"], new_cell["bytes"]) if
+          comparable?(:bytes, excluded_metrics)
+        deltas << latency_delta(key, shape, old_cell, new_cell, noise_floor) if
+          comparable?(:latency_ms, excluded_metrics)
 
         deltas.compact
+      end
+
+      # Raises rather than defaulting. A metric compared without a SIGNAL_REQUIREMENTS
+      # entry has had no capability decision made about it, and the safe-looking
+      # default -- compare it anyway -- is precisely the bug this gate exists to stop.
+      def comparable?(metric, excluded_metrics)
+        unless SIGNAL_REQUIREMENTS.key?(metric)
+          raise ArgumentError,
+                "#{metric.inspect} is compared but has no SIGNAL_REQUIREMENTS entry. Add the " \
+                "capability it depends on, or NO_CAPABILITY_REQUIRED with the reason it needs none."
+        end
+
+        !excluded_metrics.include?(metric)
+      end
+
+      # THE DENOMINATOR MOVED. A query count means nothing on its own -- it means
+      # something next to the number of records that produced it.
+      #
+      # Every cell has carried a `records` figure since the engine was built; it was
+      # simply never compared. The result was the most flattering wrong answer a
+      # comparison tool can give: narrow a scope, break a filter, or ship a bug that
+      # makes a collection return 5 records instead of 30, and queries fall 31 -> 6.
+      # Reported as an improvement, that tells a developer their N+1 is fixed when
+      # what actually happened is that their endpoint stopped returning data.
+      #
+      # Absent on BOTH sides is not "moved" -- error responses carry no record count,
+      # and neither do records written before the field existed. Stripping the verdict
+      # from those would gut the comparison for every older run.
+      def records_moved?(old_cell, new_cell)
+        before = old_cell["records"]
+        after = new_cell["records"]
+        return false if before.nil? || after.nil?
+
+        before != after
       end
 
       # NO STATISTICAL TREATMENT, deliberately. A query count is close to deterministic:
       # 3 -> 47 is unambiguous, reproducible on any machine, in any mode, under any
       # load. Applying a noise threshold to it would only ever hide a real regression.
-      def count_delta(key, shape, metric, before, after)
+      def count_delta(key, shape, metric, before, after, records_moved: false)
         return nil if before.nil? || after.nil?
         return nil if (after - before).abs <= COUNT_TOLERANCE
 
         Delta.new(
           endpoint: key, metric: "#{metric} (#{shape})", before: before, after: after,
           change: before.zero? ? nil : (after - before) / before.to_f,
-          verdict: after > before ? :regression : :improvement,
-          note: after > before ? "query count is near-deterministic; this is a real change, not noise" : nil
+          verdict: verdict_for_count(after, before, records_moved),
+          note: count_note(after, before, records_moved)
+        )
+      end
+
+      # SHOWN, but without a verdict the denominator cannot support. Neither
+      # :regression nor :improvement -- the number is real and worth seeing, and the
+      # only honest reading of it is alongside the record count that changed under it.
+      def verdict_for_count(after, before, records_moved)
+        return :unattributable if records_moved
+
+        after > before ? :regression : :improvement
+      end
+
+      def count_note(after, before, records_moved)
+        if records_moved
+          return "the number of records returned changed too, so this is not a like-for-like " \
+                 "comparison — see the returned-records row for the same cell"
+        end
+
+        "query count is near-deterministic; this is a real change, not noise" if after > before
+      end
+
+      # A COLLECTION THAT STOPPED RETURNING THINGS is a regression in its own right,
+      # and the strongest version of the case above. Growth is reported without a
+      # verdict: more records is not itself better or worse, and at an unchanged scale
+      # factor it usually means the app's own default page size moved.
+      def records_delta(key, shape, before, after)
+        return nil if before.nil? || after.nil? || before == after
+
+        Delta.new(
+          endpoint: key, metric: "returned records (#{shape})", before: before, after: after,
+          change: before.zero? ? nil : (after - before) / before.to_f,
+          verdict: after < before ? :regression : :unattributable,
+          note: if after < before
+                  "the endpoint returned fewer records at the same scale factor and page size. " \
+                  "A narrowed scope or a broken filter looks exactly like this, and it makes any " \
+                  "query-count drop for this cell meaningless."
+                else
+                  "the endpoint returned more records at the same scale factor and page size, " \
+                  "usually because its own default or maximum page size moved. More records is " \
+                  "neither better nor worse, but any query-count rise for this cell is explained " \
+                  "by it rather than by an N+1."
+                end
         )
       end
 

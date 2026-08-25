@@ -33,6 +33,19 @@ module Loadwright
 
         def ready? = !application.nil?
 
+        # ActionDispatch::Integration defaults this to "www.example.com", which Rails'
+        # HostAuthorization middleware BLOCKS: its development allow-list is
+        # localhost, 127.0.0.1, ::1, .localhost and .test. Every request would be
+        # answered 403 by the middleware without ever reaching the app, and the run
+        # would report every endpoint `inconclusive` -- with the run-level diagnosis
+        # blaming auth_token_provider, which is exactly the confidently-wrong answer
+        # this tool exists to avoid.
+        #
+        # "localhost" is what a developer hitting their own app types, and it is on
+        # that allow-list. An app with its own allowed hosts can still override it
+        # through config.default_headers["Host"], which merges over this.
+        DEFAULT_HOST = "localhost"
+
         def start!
           load_integration!
           raise ServerError, "no Rails application is available for :in_process execution" unless ready?
@@ -72,7 +85,8 @@ module Loadwright
           load_integration!
 
           @mutex.synchronize do
-            @sessions[Thread.current.object_id] ||= ::ActionDispatch::Integration::Session.new(application)
+            @sessions[Thread.current.object_id] ||=
+              ::ActionDispatch::Integration::Session.new(application).tap { |s| s.host = DEFAULT_HOST }
           end
         end
 

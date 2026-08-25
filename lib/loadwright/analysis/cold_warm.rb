@@ -15,7 +15,6 @@ module Loadwright
     # cold first request is 3s has a worst case nobody has measured, and it is the case
     # that happens to everyone at once.
     #
-    # ===========================================================================
     # WHAT WE CAN HONESTLY CLAIM, which is less than "cold".
     #
     # Rails' own cache can be cleared. The database buffer cache and the OS page cache
@@ -29,7 +28,6 @@ module Loadwright
     # the environment it was pointed at, which is the category of harm the whole safety
     # design exists to prevent, so the store type decides: process-local stores are
     # cleared, shared stores are left alone and the measurement says so.
-    # ===========================================================================
     class ColdWarm
       # Stores that live in this process and affect nobody else. Anything not on this
       # list is treated as shared, because the failure of guessing wrong is

@@ -340,6 +340,35 @@ MUTATIONS = [
       "valid=\#{verdict.valid?} reason=\#{verdict.reason.inspect}"
     PROOF
   ),
+  # The comparison layer's version of the validity gate above, and the same failure
+  # mode: a number reported with a verdict the data does not support. Removing this
+  # guard turns "your endpoint returned 40% fewer records" into "your query count
+  # improved" -- which reads as a fix and gets acted on as one.
+  Mutation.new(
+    name: "comparison: query delta keeps its verdict when the record count moved",
+    file: "lib/loadwright/history/comparator.rb",
+    from: "        return :unattributable if records_moved",
+    to: "        # mutated: denominator gate removed",
+    spec: "spec/loadwright/history/comparator_spec.rb",
+    proof: <<~PROOF
+      c = Loadwright::History::Comparator.new(config: Loadwright::Configuration.new)
+      d = c.send(:count_delta, "GET /a", "cell", :queries, 31, 6, records_moved: true)
+      "verdict=\#{d.verdict.inspect}"
+    PROOF
+  ),
+  # An endpoint that stopped returning things is a defect however fast it got.
+  Mutation.new(
+    name: "comparison: a collapse in returned records is not called a regression",
+    file: "lib/loadwright/history/comparator.rb",
+    from: "          verdict: after < before ? :regression : :unattributable,",
+    to: "          verdict: :unattributable,",
+    spec: "spec/loadwright/history/comparator_spec.rb",
+    proof: <<~PROOF
+      c = Loadwright::History::Comparator.new(config: Loadwright::Configuration.new)
+      d = c.send(:records_delta, "GET /a", "cell", 30, 0)
+      "verdict=\#{d.verdict.inspect}"
+    PROOF
+  ),
   Mutation.new(
     name: "coverage: advisory class allowed to escalate",
     file: "lib/loadwright/coverage.rb",

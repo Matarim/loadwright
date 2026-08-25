@@ -59,6 +59,29 @@ module Loadwright
     end
 
     NO_QUERY_CAPTURE = "no collector middleware; query data cannot be retrieved from the target"
+
+    # NOT COLLECTED IN THIS VERSION, and said so rather than advertised.
+    #
+    # MemoryTracker and ConnectionPoolTracker are built and specced, and nothing in a
+    # run instantiates either. Without this, the http+middleware profile advertised
+    # both signals as `available`, the report rendered that in "what this run could
+    # measure", and no allocation figure or pool sample was ever produced. A tool
+    # whose entire thesis is that an unmeasured signal must say so does not get to
+    # make an exception for its own unfinished subsystems.
+    #
+    # Neither is a quick wire-up, which is why this is a stated gap rather than a
+    # TODO. Under :http the app runs in a SEPARATE PROCESS, so sampling the harness's
+    # own pool or heap measures the wrong thing entirely -- both figures have to come
+    # back over the collection endpoint the way Analysis::TimeBreakdown's already do.
+    #
+    # WHEN THAT LANDS: delete the two assignments below and the matrix in AGENTS.md
+    # section 5.1 will go red until it is corrected, which is intended.
+    NOT_COLLECTED_SIGNALS = %i[clean_memory_attribution connection_pool_exhaustion].freeze
+
+    NOT_COLLECTED_MEMORY = "allocation figures are not collected yet; the collector does not carry them, " \
+                           "so no memory number in this report would be a measurement"
+    NOT_COLLECTED_POOL   = "pool samples are not collected yet; under :http the app's pool lives in another " \
+                           "process, so it has to come back over the collection endpoint"
     NO_REAL_THREADS  = "in-process execution has no server thread pool; use execution_mode = :http"
     NO_APP_PROCESS   = "harness shares the app's process; use execution_mode = :http"
 
@@ -87,6 +110,11 @@ module Loadwright
             clean_memory_attribution
           ].each { |s| signals[s] = Capability.new(:unavailable, NO_QUERY_CAPTURE) }
         end
+
+        # Applied before the transport rules, which then overwrite these two with the
+        # more specific in-process reasons where those apply.
+        signals[:clean_memory_attribution] = Capability.new(:unavailable, NOT_COLLECTED_MEMORY)
+        signals[:connection_pool_exhaustion] = Capability.new(:unavailable, NOT_COLLECTED_POOL)
 
         if transport == :in_process
           # execution-modes.md: these are suppressed entirely, not reported as

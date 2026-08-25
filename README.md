@@ -209,6 +209,26 @@ Without that guard, booting production raises `NameError` and your app does not
 start. The generator writes it for you; do not remove it. (Bullet's initializer
 does the same thing for the same reason.)
 
+**Add `webmock` to the same group** if it isn't there already:
+
+```ruby
+group :development, :test do
+  gem "loadwright"
+  gem "webmock"    # required for config.block_outbound_http, which is on by default
+end
+```
+
+Blocking outbound HTTP is how Loadwright keeps a load test from calling real
+third-party APIs a few hundred times from your laptop, and `webmock` is what
+enforces it. Without it, `--execute` refuses to run rather than proceeding
+unprotected. It is not a hard dependency of the gem because it is a testing
+library with opinions of its own, and forcing a version on your app would be
+worse than asking. (`--dry-run` still works without it — it issues no requests —
+and will warn you.)
+
+If you'd rather not add it, set `config.block_outbound_http = false` and accept
+that a run may call third-party APIs for real.
+
 Then:
 
 ```console
@@ -912,8 +932,12 @@ Complete, copy-pasteable initializers in [`examples/`](examples):
 
 ## Contributing
 
-Development documentation lives in [`CLAUDE.md`](CLAUDE.md) and
-`.claude/skills/loadwright-development/`.
+**A note on the comments.** The source cites design documents by name —
+`production-safety.md`, `response-analysis.md`, `CLAUDE.md section 2`, and others.
+Those are internal design notes, not published with the gem, so don't go looking for
+them in this repository. Nothing is hidden by their absence: each citation is a
+pointer to *why* a decision was made, and the reasoning itself is written out in the
+comment around it. The name is provenance, not a dependency.
 
 ```console
 $ bundle install

@@ -14,7 +14,6 @@ module Loadwright
     # laptop on a train; one that needs the network to render is one that renders
     # blank exactly when someone is trying to use it.
     #
-    # ===========================================================================
     # WHAT THIS FILE IS NOT ALLOWED TO DO, because the rendering layer is the last
     # place these can go wrong and the easiest place to lose them:
     #
@@ -33,7 +32,6 @@ module Loadwright
     #
     #   * MAKE `inconclusive` LOOK LIKE `healthy`. Three states, three colours,
     #     three labels, and the summary counts them separately.
-    # ===========================================================================
     class HtmlReport
       include Presenter
 

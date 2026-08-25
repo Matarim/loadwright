@@ -8,7 +8,6 @@ RSpec.describe Loadwright::Discovery::Pipeline do
 
   subject(:pipeline) { described_class.new(config: config, stdout: stdout) }
 
-  # ===========================================================================
   # AN EMPTY DIRECTORY, STATED RATHER THAN ASSUMED. `report_output_dir` has a LAZY
   # DEFAULT derived from `rails_root`, so where the integration-spec recording is
   # looked for depends on whether a :sample_app example has already booted Rails into
@@ -18,7 +17,6 @@ RSpec.describe Loadwright::Discovery::Pipeline do
   # This is not hypothetical: the "tells the user how to produce a recording"
   # example below passed on its own and failed in the full suite, because a manual
   # CLI run had left a recorded-requests.json exactly where the lazy default pointed.
-  # ===========================================================================
   around do |example|
     Dir.mktmpdir("pipeline-") do |dir|
       config.report_output_dir = dir
@@ -42,14 +40,12 @@ RSpec.describe Loadwright::Discovery::Pipeline do
   end
 
   describe "warnings about sources that found nothing" do
-    # ===========================================================================
     # THE NOISE PROBLEM. Both path settings have LAZY DEFAULTS pointing at
     # conventional locations (swagger/v1/swagger.yaml, spec/requests). Warning
     # whenever the value is non-empty meant every app without a swagger directory got
     # two warnings about sources it had never asked for -- on every run. A warning
     # channel that cries wolf on a default configuration stops being read, which
     # costs the warnings that matter.
-    # ===========================================================================
     it "stays quiet about an OpenAPI document the user never asked for" do
       stub_sources(routes: [endpoint("/a")])
 

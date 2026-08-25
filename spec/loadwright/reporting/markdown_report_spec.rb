@@ -10,11 +10,9 @@ RSpec.describe Loadwright::Reporting::MarkdownReport do
                   reason: :unsuccessful_status)
   end
 
-  # ==========================================================================
   # THE HAZARD THIS FORMAT CARRIES. It is the one most likely to be pasted somewhere
   # without its context, and it has no colour to lean on -- so every distinction the
   # HTML report makes visually has to survive here as TEXT.
-  # ==========================================================================
   describe "what has to survive being pasted" do
     it "spells out each state in words rather than relying on styling" do
       text = render(outcomes: [inconclusive])
@@ -83,10 +81,16 @@ RSpec.describe Loadwright::Reporting::MarkdownReport do
       expect(text).to include("the middleware stopped answering")
     end
 
+    # CONSTRUCTED, not derived. No pairing derives everything as available any more:
+    # memory and pool are collected by nothing, and CapabilityProfile says so rather
+    # than advertising them. The all-available RENDERING still has to work -- it is
+    # what a fully-wired run will print -- so the precondition is stated here instead
+    # of borrowed from a profile that no longer meets it.
     it "says so plainly when everything was available" do
-      timeline = Loadwright::CapabilityTimeline.new(
-        Loadwright::CapabilityProfile.derive(transport: :http, collector: :middleware)
-      )
+      all_available = Loadwright::CapabilityProfile::SIGNALS.to_h do |signal|
+        [signal, Loadwright::CapabilityProfile::Capability.new(:available, nil)]
+      end
+      timeline = Loadwright::CapabilityTimeline.new(Loadwright::CapabilityProfile.new(all_available))
 
       expect(render(timeline: timeline)).to include("Everything Loadwright measures was available")
     end

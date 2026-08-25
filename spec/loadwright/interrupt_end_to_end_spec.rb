@@ -4,7 +4,6 @@ require "shellwords"
 
 # SIGINT DURING AN :http RUN, end to end, with a real signal.
 #
-# ===========================================================================
 # WHY THIS NEEDED ITS OWN FILE. Both halves of this were already specced, and
 # separately they both passed:
 #
@@ -25,7 +24,6 @@ require "shellwords"
 # simulated one exercises the watcher and skips the trap handler, and the trap
 # handler is where the constraints actually bite: no mutex, no I/O object creation.
 # `exit_on_signal: false` keeps it from taking the suite down with it.
-# ===========================================================================
 RSpec.describe "SIGINT during an :http run", :sample_app do
   let(:stdout) { StringIO.new }
   let(:lifecycle) { Loadwright::Lifecycle.new(stderr: StringIO.new) }

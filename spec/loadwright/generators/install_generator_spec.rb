@@ -142,6 +142,39 @@ RSpec.describe Loadwright::Generators::InstallGenerator do
       expect(initializer).to include('Rails.root.join("swagger/v1/swagger.yaml")')
     end
 
+    # THE FIRST RUN MUST WORK. Naming an OpenAPI document that is not there is a
+    # hard error by design -- discovery refuses to run partially, because an endpoint
+    # that was never tested would be reported as absent rather than skipped. That is
+    # right when the USER names the path. It is wrong when the GENERATOR guessed it.
+    #
+    # Leaving it live meant `rails generate loadwright:install` followed by
+    # `loadwright run --dry-run` -- the exact sequence in the README -- died at
+    # discovery on a file the user had never asked for. Found by installing the built
+    # gem into a fresh Rails app and following the quickstart.
+    it "leaves the guessed openapi path commented out, so the first run does not die on it" do
+      run_generator!
+
+      expect(initializer).to match(/^\s*#\s*config\.openapi_spec_paths = \[/)
+      expect(initializer).not_to match(/^\s*config\.openapi_spec_paths = \[/)
+    end
+
+    it "leaves guessed integration spec paths commented out too" do
+      run_generator!
+
+      expect(initializer).to match(/^\s*#\s*config\.integration_spec_paths = \[/)
+      expect(initializer).not_to match(/^\s*config\.integration_spec_paths = \[/)
+    end
+
+    # ...but a path it actually FOUND is set live, because that one is not a guess.
+    it "sets a detected path live rather than commenting it out" do
+      FileUtils.mkdir_p(app_file("swagger/v1"))
+      File.write(app_file("swagger/v1/swagger.yaml"), "openapi: 3.0.0\n")
+
+      run_generator!
+
+      expect(initializer).to match(/^\s*config\.openapi_spec_paths = \[/)
+    end
+
     it "pre-fills integration_spec_paths from directories that exist" do
       FileUtils.mkdir_p(app_file("spec/requests"))
 
