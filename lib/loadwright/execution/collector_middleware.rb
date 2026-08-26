@@ -224,6 +224,7 @@ module Loadwright
           "duration_ms" => query[:duration_ms],
           "name" => query[:name],
           "call_site" => query[:call_site],
+          "field_path" => query[:field_path],
           "sql" => query[:sql]
         }.compact
       end

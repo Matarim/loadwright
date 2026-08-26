@@ -214,7 +214,8 @@ module Loadwright
             confidence: :high,
             detail: "the same query ran #{worst.last.length} times in a single request: #{worst.first}",
             evidence: { fingerprint: worst.first, occurrences: worst.last.length,
-                        call_site: worst.last.first[:call_site] },
+                        call_site: worst.last.first[:call_site],
+                        resolver: worst.last.first[:field_path] }.compact,
             suggestion: FixSuggestion.for(worst.first)
           )
         end

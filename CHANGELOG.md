@@ -32,9 +32,36 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Suggestions are advisory: they never change an outcome state or the exit code,
   and a query shape that is not recognised gets no suggestion rather than a
   guessed one.
+- **GraphQL operations are discovered and measured.** Every GraphQL operation is a
+  `POST` to one path, so path-based discovery reported an entire API as one row.
+  Operations are now the unit of work, sourced from `.graphql` documents or an
+  inline list — never generated from the schema, because a generated query measures
+  traffic the app never receives. Two consequences worth naming: a `query` counts as
+  a **read** despite travelling by `POST`, so measuring one does not require
+  `allow_mutating_requests`; and a failed GraphQL query answers **HTTP 200**, so the
+  validity gate now recognises the `errors` envelope and reports those endpoints
+  `inconclusive` instead of fast and healthy.
+- **GraphQL pagination is swept.** A paginated operation's query count is flat
+  against seeded scale, so only varying the page size reveals an N+1 behind it —
+  and in GraphQL the page size is a variable inside the document rather than a
+  query parameter. Loadwright varies a variable named in
+  `graphql_page_size_variables` across `page_size_sweep`, and counts returned
+  records from a plain list field or from `edges`/`nodes` on a Relay connection.
+  An operation that hardcodes `first: 10` is reported as unsweepable, with the
+  parameterisation to make it sweepable, rather than measured three times at the
+  same size and reported flat.
+- **Per-resolver attribution for GraphQL.** `trace_with
+  Loadwright::Instrumentation::GraphqlTracer` on your schema makes findings name
+  the resolver — "resolved by `Author.postCount`" — rather than only the operation.
+  The tracer no-ops outside a run, so it is safe to leave installed, and `graphql`
+  remains a non-dependency: it is a plain module your schema opts into.
 
 ### Fixed
 
+- **The two execution modes sent different content types for the same request.**
+  `:http` JSON-encoded a structured body; `:in_process` form-encoded it, turning
+  every value into a string. Invisible for most REST params, which Rails coerces
+  anyway — and fatal for GraphQL, where `Int!` rejects `"3"`.
 - **Authentication was never sent.** `IdentityPool#resolve!` was called from nowhere
   in `lib/`, so a configured `auth_token_provider` produced a pool whose tokens were
   never resolved: every request went out unauthenticated, every endpoint returned
@@ -131,8 +158,8 @@ Stated here rather than left to be discovered:
 - **An `:http` run against a server Loadwright did not boot** cannot be
   instrumented, so it reports honestly reduced capability rather than confident
   numbers it never measured.
-- **GraphQL is not supported.** Path-based discovery does not fit one endpoint
-  with N resolvers.
+- **GraphQL subscriptions are skipped.** They are not answered over a plain HTTP
+  POST, so there is nothing to measure. Queries and mutations are fully supported.
 - **Multiple databases and read replicas** are not modelled; pool tracking
   assumes a single pool.
 - **Tested on Ruby 4.0 and Rails 8.1.** The gemspec floor of Ruby 3.1 / Rails 7.0

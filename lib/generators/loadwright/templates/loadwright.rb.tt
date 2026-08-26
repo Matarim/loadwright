@@ -247,6 +247,33 @@ if defined?(Loadwright)
     # ]
 <% end -%>
 
+    # GRAPHQL. Every operation is a POST to one path, so there are no endpoints to
+    # discover: the unit of work is the named operation. Setting graphql_path turns
+    # this on; point it at your schema's route.
+    #
+    # Operations come from documents you already have, or from a list here.
+    # Loadwright will not generate them from your schema by introspection: a
+    # generated query exercises field combinations nobody asks for, and measures
+    # traffic your app never receives.
+    #
+    # A GraphQL `query` counts as a READ even though it travels by POST, so
+    # allow_mutating_requests is not needed to measure one. A `mutation` does count
+    # as a write, and is held behind that gate like any other.
+    # config.graphql_path = "/graphql"
+    # config.graphql_document_paths = ["app/graphql/queries/*.graphql"]
+    # config.graphql_operations = [
+    #   { name: "PostsWithComments",
+    #     query: "query PostsWithComments($first: Int!) { posts(first: $first) { id } }",
+    #     variables: { "first" => 25 } }
+    # ]
+
+    # PAGINATION. The page-size sweep is what catches an N+1 hiding behind
+    # pagination, and in GraphQL the page size lives in a VARIABLE rather than a
+    # query parameter. An operation that hardcodes `first: 10` cannot be varied and
+    # is reported as unsweepable; parameterise it as `$first` and it can be.
+    # These are the variable names treated as a page size.
+    # config.graphql_page_size_variables = %w[first last pageSize limit]
+
     # Fall back to Rails route introspection for anything neither source
     # covers (lower fidelity — no example params).
     config.route_discovery = true

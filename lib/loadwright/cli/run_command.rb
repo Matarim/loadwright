@@ -270,7 +270,7 @@ module Loadwright
                         cells: estimate.cells, requests: estimate.requests, minutes: estimate.estimated_minutes)]
         lines << "  #{resource_guard.describe_budget}"
         if estimate.mutating_requests.positive?
-          lines << "  #{estimate.mutating_requests} of them MUTATING (allow_mutating_requests is on)"
+          lines << "  #{estimate.mutating_requests} of them MUTATING (allow_mutating_requests = true)"
         end
         lines
       end

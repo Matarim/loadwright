@@ -6,24 +6,11 @@ module Loadwright
   module Seeding
     # Logs in the way a client does, and keeps the token.
     #
-    # WHY THIS EXISTS. `auth_token_provider` asks the user to produce a valid
-    # credential from inside their initializer. For a JWT app that is a line of code;
-    # for a session app it means hand-assembling a cookie, and for anything with a
-    # real login flow it means reimplementing that flow in config. Unset or wrong
-    # auth is the most common first-run failure this tool has, and "write the code
-    # that mints a token" is a large part of why.
+    # ONE LOGIN PER CREDENTIAL, ONCE, BEFORE THE RUN -- a login is usually the most
+    # expensive endpoint an app has, and paying it per request would put someone
+    # else's bcrypt inside every latency number reported.
     #
-    # So: name the request your own clients make, and where the token is in the
-    # answer. Loadwright issues it through the same transport as the run.
-    #
-    # ONE LOGIN PER CREDENTIAL, ONCE, BEFORE THE RUN. Not per request -- a login is
-    # usually the most expensive endpoint an app has (bcrypt is deliberately slow),
-    # and paying it per request would put someone else's password hashing inside
-    # every latency number this tool reports.
-    #
-    # These requests are NOT measured and NOT reported as endpoints. They are setup,
-    # the same as seeding, and folding them into the results would report the login
-    # endpoint's performance as though the run had been asked about it.
+    # These requests are setup: never measured, never reported as endpoints.
     class LoginFlow
       REQUIRED_KEYS = %i[path credentials extract].freeze
 

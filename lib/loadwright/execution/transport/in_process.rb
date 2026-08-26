@@ -58,11 +58,18 @@ module Loadwright
         def perform(request, started_ms)
           session = session_for_current_thread
 
+          # `as: :json` when there is a structured body, so both transports send the
+          # same thing: :http already JSON-encodes and sets the content type, while
+          # ActionDispatch would otherwise form-encode and turn every value into a
+          # string. That difference is invisible for most REST params, which Rails
+          # coerces anyway, and fatal for GraphQL -- `Int!` rejects "3".
+          json = request.body.is_a?(Hash) || request.body.is_a?(Array)
+
           session.process(
             request.verb,
             request.full_path,
-            params: request.body,
-            headers: rack_headers(request)
+            **{ params: request.body, headers: rack_headers(request) },
+            **(json ? { as: :json } : {})
           )
 
           response = session.response

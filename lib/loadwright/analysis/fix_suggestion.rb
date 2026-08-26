@@ -2,26 +2,14 @@
 
 module Loadwright
   module Analysis
-    # Turns "the same query ran 130 times" into "here is the shape of the fix".
+    # The likely fix for a repeated query, from its shape.
     #
-    # The report already names the repeated query and the file and line it came from,
-    # which is most of the diagnosis. What it did not do is close the last gap: the
-    # reader still has to recognise WHICH kind of N+1 this is, and the kinds have
-    # different fixes. Getting that wrong wastes an afternoon on the wrong change.
+    # `includes` does NOT fix a repeated COUNT -- preloading still counts with a
+    # query unless the code stops calling `.count` -- so that case suggests a counter
+    # cache instead. Do not "simplify" it back to `includes`.
     #
-    # THE ONE THAT MATTERS MOST, and that most advice gets wrong: `includes` does not
-    # fix a repeated COUNT. Preloading the association still issues a COUNT per record
-    # unless the code stops counting -- so the fix is a counter cache, or loading the
-    # records and using `size` on the loaded collection. Telling someone to add
-    # `includes(:posts)` to fix `SELECT COUNT(*) FROM posts WHERE author_id = ?` sends
-    # them to make a change that does not help, and then to distrust the tool.
-    #
-    # SUGGESTIONS, NOT VERDICTS. This reads a normalised query shape; it has no idea
-    # what the surrounding code intends. So it never changes an outcome state, never
-    # contributes to an exit code, and is phrased as a starting point. Where the shape
-    # is not one it recognises, it says nothing at all rather than guessing -- an
-    # invented fix is worse than none, and this is the part of a report a reader is
-    # most likely to act on without checking.
+    # Suggestions never change an outcome state or the exit code, and an unrecognised
+    # shape returns nil rather than a guess.
     module FixSuggestion
       # `SELECT COUNT(*) FROM "posts" WHERE "posts"."author_id" = ?`
       COUNT_PER_RECORD = /\ASELECT\s+COUNT\(.*?\)\s+FROM\s+[`"']?(\w+)[`"']?.*?WHERE.*?[`"']?\w+[`"']?\.?[`"']?(\w+_id)[`"']?\s*=/im

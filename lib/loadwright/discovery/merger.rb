@@ -34,12 +34,12 @@ module Loadwright
       # `sources` is a Hash of source name => Array(Endpoint), so the caller decides
       # which sources ran and the merge does not have to know how to build any of
       # them.
-      def merge(openapi: [], integration_spec: [], route: [], warnings: [])
+      def merge(openapi: [], integration_spec: [], route: [], graphql: [], warnings: [])
         merged = {}
 
         # Order matters only for which source's data seeds the key; Endpoint#merge
         # resolves precedence per field regardless of arrival order.
-        [openapi, integration_spec, route].each do |group|
+        [openapi, integration_spec, route, graphql].each do |group|
           group.each do |endpoint|
             existing = merged[endpoint.key]
             merged[endpoint.key] = existing ? existing.merge(endpoint) : endpoint

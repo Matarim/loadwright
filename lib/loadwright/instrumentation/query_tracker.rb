@@ -161,6 +161,9 @@ module Loadwright
           cached: !!payload[:cached]
         }
         entry[:call_site] = call_site if @capture_call_sites
+        # nil outside GraphQL, and outside a traced schema.
+        field_path = CurrentField.path
+        entry[:field_path] = field_path if field_path
         entry[:sql] = payload[:sql].to_s if @capture_exemplars
 
         request_id = CurrentRequest.id

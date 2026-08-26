@@ -154,6 +154,28 @@ module Loadwright
     setting :included_paths, nil, section: :discovery
     setting :path_param_overrides, {}.freeze, section: :discovery
 
+    # GRAPHQL. Every operation is a POST to one path, so there are no endpoints to
+    # discover -- the unit of work is the named operation, and Loadwright needs to be
+    # told where they are. Setting graphql_path turns this on.
+    #
+    #   config.graphql_path = "/graphql"
+    #   config.graphql_document_paths = ["app/graphql/queries/*.graphql"]
+    #   config.graphql_operations = [
+    #     { name: "PostsWithComments", query: "query PostsWithComments { ... }", variables: {} }
+    #   ]
+    #
+    # Operations are never generated from the schema: a query assembled by
+    # introspection exercises field combinations nobody asks for, and measures traffic
+    # the app will never receive.
+    setting :graphql_path, nil, section: :discovery
+    setting :graphql_operations, [].freeze, section: :discovery
+    setting :graphql_document_paths, [].freeze, section: :discovery
+
+    # Variable names treated as a connection page size, so the page-size sweep can
+    # vary one. An operation that hardcodes `first: 10` cannot be swept; parameterise
+    # it as `$first` and it can.
+    setting :graphql_page_size_variables, %w[first last pageSize limit].freeze, section: :discovery
+
     # AUTH
     #
     # How the token from auth_token_provider is attached to each request:

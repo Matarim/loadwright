@@ -32,4 +32,11 @@ group :test do
   # containment failure at runtime (see abort_if_containment_unavailable), so we
   # need it present here to test both the enforced and degraded paths.
   gem "webmock", "~> 3.23"
+
+  # A DEV DEPENDENCY ONLY, and never a runtime one. Per-resolver attribution hooks
+  # graphql-ruby's tracing API, and an integration cannot be verified against a fake
+  # of the thing it integrates with -- a hand-rolled tracer would only prove the fake
+  # works. Host apps that use GraphQL already have this gem; those that do not are
+  # unaffected, because the tracer installs only when it is defined.
+  gem "graphql", "~> 2.3"
 end

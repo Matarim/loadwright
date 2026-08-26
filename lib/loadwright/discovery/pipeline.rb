@@ -38,9 +38,11 @@ module Loadwright
         openapi = from_openapi(warnings)
         recorded = from_integration_specs(warnings)
         routes = from_routes(warnings)
+        graphql = from_graphql(warnings)
 
         merged = Merger.new(config: @config).merge(
-          openapi: openapi, integration_spec: recorded, route: routes, warnings: warnings
+          openapi: openapi, integration_spec: recorded, route: routes,
+          graphql: graphql, warnings: warnings
         )
 
         endpoints = merged.endpoints.select { |e| Merger.matches_only?(e, only) }
@@ -52,7 +54,8 @@ module Loadwright
           # than leaving unrelated endpoints in its "not tested" section.
           skipped: merged.skipped.select { |outcome| Merger.matches_only?(outcome.endpoint, only) },
           warnings: merged.warnings,
-          by_source: { openapi: openapi.length, integration_spec: recorded.length, route: routes.length }
+          by_source: { openapi: openapi.length, integration_spec: recorded.length,
+                       route: routes.length, graphql: graphql.length }
         )
       end
 
@@ -83,6 +86,18 @@ module Loadwright
         end
 
         endpoints = source.endpoints(input_path: path)
+        warnings.concat(source.warnings)
+        endpoints
+      end
+
+      # Separate from the three REST sources rather than merged with them: a GraphQL
+      # operation shares its path and verb with every other operation, so it is
+      # identified by name and has nothing to merge WITH.
+      def from_graphql(warnings)
+        return [] unless GraphqlSource.configured?(@config)
+
+        source = GraphqlSource.new(config: @config, stdout: @stdout)
+        endpoints = source.endpoints
         warnings.concat(source.warnings)
         endpoints
       end

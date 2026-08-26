@@ -65,6 +65,16 @@ module Loadwright
           return invalid(:unsuccessful_status, status_detail(endpoint, response), **base)
         end
 
+        # 1b. GRAPHQL ANSWERS 200 FOR A QUERY THAT FAILED COMPLETELY. `data: null` plus
+        #     an errors array is a total failure, and the status says 200 -- so the
+        #     status check above passes it, and without this the endpoint is reported
+        #     as healthy and fast, having done no work at all. Exactly the false
+        #     all-clear the three-state model exists to prevent, in the one protocol
+        #     where the HTTP status is not the answer.
+        if (errors = graphql_errors(parsed))
+          return invalid(:graphql_errors, graphql_error_detail(errors), **base)
+        end
+
         # 2. A response that does not match its declared contract means either the
         #    document is stale or the endpoint is misbehaving — either way the
         #    measurement is untrustworthy.
@@ -110,10 +120,38 @@ module Loadwright
       # count and the two must agree exactly — queries-per-returned-record divided by
       # a different denominator than the validity gate used is a silent inconsistency.
       def count_records(parsed, endpoint = nil)
+        return count_graphql_records(parsed) if endpoint&.graphql? && parsed.is_a?(Hash)
+
         case parsed
         when Array then parsed.length
         when Hash then count_in_envelope(parsed, endpoint)
         end
+      end
+
+      # GraphQL nests the collection under `data` and under the field name, which the
+      # envelope keys never match -- so every GraphQL response counted as "not a
+      # collection", and the returned-record slope had no input at all.
+      #
+      # Relay connections are counted by `edges` or `nodes` rather than by the
+      # connection object, which is one Hash however many records it holds.
+      def count_graphql_records(parsed)
+        data = parsed["data"]
+        return nil unless data.is_a?(Hash)
+
+        data.each_value do |field|
+          count = collection_size(field)
+          return count if count
+        end
+
+        nil
+      end
+
+      def collection_size(field)
+        return field.length if field.is_a?(Array)
+        return nil unless field.is_a?(Hash)
+
+        %w[edges nodes].each { |key| return field[key].length if field[key].is_a?(Array) }
+        nil
       end
 
       # A structural fingerprint: the top-level type plus the sorted key set of the
@@ -162,6 +200,35 @@ module Loadwright
         # A single-object response is not a collection, and reporting 0 records for it
         # would make every `show` endpoint look empty.
         nil
+      end
+
+      # DELIBERATELY NARROW. A REST endpoint may legitimately answer 200 with a body
+      # containing the word "errors", so this insists on the GraphQL response shape:
+      # a top-level `errors` ARRAY, non-empty, whose entries are objects carrying a
+      # `message`. That is what the GraphQL spec requires and what a REST payload is
+      # very unlikely to look like by accident.
+      #
+      # `data` is NOT required alongside it: a query that fails before execution --
+      # a syntax error, an unknown field, a failed auth check -- answers with errors
+      # and no data at all, and those are the ones most worth catching.
+      def graphql_errors(parsed)
+        return nil unless @config.require_successful_response
+        return nil unless parsed.is_a?(Hash)
+
+        errors = parsed["errors"]
+        return nil unless errors.is_a?(Array) && errors.any?
+        return nil unless errors.all? { |error| error.is_a?(Hash) && error.key?("message") }
+
+        errors
+      end
+
+      def graphql_error_detail(errors)
+        first = errors.first["message"].to_s
+        count = errors.length
+
+        "the response carried #{count} GraphQL error#{'s' if count > 1} and HTTP 200. " \
+          "The first was: #{first}. A GraphQL error means the query did not do the work, " \
+          "however fast it answered."
       end
 
       def failed_status?(endpoint, response)

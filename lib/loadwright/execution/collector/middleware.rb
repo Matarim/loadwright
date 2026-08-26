@@ -174,8 +174,9 @@ module Loadwright
               path: query["call_site"]["path"],
               line: query["call_site"]["line"],
               label: query["call_site"]["label"]
-            }
-          }
+            },
+            field_path: query["field_path"]
+          }.compact
         end
       end
     end

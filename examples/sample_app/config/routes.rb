@@ -11,6 +11,8 @@ SampleApp::Application.routes.draw do
       get "authors/by-slug/:slug", to: "authors#by_slug", as: :author_by_slug
       get "me", to: "me#show"
       post "login", to: "sessions#create"
+      post "graphql", to: "graphql#create"
+      post "gql", to: "gql#create"
       namespace :admin do
         get "stats", to: "stats#show"
       end

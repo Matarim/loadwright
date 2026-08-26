@@ -13,21 +13,32 @@ module Loadwright
     # merge and the same endpoint appears twice with half the information each.
     class Endpoint
       SAFE_VERBS = %i[get head options].freeze
-      SOURCES = %i[openapi integration_spec route].freeze
+      SOURCES = %i[openapi integration_spec route graphql].freeze
 
       attr_reader :path, :verb, :sources, :operation_id, :path_params, :query_params,
                   :request_body, :request_schema, :response_schemas, :recorded_path_values,
-                  :expected_statuses, :description
+                  :expected_statuses, :description, :graphql_operation, :graphql_operation_type,
+                  :graphql_page_size_variable
 
       def initialize(path:, verb:, source: nil, sources: nil, operation_id: nil,
                      path_params: nil, query_params: [], request_body: nil,
                      request_schema: nil, response_schemas: {}, recorded_path_values: {},
-                     expected_statuses: [], description: nil)
+                     expected_statuses: [], description: nil, graphql_operation: nil,
+                     graphql_operation_type: :query, graphql_page_size_variable: nil)
         @path = path
         @verb = verb.to_s.downcase.to_sym
         @sources = Array(sources || source).compact.map(&:to_sym)
         validate_sources!
 
+        # GRAPHQL PUTS EVERY OPERATION BEHIND ONE PATH AND VERB, so (path, verb) --
+        # which identifies a REST endpoint perfectly well -- collapses an entire API
+        # into a single row. The operation name is the identity there, and it is
+        # carried separately rather than folded into `path` so that nothing which
+        # reasons about paths (excluded_paths, path params, the resource name) starts
+        # seeing an operation name where it expects a URL.
+        @graphql_operation = graphql_operation
+        @graphql_operation_type = graphql_operation_type&.to_sym
+        @graphql_page_size_variable = graphql_page_size_variable
         @operation_id = operation_id
         # Derived from the template when not stated, because a route-discovered
         # endpoint has no parameter list but its path still names its params.
@@ -61,7 +72,34 @@ module Loadwright
             .gsub(/:([A-Za-z_][A-Za-z0-9_]*)/) { "{#{Regexp.last_match(1)}}" }
       end
 
-      def key = [path, verb]
+      def key = [path, verb, graphql_operation].compact
+
+      def graphql? = !graphql_operation.nil?
+
+      # REST varies page size with a query parameter, which any endpoint will accept
+      # (and ignoring it shows up as "unable to vary result size"). GraphQL varies it
+      # through a declared variable, so an operation without one cannot be swept at
+      # all -- and saying so beats measuring the same page three times and calling the
+      # flat line healthy.
+      def page_size_varying? = !graphql? || !graphql_page_size_variable.nil?
+
+      def page_size_unavailable_reason
+        return nil if page_size_varying?
+
+        "#{graphql_operation} declares no page-size variable, so its result size cannot be " \
+          "varied. Parameterise the connection argument (`$first: Int!`) to make the " \
+          "returned-record slope available for this operation."
+      end
+
+      # The body to send for a given page size. Only GraphQL uses it: REST carries
+      # page size in the query string.
+      def body_for(page_size)
+        return request_body unless graphql? && graphql_page_size_variable && page_size
+
+        body = (request_body || {}).dup
+        body["variables"] = (body["variables"] || {}).merge(graphql_page_size_variable => page_size)
+        body
+      end
 
       # The resource this endpoint is about, from the last static path segment.
       # `/api/v1/posts` and `/api/v1/posts/{id}` are both "post".
@@ -79,9 +117,25 @@ module Loadwright
         singularize(segment)
       end
 
-      def to_s = "#{verb.to_s.upcase} #{path}"
+      def to_s
+        return "#{verb.to_s.upcase} #{path} (#{graphql_operation})" if graphql?
 
-      def mutating? = !SAFE_VERBS.include?(verb)
+        "#{verb.to_s.upcase} #{path}"
+      end
+
+      # THE HTTP VERB IS NOT THE ANSWER FOR GRAPHQL. Every operation is a POST,
+      # including the reads -- so verb-based classification marks an entire GraphQL
+      # API as mutating, and `allow_mutating_requests` (a safety opt-in that exists
+      # for endpoints that WRITE) becomes a prerequisite for measuring queries that
+      # only read. That is both useless and a misuse of the gate: it teaches people
+      # to switch on write traffic in order to test reads.
+      #
+      # The operation type is the answer. A `mutation` mutates; a `query` does not.
+      def mutating?
+        return graphql_operation_type == :mutation if graphql?
+
+        !SAFE_VERBS.include?(verb)
+      end
 
       def from?(source) = sources.include?(source)
 

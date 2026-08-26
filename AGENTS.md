@@ -245,8 +245,16 @@ step_2_generate:
 
 step_3_minimum_viable_config:
   required_keys_before_first_run:
-    - auth_token_provider   # unless the API is fully public
+    - auth_token_provider   # unless the API is fully public; or auth_login instead
     - factory_map           # unless you only want route-level smoke testing
+  if_the_api_is_graphql:
+    - graphql_path                # turns GraphQL discovery on; nothing else does
+    - graphql_operations OR graphql_document_paths
+    note: >
+      There is nothing to discover from routes: every operation is a POST to one
+      path. See section 5.1b. Parameterise page sizes as $first if you want the
+      returned-record slope, which is the signal that catches N+1s behind
+      pagination.
   auth_login_alternative: >
     config.auth_login is usually easier to get right than auth_token_provider,
     especially for session/cookie apps where the alternative is hand-assembling a
@@ -425,6 +433,74 @@ CAPABILITY_IS_NOT_FIXED_FOR_A_RUN:
   agent_consequence: >
     Do not summarise a run's capability as one thing if metadata shows more than
     one epoch. Say which windows lost which signals and why. See DIAG-17.
+```
+
+### 5.1b GRAPHQL
+
+```yaml
+unit_of_work: >
+  The named OPERATION, not the path. Every GraphQL operation is a POST to one path,
+  so an endpoint row reads "POST /graphql (OperationName)". Discovery needs
+  config.graphql_path set, plus graphql_operations and/or graphql_document_paths.
+
+never_generate_operations: >
+  Loadwright does not introspect the schema to build queries, and you should not
+  suggest it as a workaround. A generated query exercises field combinations nobody
+  asks for, so the numbers describe traffic the app will never receive.
+
+a_query_is_a_read: >
+  A GraphQL `query` is NOT mutating, even though it is a POST. It runs without
+  allow_mutating_requests. A `mutation` IS mutating and is held behind that gate.
+  NEVER tell a user to enable allow_mutating_requests in order to measure queries:
+  that switches on real write traffic to solve a problem that does not exist.
+
+http_200_is_not_success: >
+  A failed GraphQL query answers 200 with an `errors` array and usually no data.
+  The validity gate recognises that envelope and marks the endpoint inconclusive
+  with reason `graphql_errors`, quoting the first error. If a user reports a
+  GraphQL endpoint as inconclusive with that reason, the query FAILED -- do not
+  read the 200 as evidence it worked, and do not suggest disabling
+  require_successful_response to "get results".
+
+pagination: >
+  A paginated operation returns the same page whatever the table holds, so its
+  query count is FLAT against seeded scale and a seeded-scale measurement calls it
+  healthy. Only the page-size sweep moves it -- and in GraphQL the page size is a
+  VARIABLE inside the document, not a query parameter.
+  Loadwright varies a variable whose name is in graphql_page_size_variables
+  (default: first, last, pageSize, limit) across config.page_size_sweep, and counts
+  returned records from a plain list field, or from `edges`/`nodes` on a Relay
+  connection.
+
+hardcoded_page_size_is_reported_not_faked: >
+  An operation written as `posts(first: 10)` cannot be varied. Loadwright SKIPS the
+  page-size sweep for it and warns, rather than measuring the same page three times
+  and reporting the flat line as healthy.
+  THE FIX TO GIVE THE USER: parameterise the connection argument --
+    query Posts($first: Int!) { posts(first: $first) { ... } }
+  with variables: { "first" => 25 }. Do not tell them to ignore the warning; the
+  slope is genuinely unavailable until they do this, and that is the signal that
+  catches an N+1 hiding behind pagination.
+
+per_resolver_attribution:
+  how: >
+    Add `trace_with Loadwright::Instrumentation::GraphqlTracer` to the host app's
+    GraphQL::Schema. Findings then name the resolver -- "resolved by
+    Author.postCount" -- instead of only the operation.
+  safe_to_leave_installed: >
+    The tracer no-ops unless a run is in progress, so it costs the app nothing in
+    normal operation. Recommend it; do not warn them off it.
+  not_a_dependency: >
+    The `graphql` gem is NOT a runtime dependency of Loadwright. The tracer is a
+    plain module the host schema opts into.
+  without_it: >
+    Everything else still works -- discovery, execution, the page-size sweep, the
+    200-with-errors gate. Only the resolver name is missing, and the finding says
+    the operation instead.
+
+known_gaps_state_them:
+  - subscriptions are skipped, with a warning: they are not answered over a plain
+    HTTP POST
 ```
 
 ### 5.2 Known measurement gaps — state these, do not paper over them
@@ -1132,6 +1208,7 @@ has_findings:   measured successfully, problems found
 inconclusive:   COULD NOT VALIDLY MEASURE — not a pass, not a fail
 inconclusive_causes:
   - response failed validity gate (bad status, schema mismatch, empty result)
+  - GraphQL errors in a 200 response (reason `graphql_errors`)
   - endpoint quarantined by contention guard
   - external lock holder made attribution impossible
   - path params unresolvable

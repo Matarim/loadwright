@@ -23,6 +23,41 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     described_class.new(config: config, context: context, stdout: stdout, **rest)
   end
 
+  # Every GraphQL operation is a POST, so matching "POST" against the endpoint key
+  # announced a hundred mutating requests before a run that issued none -- and told
+  # the user allow_mutating_requests was on when it was off.
+  describe "#estimate mutating count" do
+    it "does not count GraphQL queries as writes" do
+      query = Loadwright::Discovery::Endpoint.new(
+        path: "/graphql", verb: :post, source: :graphql,
+        graphql_operation: "Posts", graphql_operation_type: :query,
+        request_body: { "query" => "query Posts { posts { id } }" }
+      )
+
+      expect(runner.estimate([query]).mutating_requests).to eq(0)
+    end
+
+    it "still counts a GraphQL mutation as one" do
+      config.allow_mutating_requests = true
+      mutation = Loadwright::Discovery::Endpoint.new(
+        path: "/graphql", verb: :post, source: :graphql,
+        graphql_operation: "CreatePost", graphql_operation_type: :mutation,
+        request_body: { "query" => "mutation CreatePost { createPost { id } }" }
+      )
+
+      expect(runner.estimate([mutation]).mutating_requests).to be_positive
+    end
+
+    it "still counts a REST POST as one" do
+      config.allow_mutating_requests = true
+      post = Loadwright::Discovery::Endpoint.new(
+        path: "/api/posts", verb: :post, source: :openapi, request_body: { "title" => "x" }
+      )
+
+      expect(runner.estimate([post]).mutating_requests).to be_positive
+    end
+  end
+
   # AUTHENTICATION ACTUALLY BEING SENT.
   #
   # IdentityPool#resolve! was called from nowhere in lib/ -- only from its own spec.

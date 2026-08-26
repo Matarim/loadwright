@@ -33,6 +33,10 @@ module Loadwright
       empty_with_seeded_data: "data was seeded but the endpoint returned an empty collection; " \
                               "seeded records likely do not match the endpoint's scope",
       inconsistent_shape: "response structure changed across scale factors; cross-scale comparison is invalid",
+      # GraphQL answers 200 for a query that failed completely, so status alone says
+      # nothing about whether the endpoint did any work.
+      graphql_errors: "the response carried GraphQL errors; the query failed and an error path was " \
+                      "measured, whatever the HTTP status said",
 
       # Setup problems that prevent a request being issued at all.
       path_params_unresolved: "path parameters could not be resolved to real records",

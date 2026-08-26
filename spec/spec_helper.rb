@@ -38,5 +38,9 @@ RSpec.configure do |config|
   # is fixed in ExecutionContext#issue and CollectorMiddleware, both with an
   # `ensure`; this hook keeps the suite from depending on those being called.)
   config.before { Loadwright::Instrumentation::CurrentRequest.clear! }
+
+  # Same reason: a spec that opens a field frame without closing it would attribute
+  # the NEXT example's queries to a resolver it never touched.
+  config.before { Loadwright::Instrumentation::CurrentField.clear! }
   config.after { Loadwright::Instrumentation::CurrentRequest.clear! }
 end

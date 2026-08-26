@@ -213,7 +213,11 @@ module Loadwright
       def estimate(endpoints)
         planned = matrix(endpoints).reject(&:skipped?)
         requests = planned.sum { |cell| cell.requests + @config.warmup_requests }
-        mutating = planned.count { |cell| cell.endpoint_key.start_with?("POST", "PUT", "PATCH", "DELETE") }
+        # Asks the ENDPOINT, not its key. Matching "POST" against the key counted every
+        # GraphQL query as a write -- they are all POSTs -- and announced a hundred
+        # mutating requests before a run that issued none.
+        mutating_keys = endpoints.select(&:mutating?).map(&:to_s)
+        mutating = planned.count { |cell| mutating_keys.include?(cell.endpoint_key) }
 
         # Concurrency divides wall time; the estimate uses the level each cell will
         # actually attempt.
@@ -307,6 +311,22 @@ module Loadwright
         end
       end
 
+      # Run-level first, then per-endpoint: a GraphQL operation with no page-size
+      # variable cannot be swept even when the run as a whole can.
+      def page_size_cell_skip_reason(endpoint)
+        return page_size_sweep_unmeasurable_reason unless page_size_sweep_measurable?
+
+        endpoint.page_size_unavailable_reason
+      end
+
+      def skip_page_size_sweep?(endpoint)
+        return false if endpoint.page_size_varying?
+
+        @warnings << endpoint.page_size_unavailable_reason
+        @stdout.puts "loadwright: #{endpoint} — #{endpoint.page_size_unavailable_reason}"
+        true
+      end
+
       def page_size_cells(endpoint)
         Array(@config.page_size_sweep).map do |page_size|
           Cell.new(
@@ -318,7 +338,7 @@ module Loadwright
             latencies: [], query_counts: [], record_counts: [], bytes: [], statuses: [],
             errors: [], contention_events: 0, db_runtimes: [], duplicates: {}, tables: [],
             cold_latencies: [], jobs_enqueued: [], rate_limit_headers: {}, view_runtimes: [], gc_times: [],
-            skipped_reason: page_size_sweep_measurable? ? nil : page_size_sweep_unmeasurable_reason
+            skipped_reason: page_size_cell_skip_reason(endpoint)
           )
         end
       end
@@ -380,6 +400,8 @@ module Loadwright
         seeded = page_size_sweep_scale
 
         endpoints.each do |endpoint|
+          next if skip_page_size_sweep?(endpoint)
+
           Array(@config.page_size_sweep).each do |page_size|
             run_cell(endpoint: endpoint, sweep: :page_size, scale: seeded, page_size: page_size,
                      concurrency: 1, seeded: seeded)
@@ -506,7 +528,7 @@ module Loadwright
           path: resolution&.path || endpoint.path,
           query: query,
           headers: @identities&.headers_for_next || {},
-          body: endpoint.request_body,
+          body: endpoint.body_for(page_size),
           endpoint_key: endpoint.to_s
         )
       end
@@ -984,6 +1006,11 @@ module Loadwright
       def annotate(findings)
         findings.each do |finding|
           next unless finding.respond_to?(:detail) && finding.respond_to?(:evidence)
+
+          # The resolver first: for GraphQL it is the thing you go and fix, and a file
+          # and line inside a Type class is much less use than the field's own name.
+          resolver = finding.evidence.is_a?(Hash) && finding.evidence[:resolver]
+          finding.detail = "#{finding.detail} — resolved by #{resolver}" if resolver
 
           sentence = attribution.annotate(finding)
           finding.detail = "#{finding.detail} — #{sentence}" if sentence

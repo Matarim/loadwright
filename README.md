@@ -362,6 +362,10 @@ config.route_discovery = true                # gap-filling only
 config.excluded_paths = [%r{^/rails/}, %r{^/admin/}, %r{^/health}]
 config.included_paths = nil                  # nil = everything not excluded
 config.path_param_overrides = {}             # e.g. { "/api/v1/orders/{id}" => { "id" => 42 } }
+config.graphql_path = nil                    # e.g. "/graphql"; see GraphQL below
+config.graphql_operations = []               # inline operations
+config.graphql_document_paths = []           # globs of .graphql files
+config.graphql_page_size_variables = %w[first last pageSize limit]
 ```
 
 ### Authentication
@@ -551,6 +555,106 @@ If an OpenAPI document you *named explicitly* is missing or only partly parseabl
 discovery fails loudly rather than continuing. A partial discovery reports endpoints
 that were never tested as simply absent, and a report of four endpoints that reads
 like it covers forty is worse than an error.
+
+### GraphQL
+
+GraphQL has no endpoints to discover: every query and mutation is a `POST` to the
+same path, so path-based discovery finds exactly one endpoint and reports your
+whole API as a single row. That matters more than it sounds — GraphQL N+1s are
+per-resolver, and one row cannot tell you which resolver is the problem.
+
+So the unit of work is the named **operation**:
+
+```ruby
+config.graphql_path = "/graphql"
+
+# From the .graphql documents you already keep...
+config.graphql_document_paths = ["app/graphql/queries/*.graphql"]
+
+# ...or inline. Parameterise the page size as `$first` — see Pagination below.
+config.graphql_operations = [
+  { name: "PostsWithComments",
+    query: "query PostsWithComments($first: Int!) { posts(first: $first) { id comments { id } } }",
+    variables: { "first" => 25 } }
+]
+```
+
+Each operation becomes its own row: `POST /graphql (PostsWithComments)`.
+
+Three things worth knowing:
+
+**A `query` is a read, even though it's a `POST`.** Classifying by HTTP verb would
+mark your entire API as mutating and make `allow_mutating_requests` — a safety
+opt-in for endpoints that *write* — a prerequisite for measuring reads. Operation
+type decides instead: `query` runs freely, `mutation` is held behind that gate like
+any other write.
+
+**A failed GraphQL query answers `200`.** `{"errors": [...]}` with no data is a
+total failure that looks, to anything checking the HTTP status, like a fast healthy
+endpoint. Loadwright checks for the GraphQL error envelope and reports those
+`inconclusive`, quoting the first error.
+
+**Loadwright will not generate operations from your schema.** It could introspect
+and assemble queries, but a generated query exercises field combinations nobody
+asks for and measures traffic your app will never receive.
+
+#### Pagination
+
+A paginated operation returns the same page whatever your table holds, so its
+query count is **flat against seeded scale** — and a seeded-scale measurement
+calls it healthy. Only varying the page size moves it. In GraphQL that page size
+lives in a variable inside the document, not in a query parameter, so it has to be
+declared:
+
+```ruby
+config.graphql_operations = [
+  { name: "PagedAuthors",
+    query: "query PagedAuthors($first: Int!) { authors(first: $first) { nodes { id postCount } } }",
+    variables: { "first" => 25 } }
+]
+```
+
+Loadwright finds `$first` by name (see `graphql_page_size_variables`), varies it
+across `page_size_sweep`, and measures queries against **returned records** —
+which is what catches the N+1. Relay connections are counted by `edges` or
+`nodes`, and plain list fields by length.
+
+An operation that hardcodes `first: 10` cannot be varied. Rather than measure the
+same page three times and report the flat line as healthy, Loadwright skips the
+sweep for that operation and tells you to parameterise it:
+
+```
+loadwright: POST /graphql (PostsWithComments) — PostsWithComments declares no
+page-size variable, so its result size cannot be varied. Parameterise the
+connection argument ($first: Int!) to make the returned-record slope available
+for this operation.
+```
+
+#### Per-resolver attribution
+
+By default a GraphQL finding names the operation, which for a query of any size is
+"somewhere in here". Add one line to your schema and it names the resolver:
+
+```ruby
+class MySchema < GraphQL::Schema
+  trace_with Loadwright::Instrumentation::GraphqlTracer
+end
+```
+
+Findings then read:
+
+```
+the same query ran 40 times in a single request:
+SELECT COUNT(*) FROM "posts" WHERE "posts"."author_id" = ?
+  — resolved by Author.postCount
+```
+
+The tracer is a no-op unless a Loadwright run is in progress, so it is safe to
+leave in place — it costs your app nothing in normal operation. Lazy fields are
+traced too, which is where batched loaders do their work.
+
+`graphql` is **not** a dependency of this gem. The tracer is a plain module that
+only does anything when your schema opts in.
 
 ### Recording your specs
 
@@ -867,9 +971,9 @@ Honestly:
   concurrency Loadwright drives is enough to surface N+1s, pool pressure, and memory
   bloat on a laptop. It is not enough to model production scale, and it is not
   trying to be.
-- **For GraphQL APIs, not yet.** One endpoint with N resolvers defeats path-based
-  discovery entirely. It needs query-document discovery and per-resolver
-  attribution — a v2 subsystem, not a flag.
+- **For GraphQL, yes** — operations are discovered, measured, page-size swept, and
+  attributed to the resolver that issued the query. See [GraphQL](#graphql).
+  Subscriptions are skipped: they are not answered over a plain HTTP POST.
 - **If your app uses multiple databases or read replicas**, pool tracking assumes a
   single pool and will under-report.
 
