@@ -8,7 +8,13 @@ purpose: configure, run, and interpret Loadwright inside a user's Rails app
 human_readable: not_required
 authoritative_for: [setup, configuration, troubleshooting, result_interpretation]
 not_authoritative_for: [gem_internals]
-gem_internals_see: .claude/skills/loadwright-development/
+gem_internals_see: >
+  the source itself. The design notes this gem was built from are not published,
+  so do not look for them and do not cite them to a user as somewhere to read --
+  the reasoning is written out in the comments around each decision. Source
+  comments cite those documents by NAME (production-safety.md,
+  response-analysis.md, CLAUDE.md section 2); that is provenance, not a file you
+  can open.
 STATUS: IMPLEMENTED__VERIFIED_AGAINST_THE_BUILD
 status_note: |
   Every command, config key, report state, exit code, and capability pairing
@@ -1714,5 +1720,7 @@ sync_requirement: >
   Config keys here must match the generated initializer, the README, and
   Loadwright::Configuration. A spec enforces that all four agree; if you add
   a key anywhere, add it in all four places or that spec fails by design.
-gem_internals_reference: .claude/skills/loadwright-development/
+gem_internals_reference: >
+  the source. The design documents are not published; their names appear in
+  comments as provenance only.
 ```
