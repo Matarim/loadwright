@@ -65,6 +65,8 @@ module SampleApp
     config.log_level = :warn
 
     config.autoload_paths += Dir[File.expand_path("../app/*", __dir__)]
+    # The mounted Rack app is referenced by routes.rb at boot, before autoload runs.
+    require_relative "../app/rack/mounted_api"
     config.eager_load_paths += Dir[File.expand_path("../app/*", __dir__)]
 
     # So a spec can assert Loadwright honours the host app's own filter list

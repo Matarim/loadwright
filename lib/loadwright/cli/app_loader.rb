@@ -81,7 +81,7 @@ module Loadwright
           This is your app's boot error, not a Loadwright one -- reproduce it with
           `bundle exec rails runner 1` and fix it there first.
 
-            #{error.class}: #{error.message}
+            #{Loadwright.brief(error)}
         MSG
       end
     end

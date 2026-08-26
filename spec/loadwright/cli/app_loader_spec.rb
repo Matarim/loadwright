@@ -63,6 +63,26 @@ RSpec.describe Loadwright::CLI::AppLoader do
     end
   end
 
+  # A foreign exception's message is unbounded: Ruby builds a NoMethodError's from
+  # the RECEIVER'S INSPECT, so one raised against a large object carries thousands of
+  # characters and buries the words that matter. This is the boundary where someone
+  # else's exception crosses into our output.
+  describe "when the app raises something enormous" do
+    include_context "with no Rails application loaded"
+
+    it "truncates it rather than printing the whole object" do
+      Dir.mktmpdir("loud-app-") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "environment.rb"), "raise ArgumentError, 'x' * 20_000")
+
+        loader(dir).load!
+      rescue Loadwright::ConfigurationError => e
+        expect(e.message.length).to be < 2_000
+        expect(e.message).to include("truncated")
+      end
+    end
+  end
+
   describe "when a Rails app is already loaded" do
     it "does not boot a second time" do
       Dir.mktmpdir("app-") do |dir|

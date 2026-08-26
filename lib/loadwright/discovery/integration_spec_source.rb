@@ -111,11 +111,17 @@ module Loadwright
         require "fileutils"
         FileUtils.mkdir_p(File.dirname(output_path))
 
+        # A mounted Rack app (Grape, Sinatra, Roda) is ONE Rails route, so recognition
+        # answered the mount point for every request inside it. Recovered here, once,
+        # with every recording available rather than one at a time.
+        requests = MountedPathTemplate.apply(@captured)
+        report_inferred(requests)
+
         payload = {
           "version" => FORMAT_VERSION,
           "recorded_at" => Time.now.utc.iso8601,
           "unrecognised_count" => @unrecognised.to_i,
-          "requests" => @captured
+          "requests" => requests
         }
         File.write(output_path, JSON.pretty_generate(payload))
         output_path
@@ -137,6 +143,18 @@ module Loadwright
       end
 
       private
+
+      def report_inferred(requests)
+        inferred = requests.select { |request| request["inferred_template"] }
+        return if inferred.empty?
+
+        @stdout.puts "loadwright: #{inferred.length} request(s) were behind a mounted Rack app, " \
+                     "whose routes Rails reports as a single mount point. Templates were inferred " \
+                     "from the recorded paths:"
+        inferred.map { |r| "#{r['verb'].upcase} #{r['template']}" }.uniq.sort.each do |line|
+          @stdout.puts "  #{line}"
+        end
+      end
 
       def capture(verb:, path:, session:)
         request = session.request

@@ -107,11 +107,13 @@ module Loadwright
         document = Openapi3Parser.load_file(path)
         return if document.valid?
 
-        raise DiscoveryError, parse_failure_message(path, raw, document.errors.to_a.map { |e| describe_error(e) })
+        errors = document.errors.to_a.map { |e| describe_error(e) }
+        raise DiscoveryError, parse_failure_message(path, raw, errors, write_error_report(path, raw, errors))
       rescue Openapi3Parser::Error => e
         # The parser raises rather than reporting for some malformed documents,
         # which is the same outcome by a different route.
-        raise DiscoveryError, parse_failure_message(path, raw, [e.message])
+        raise DiscoveryError,
+              parse_failure_message(path, raw, [e.message], write_error_report(path, raw, [e.message]))
       end
 
       # WITH THE LOCATION, not just the message. `Validation::Error#to_s` returns only
@@ -127,18 +129,68 @@ module Loadwright
         "#{error.message} — at #{location.gsub('~1', '/').gsub('~0', '~')}"
       end
 
-      def parse_failure_message(path, raw, errors)
+      # The full list on disk, and a count of how much of the document is affected.
+      # The refusal itself is right, but 20 truncated errors with no way to see the
+      # rest turns a fixable problem into a wall -- nobody can fix 52 errors they
+      # cannot read, and "31 of 44 paths" is the difference between a morning's work
+      # and abandoning the tool.
+      def write_error_report(path, raw, errors)
+        require "fileutils"
+        require "json"
+
+        out = File.join(@config.report_output_dir.to_s, "openapi-errors.json")
+        FileUtils.mkdir_p(File.dirname(out))
+        File.write(out, JSON.pretty_generate(
+                          "document" => path.to_s, "error_count" => errors.length,
+                          "paths_total" => Array(raw["paths"]&.keys).length,
+                          "paths_affected" => affected_paths(errors).length,
+                          "affected_paths" => affected_paths(errors),
+                          "errors" => errors
+                        ))
+        out
+      rescue StandardError
+        # Never let the diagnostic replace the diagnosis.
+        nil
+      end
+
+      # From the JSON pointer: `#/paths//api/v2/x/post/...` -> `/api/v2/x`.
+      def affected_paths(errors)
+        errors.filter_map { |error| error[%r{ at #/paths/(/[^/]*(?:/[^/]+)*?)(?:/(?:get|put|post|delete|patch|head|options|trace)\b|\z)}, 1] }
+              .uniq.sort
+      end
+
+      def parse_failure_message(path, raw, errors, report_path = nil)
         listed = errors.first(20).map { |error| "  - #{error}" }.join("\n")
-        more = errors.length > 20 ? "\n  ...and #{errors.length - 20} more" : ""
+        affected = affected_paths(errors)
+        total = Array(raw["paths"]&.keys).length
+
+        more = if errors.length > 20
+                 "\n  ...and #{errors.length - 20} more"
+               else
+                 ""
+               end
+
+        scope = if total.positive? && affected.any?
+                  "\n#{errors.length} error(s) across #{affected.length} of #{total} path(s); " \
+                    "#{total - affected.length} path(s) parsed cleanly."
+                else
+                  ""
+                end
+
+        written = report_path ? "\nThe full list is in #{report_path}." : ""
 
         message = <<~MSG
           #{path} could not be fully parsed as an OpenAPI document:
 
           #{listed}#{more}
+          #{scope}#{written}
 
           Loadwright refuses to discover endpoints from a document it could not read completely. A
           partial endpoint list is worse than none: the endpoints it missed would be reported as
           absent rather than skipped, and you would read a clean report covering half your API.
+
+          While you fix it, integration-spec recording and route discovery both work without an
+          OpenAPI document -- unset openapi_spec_paths and run `loadwright record`.
         MSG
 
         message += <<~MSG if raw["openapi"].to_s.start_with?("3.1")

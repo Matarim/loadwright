@@ -13,6 +13,9 @@ SampleApp::Application.routes.draw do
       post "login", to: "sessions#create"
       post "graphql", to: "graphql#create"
       post "gql", to: "gql#create"
+      # FIXTURE: a mounted Rack app, which Rails reports as ONE route however many
+      # endpoints live inside it. Grape, Sinatra and Roda all look like this.
+      mount MountedApi => "/mounted"
       namespace :admin do
         get "stats", to: "stats#show"
       end

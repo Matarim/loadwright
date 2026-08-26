@@ -849,6 +849,13 @@ This is the highest-value section. Match symptom exactly.
 ```yaml
 DIAG-01:
   symptom: "Every endpoint reports inconclusive; uniform 401 or 403"
+  concentrated_errors_quarantine_not_abort: >
+    When one endpoint owns 80%+ of the errors it is quarantined as `inconclusive`
+    (reason `endpoint_erroring`) and the run CONTINUES; the breaker aborts only when
+    errors are spread ACROSS endpoints. A report may therefore contain a quarantined
+    endpoint alongside real measurements for everything else. That endpoint failed on
+    nearly every request -- report it as a finding about THAT endpoint, never as a
+    healthy run, and never as a reason to raise max_error_rate_before_abort.
   version_note: >
     Before 0.0.2 this could also be the tool's own fault: the identity pool was never
     resolved, so a correctly configured auth_token_provider was never actually sent.
@@ -1154,6 +1161,33 @@ DIAG-17:
   agent_instruction: >
     Findings from before and after the downgrade are not equally trustworthy.
     Never summarise such a run as one confidence level. See GAP-02, INV-13.
+
+DIAG-19:
+  symptom: >
+    "loadwright record fails with NoMethodError on RSpec::Core::Configuration" /
+    "my specs pass under rspec but die under loadwright record"
+  cause: >
+    Fixed in 0.0.2. Older versions called RSpec.reset, discarding settings gems
+    register at require time -- rswag's openapi_root being the common casualty.
+  fix: upgrade; there is no workaround worth applying on an older version.
+
+DIAG-20:
+  symptom: >
+    "every recorded request has the same template" / "my Grape/Sinatra endpoints
+    became one endpoint" / "the run requested the mount point and got a 404"
+  cause: >
+    Rails reports a mounted Rack app as ONE route, so route recognition answers the
+    mount point for every request inside it.
+  fix: |
+    Fixed in 0.0.2: templates are recovered from the recorded paths by promoting
+    id-shaped segments, and the recording marks them `inferred_template`.
+    IF A TEMPLATE STILL LOOKS WRONG, the segment was not id-shaped -- a slug, for
+    instance. Add it to path_param_overrides rather than widening included_paths to
+    the mount point, which admits the whole mounted API as one blob.
+  do_not: >
+    Do not tell the user to set included_paths to the mount prefix. That was the
+    workaround before this was fixed and it produces exactly one undifferentiated
+    endpoint.
 
 DIAG-18:
   symptom: >

@@ -42,6 +42,8 @@ module Loadwright
       path_params_unresolved: "path parameters could not be resolved to real records",
       no_example_available: "endpoint discovered but no usable example request was available",
       auth_failed: "authentication failed uniformly; auth_token_provider is likely misconfigured",
+      endpoint_erroring: "the endpoint failed on nearly every request, so it was quarantined and the " \
+                         "rest of the run continued without it",
       rate_limited: "requests were throttled; allowlist Loadwright or disable rate limiting for this environment",
 
       # Coverage — see response-analysis.md. Distinct from the validity-gate reasons

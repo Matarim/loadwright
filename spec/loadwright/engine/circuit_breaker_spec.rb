@@ -121,4 +121,74 @@ RSpec.describe Loadwright::Engine::CircuitBreaker do
       expect(breaker.errors).to eq(400)
     end
   end
+
+  # FROM A REAL INTEGRATION: one endpoint returned 500 on every request, the breaker
+  # tripped at 20.6%, and EIGHT unrelated endpoints were never measured. The breaker
+  # was doing its job -- "this endpoint is broken" -- but the consequence was a global
+  # abort for a local problem.
+  #
+  # So concentration is checked before tripping. Errors owned by one endpoint
+  # quarantine that endpoint; errors spread ACROSS endpoints still abort the run,
+  # which is the case the breaker exists for.
+  describe "errors concentrated in one endpoint" do
+    def breaker(threshold: 0.2)
+      config.max_error_rate_before_abort = threshold
+      described_class.new(config: config, minimum_observations: 4)
+    end
+
+    it "does not trip when one endpoint owns nearly all the errors" do
+      subject = breaker
+      6.times { subject.record_success("GET /fine") }
+      4.times { subject.record_error("GET /broken") }
+
+      expect(subject).not_to be_tripped
+      expect(subject.quarantine_candidate).to eq("GET /broken")
+    end
+
+    # The case the breaker is FOR: the whole run is broken, not one endpoint.
+    it "still trips when the errors are spread across endpoints" do
+      subject = breaker
+      2.times { subject.record_success }
+      %w[GET /a GET /b GET /c GET /d].each_slice(2) do |verb, path|
+        2.times { subject.record_error("#{verb} #{path}") }
+      end
+
+      expect(subject).to be_tripped
+    end
+
+    it "resumes counting without the quarantined endpoint's errors" do
+      subject = breaker
+      6.times { subject.record_success("GET /fine") }
+      4.times { subject.record_error("GET /broken") }
+      subject.quarantine!("GET /broken")
+
+      expect(subject.errors).to eq(0)
+      expect(subject).not_to be_tripped
+      expect(subject.to_h[:quarantined_endpoints]).to eq(["GET /broken"])
+    end
+
+    # After quarantining one, a SECOND endpoint failing must still be able to trip
+    # the run -- otherwise this becomes a way to never abort at all.
+    it "can still trip after a quarantine, once other endpoints fail too" do
+      subject = breaker
+      6.times { subject.record_success("GET /fine") }
+      4.times { subject.record_error("GET /broken") }
+      subject.quarantine!("GET /broken")
+
+      3.times { subject.record_error("GET /also-broken") }
+      3.times { subject.record_error("GET /third") }
+
+      expect(subject).to be_tripped
+    end
+
+    # A run against a SINGLE endpoint has nothing to protect by carrying on.
+    it "trips normally when there is only one endpoint in the run" do
+      subject = breaker
+      6.times { subject.record_success("GET /only") }
+      4.times { subject.record_error("GET /only") }
+
+      expect(subject.quarantine_candidate).to be_nil
+      expect(subject).to be_tripped
+    end
+  end
 end

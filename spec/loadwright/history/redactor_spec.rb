@@ -6,6 +6,32 @@ RSpec.describe Loadwright::History::Redactor do
   subject(:redactor) { described_class.new(config: config) }
 
   describe "#headers" do
+    # A REAL LEAK, from a real integration: `X-Account-Key` matched none of the original
+    # three patterns, so a live API credential was written to
+    # tmp/loadwright/recorded-requests.json in plaintext while `Cookie` beside it was
+    # redacted. Custom auth headers are the norm; the cost of redacting a harmless
+    # header is a redacted harmless header, and the cost of missing one is a leaked
+    # credential.
+    {
+      "X-Account-Key" => "the header that leaked",
+      "X-Session-Token" => "session tokens",
+      "X-Auth" => "short auth headers",
+      "X-Client-Secret" => "secrets",
+      "X-Signature" => "request signatures",
+      "Credential" => "credentials"
+    }.each do |header, description|
+      it "redacts #{description} (#{header})" do
+        expect(redactor.headers(header => "s3cret")[header]).to eq("[FILTERED]")
+      end
+    end
+
+    # Breadth must not swallow the headers a reader needs to interpret a recording.
+    %w[Accept Content-Type X-Request-Id User-Agent Host].each do |header|
+      it "leaves #{header} alone" do
+        expect(redactor.headers(header => "value")[header]).to eq("value")
+      end
+    end
+
     it "filters the shipped default patterns" do
       result = redactor.headers(
         "Authorization" => "Bearer sk-live-abc",

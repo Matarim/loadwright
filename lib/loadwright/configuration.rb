@@ -271,7 +271,14 @@ module Loadwright
 
     # REDACTION — references/reporting.md
     setting :honor_rails_filter_parameters, true, section: :redaction
-    setting :redact_header_patterns, [/authorization/i, /cookie/i, /api[-_]?key/i].freeze, section: :redaction
+    # Broad on purpose. `/authorization/i` caught `Authorization` and missed
+    # `X-Account-Key` -- a real app's real credential, written to a recording in
+    # plaintext. Custom auth headers are the norm, not the exception, and the cost of
+    # redacting a harmless header is a redacted harmless header.
+    setting :redact_header_patterns,
+            [/authorization/i, /cookie/i, /api[-_]?key/i, /auth/i, /token/i,
+             /secret/i, /credential/i, /session/i, /signature/i, /\Ax-.*-key\z/i].freeze,
+            section: :redaction
     setting :redact_sql_bind_values, true, section: :redaction
     setting :include_response_bodies, false, section: :redaction
     setting :redact_additional_patterns, [].freeze, section: :redaction

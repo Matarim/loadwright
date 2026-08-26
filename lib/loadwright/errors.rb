@@ -5,6 +5,22 @@ module Loadwright
   # single class to catch anything originating in the gem.
   class Error < StandardError; end
 
+  # A foreign exception's message, bounded.
+  #
+  # Ruby builds a NoMethodError's message from the RECEIVER'S INSPECT, so one raised
+  # against a large object -- an RSpec configuration, a Rails application -- carries
+  # twelve thousand characters of internal state, and the four words that matter are
+  # somewhere in the middle. Used where someone else's exception crosses into our
+  # output or into a persisted record.
+  MAX_FOREIGN_MESSAGE = 400
+
+  def self.brief(error)
+    message = error.respond_to?(:message) ? error.message.to_s : error.to_s
+    return "#{error.class}: #{message}" if message.length <= MAX_FOREIGN_MESSAGE
+
+    "#{error.class}: #{message[0, MAX_FOREIGN_MESSAGE]}… (#{message.length} characters, truncated)"
+  end
+
   # Raised when a run is refused by the safety guard. See
   # references/production-safety.md. This is a *successful* outcome for the
   # guard, not a bug — it means the gem declined to generate load.

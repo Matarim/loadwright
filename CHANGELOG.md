@@ -58,6 +58,44 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **`loadwright record` broke any rswag-based suite.** It called `RSpec.reset`,
+  which replaces the `Configuration` singleton and discards every setting a gem
+  registered at *require* time. Those gems are already loaded by then — Loadwright
+  boots the app first — so their `require` in `spec_helper` is a no-op and they
+  never re-register. rswag's `openapi_root` vanished and the host's own
+  `spec_helper` died with `NoMethodError` before a single example ran. It now calls
+  `RSpec.world.reset`, which clears example groups without touching configuration.
+  A suite that errors before recording also now says so, instead of reporting "the
+  specs ran but made no recordable requests" — which sent people to rewrite tests
+  that were fine.
+- **Rack-mounted APIs collapsed to their mount point.** Rails reports
+  `mount MyApi => "/internal/api"` as one route, so every endpoint behind it recorded
+  the same template, merged into a single endpoint, and got requested at the bare
+  mount point — a 404. Templates are now recovered from the recorded paths by
+  promoting id-shaped segments, so `/internal/api/widgets/{widget_id}/customer` comes
+  back with its id intact. Affects Grape, Sinatra, Roda and any mounted Rack app.
+- **A custom auth header was written to the recording in plaintext.**
+  `redact_header_patterns` matched `Authorization` but not `X-Account-Key`, so an app
+  using a custom auth header had its live credential written to disk while `Cookie`
+  beside it was redacted. The defaults are now broad — `auth`, `token`, `secret`,
+  `credential`, `session`, `signature` — because a custom auth header is the norm
+  and the cost of redacting a harmless one is nothing.
+- **One broken endpoint aborted the whole run.** The circuit breaker is global, so
+  a single endpoint returning 500 on every request tripped it and abandoned every
+  endpoint the sweep had not yet reached. When errors are concentrated in one
+  endpoint (≥80%), that endpoint is now quarantined as `inconclusive` and the run
+  continues. Errors spread *across* endpoints still abort — that is the case the
+  breaker exists for.
+- **An unparseable OpenAPI document had no triage path.** The refusal is correct and
+  unchanged, but 20 truncated errors on a terminal is not something a team can act
+  on. The full list is now written to `openapi-errors.json`, the message says how
+  many paths are affected out of how many ("52 errors across 31 of 44 paths"), and
+  it names the two discovery sources that need no document at all.
+- **`record` now warns about pending migrations** before running your specs, instead
+  of letting every spec file fail with the same stack trace.
+- **A foreign exception's message is bounded** where it crosses into our output.
+  Ruby builds a `NoMethodError`'s message from the receiver's inspect, so one raised
+  against a large object can bury the four words that matter.
 - **The two execution modes sent different content types for the same request.**
   `:http` JSON-encoded a structured body; `:in_process` form-encoded it, turning
   every value into a string. Invisible for most REST params, which Rails coerces

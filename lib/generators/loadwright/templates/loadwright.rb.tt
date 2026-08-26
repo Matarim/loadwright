@@ -452,7 +452,12 @@ if defined?(Loadwright)
 
     # Rails already knows what's sensitive; honor its declaration.
     config.honor_rails_filter_parameters = true
-    config.redact_header_patterns = [/authorization/i, /cookie/i, /api[-_]?key/i]
+    # Deliberately broad: a custom auth header is the norm. If yours is not matched
+    # by any of these, ADD IT -- a recording is written to disk in plaintext, and a
+    # missed credential is the one redaction failure that matters.
+    config.redact_header_patterns = [/authorization/i, /cookie/i, /api[-_]?key/i,
+                                     /auth/i, /token/i, /secret/i, /credential/i,
+                                     /session/i, /signature/i, /\Ax-.*-key\z/i]
     config.redact_sql_bind_values = true
     config.include_response_bodies = false
     config.redact_additional_patterns = []

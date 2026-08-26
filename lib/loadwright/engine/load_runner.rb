@@ -141,6 +141,7 @@ module Loadwright
         @safety_decision = safety_decision
         @discovery = discovery
         @warnings = []
+        @quarantined_keys = []
         reset!
         arm_run_history!
       end
@@ -423,6 +424,7 @@ module Loadwright
 
       def run_cell(endpoint:, sweep:, scale:, page_size:, concurrency:, seeded:)
         return if @guard&.quarantined?(endpoint.to_s)
+        return record_error_quarantine(endpoint) if @quarantined_keys.include?(endpoint.to_s)
 
         @lifecycle&.check_interrupt!
         @breaker.check!
@@ -615,7 +617,7 @@ module Loadwright
       # the guard and EXCLUDED from the breaker's error-rate numerator.
       def classify_error(cell, endpoint, response, concurrency)
         unless response.errored? || response.status.to_i >= 500
-          @breaker.record_success
+          @breaker.record_success(endpoint.to_s)
           return
         end
 
@@ -628,13 +630,41 @@ module Loadwright
           decision = @guard.observe(endpoint_key: endpoint.to_s, concurrency: concurrency, error: response.error)
           raise RunAborted.new(decision.reason, rung: :resource_guard) if decision.abort?
         when :endpoint_finding
-          @breaker.record_error
+          @breaker.record_error(endpoint.to_s)
           cell.errors << response.error
           @guard.observe(endpoint_key: endpoint.to_s, concurrency: concurrency, error: response.error)
         else
-          @breaker.record_error
+          @breaker.record_error(endpoint.to_s)
           cell.errors << (response.error || "HTTP #{response.status}")
         end
+
+        quarantine_if_concentrated!
+      end
+
+      # One endpoint owning nearly all the errors means that endpoint is broken, not
+      # the run. Set it aside and keep measuring the others, rather than aborting and
+      # losing every endpoint the sweep had not reached yet.
+      def quarantine_if_concentrated!
+        key = @breaker.quarantine_candidate
+        return if key.nil? || @quarantined_keys.include?(key)
+
+        @quarantined_keys << key
+        @breaker.quarantine!(key)
+        @stdout.puts "loadwright: #{key} is failing on nearly every request; quarantining it and " \
+                     "continuing with the rest of the run"
+      end
+
+      # Inconclusive, never healthy: the endpoint failed on nearly every request, and
+      # what remains unmeasured about it is unmeasured.
+      def record_error_quarantine(endpoint)
+        return if @outcomes.any? { |o| o.endpoint == endpoint && o.reason == :endpoint_erroring }
+
+        @outcomes << EndpointOutcome.inconclusive(
+          endpoint: endpoint, reason: :endpoint_erroring,
+          detail: "failed on nearly every request, so it was quarantined and the rest of the run " \
+                  "continued without it",
+          capability_epoch: @context.capability_epoch
+        )
       end
 
       def record_unresolved(endpoint, resolution)

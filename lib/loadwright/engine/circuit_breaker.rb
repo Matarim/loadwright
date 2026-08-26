@@ -42,6 +42,11 @@ module Loadwright
       # request, which is a worse failure than reacting one cell late.
       MINIMUM_OBSERVATIONS = 10
 
+      # Above this share of the errors, ONE endpoint is the problem rather than the
+      # run being broken. 0.8 leaves room for a couple of unrelated failures without
+      # losing the concentration signal.
+      CONCENTRATION_THRESHOLD = 0.8
+
       attr_reader :observations, :errors, :contention_events, :trip
 
       def initialize(config: Loadwright.configuration, minimum_observations: MINIMUM_OBSERVATIONS)
@@ -50,21 +55,29 @@ module Loadwright
         @observations = 0
         @errors = 0
         @contention_events = 0
+        @errors_by_endpoint = Hash.new(0)
+        @endpoints_seen = []
+        @quarantined = []
         @trip = nil
         @mutex = Mutex.new
       end
 
-      def record_success
-        @mutex.synchronize { @observations += 1 }
+      def record_success(endpoint_key = nil)
+        @mutex.synchronize do
+          @observations += 1
+          note_endpoint(endpoint_key)
+        end
         nil
       end
 
       # An endpoint-level failure: bad status, unexpected exception, anything the
       # guard did not claim.
-      def record_error
+      def record_error(endpoint_key = nil)
         @mutex.synchronize do
           @observations += 1
           @errors += 1
+          @errors_by_endpoint[endpoint_key] += 1 if endpoint_key
+          note_endpoint(endpoint_key)
           @trip ||= evaluate
         end
         nil
@@ -98,10 +111,35 @@ module Loadwright
         raise RunAborted.new(trip.message, rung: :circuit_breaker)
       end
 
+      # ONE BROKEN ENDPOINT SHOULD NOT COST THE OTHER NINETEEN. When the errors are
+      # concentrated in a single endpoint, the engine quarantines that endpoint and
+      # keeps going instead of aborting the run -- which is what "this endpoint is
+      # broken" should mean. Errors spread ACROSS endpoints still trip: that is the
+      # case the breaker exists for.
+      def quarantine_candidate
+        @mutex.synchronize { concentrated_endpoint }
+      end
+
+      def quarantine!(endpoint_key)
+        @mutex.synchronize do
+          @quarantined << endpoint_key unless @quarantined.include?(endpoint_key)
+          # Its errors stop counting: it is no longer being measured, and leaving them
+          # in the numerator would abort the run for an endpoint already set aside.
+          @errors -= @errors_by_endpoint[endpoint_key]
+          @observations -= @errors_by_endpoint[endpoint_key]
+          @errors_by_endpoint.delete(endpoint_key)
+          @trip = nil
+        end
+        nil
+      end
+
+      def quarantined = @mutex.synchronize { @quarantined.dup }
+
       def to_h
         @mutex.synchronize do
           {
             threshold: @threshold,
+            quarantined_endpoints: @quarantined.dup,
             observations: @observations,
             errors: @errors,
             error_rate: @observations.zero? ? 0.0 : @errors.fdiv(@observations),
@@ -122,7 +160,27 @@ module Loadwright
         rate = @errors.fdiv(@observations)
         return nil if rate <= @threshold
 
+        # Deferred, not cancelled: the engine quarantines the endpoint and the next
+        # error re-evaluates without it.
+        return nil if concentrated_endpoint
+
         Trip.new(error_rate: rate, errors: @errors, observations: @observations, threshold: @threshold)
+      end
+
+      def note_endpoint(key)
+        @endpoints_seen << key if key && !@endpoints_seen.include?(key)
+      end
+
+      # Called with the mutex held. nil unless one endpoint owns nearly all the errors
+      # AND the run has more than one endpoint to carry on WITH -- quarantining the
+      # only endpoint under test would leave the run measuring nothing.
+      def concentrated_endpoint
+        return nil if (@endpoints_seen - @quarantined).length < 2
+
+        worst, count = @errors_by_endpoint.max_by { |_, value| value }
+        return nil if worst.nil?
+
+        count.fdiv(@errors) >= CONCENTRATION_THRESHOLD ? worst : nil
       end
     end
   end

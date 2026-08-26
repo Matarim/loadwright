@@ -215,4 +215,66 @@ RSpec.describe Loadwright::Discovery::OpenapiSource do
 
     expect(source.endpoints.length).to eq(8)
   end
+
+  # THE REFUSAL IS RIGHT AND STAYS. What was missing is triage: an outside evaluation
+  # hit 52 errors, saw 20 of them truncated to a terminal, and had no way to see the
+  # rest or judge how much of the document was affected. Nobody fixes 52 errors they
+  # cannot read, and that turned a fixable problem into a reason to stop evaluating.
+  describe "when the document does not validate" do
+    let(:broken) do
+      <<~YAML
+        openapi: 3.0.1
+        info: { title: Broken, version: "1" }
+        paths:
+          /a:
+            get:
+              security:
+                - Bearer: {}
+              responses: { "200": { description: ok } }
+          /b:
+            get:
+              responses: { "200": { description: ok } }
+      YAML
+    end
+
+    around do |example|
+      Dir.mktmpdir("openapi-errors-") do |dir|
+        @dir = dir
+        File.write(File.join(dir, "swagger.yaml"), broken)
+        config.openapi_spec_paths = [File.join(dir, "swagger.yaml")]
+        config.report_output_dir = dir
+        example.run
+      end
+    end
+
+    def failure
+      described_class.new(config: config).endpoints
+      nil
+    rescue Loadwright::DiscoveryError => e
+      e
+    end
+
+    it "still refuses, rather than discovering from half a document" do
+      expect(failure).not_to be_nil
+    end
+
+    it "says how much of the document is affected, not just the first 20 errors" do
+      expect(failure.message).to match(/error\(s\) across \d+ of \d+ path\(s\)/)
+    end
+
+    it "writes the full list somewhere it can be read" do
+      failure
+
+      report = JSON.parse(File.read(File.join(@dir, "openapi-errors.json")))
+      expect(report["error_count"]).to be_positive
+      expect(report["affected_paths"]).to include("/a")
+      expect(report["errors"].length).to eq(report["error_count"])
+    end
+
+    # A team blocked on their document still has two working discovery sources, and
+    # saying so is the difference between "fix this first" and "give up".
+    it "names the discovery sources that need no document" do
+      expect(failure.message).to include("loadwright record")
+    end
+  end
 end
