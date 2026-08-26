@@ -13,6 +13,9 @@ module SpecPaths
   INITIALIZER_TT   = File.join(ROOT, "lib", "generators", "loadwright", "templates", "loadwright.rb.tt")
   AGENTS_MD        = File.join(ROOT, "AGENTS.md")
   README_MD        = File.join(ROOT, "README.md")
+  # DELIBERATELY NOT IN THIS REPOSITORY. The design notes are gitignored, so this
+  # path does not exist in a clone -- the one spec that reads it skips itself when
+  # it is absent, and runs for whoever does have them. Do not "fix" the path.
   REFERENCES       = File.join(ROOT, ".claude", "skills", "loadwright-development", "references")
 
   module_function
