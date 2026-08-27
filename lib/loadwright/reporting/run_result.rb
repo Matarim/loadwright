@@ -20,13 +20,13 @@ module Loadwright
     # rather than "not has_findings" — "18 endpoints clean" is a lie if 12 of them
     # were inconclusive (AGENTS.md AP-02).
     class RunResult
-      attr_reader :config, :started_at, :finished_at, :cells, :outcomes, :correlations,
+      attr_reader :config, :started_at, :finished_at, :cells, :outcomes, :correlations, :request_shapes,
                   :breaker, :guard, :seeder, :identities, :warnings, :aborted_reason,
                   :safety_decision, :containment, :discovery, :explain, :latency,
                   :time_breakdowns, :cold_warm, :pool_sizing, :traffic, :containment_disclosure
 
       def initialize(config:, cells:, outcomes:, context: nil, started_at: nil, finished_at: nil,
-                     correlations: {}, breaker: nil, guard: nil, seeder: nil, identities: nil,
+                     correlations: {}, request_shapes: {}, breaker: nil, guard: nil, seeder: nil, identities: nil,
                      warnings: [], aborted_reason: nil, safety_decision: nil, containment: nil,
                      discovery: nil, explain: {}, latency: {}, time_breakdowns: {}, cold_warm: {},
                      pool_sizing: nil, traffic: nil, containment_disclosure: nil)
@@ -37,6 +37,11 @@ module Loadwright
         @cells = cells
         @outcomes = outcomes
         @correlations = correlations
+        # WHAT WAS ACTUALLY SENT, per endpoint, and where each value came from. Two
+        # separate failures traced back to a report that never said this: a 404 nobody
+        # could attribute, and a confirmed 73-query finding that un-found itself when a
+        # changed recording stopped sending the parameter that made it expensive.
+        @request_shapes = request_shapes
         @breaker = breaker
         @guard = guard
         @seeder = seeder
@@ -195,6 +200,7 @@ module Loadwright
           endpoint: key,
           findings: outcome.findings.map { |finding| finding.respond_to?(:to_h) ? finding.to_h : finding },
           correlation: correlations[key],
+          request: request_shapes[key],
           # Per cell, and each carrying its own sample count: a percentile without the
           # sample size behind it is not something a reader can judge.
           latency: Array(latency[key]).map(&:to_h),

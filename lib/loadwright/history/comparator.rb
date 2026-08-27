@@ -369,20 +369,64 @@ module Loadwright
         shared.flat_map do |key|
           old_cells = cells_by_shape(before, key)
           new_cells = cells_by_shape(after, key)
+          question_changed = request_changed(before, after, key)
 
           (old_cells.keys & new_cells.keys).flat_map do |shape|
-            compare_cell(key, shape, old_cells[shape], new_cells[shape], excluded_metrics, noise_floor)
+            compare_cell(key, shape, old_cells[shape], new_cells[shape], excluded_metrics, noise_floor,
+                         question_changed)
           end
         end.compact
       end
 
-      def compare_cell(key, shape, old_cell, new_cell, excluded_metrics, noise_floor)
+      # THE TWO RUNS ASKED THIS ENDPOINT DIFFERENT QUESTIONS.
+      #
+      # The denominator rule above says a query count is never compared without its
+      # record count. This is the same rule one level out: a query count is not
+      # comparable across two runs that sent different parameters either.
+      #
+      # It is not hypothetical. An endpoint measured at 73 queries and 250ms in one run
+      # came back HEALTHY in the next, because a changed recording meant it was no
+      # longer sent the parameter that selects its expensive representation. Nothing in
+      # either report said the question had changed, so a confirmed defect un-found
+      # itself and the comparison would have called it a large improvement.
+      #
+      # Returns a description of what differed, or nil. nil also covers "cannot tell":
+      # a run record written before request shapes were persisted carries none, and
+      # inventing a difference from a missing field would strip verdicts off every
+      # delta in a comparison against any older baseline.
+      def request_changed(before, after, key)
+        old_shape = request_shape(before, key)
+        new_shape = request_shape(after, key)
+        return nil if old_shape.nil? || new_shape.nil?
+
+        old_params = Hash(old_shape["query"]).keys.sort
+        new_params = Hash(new_shape["query"]).keys.sort
+        return nil if old_params == new_params
+
+        added = new_params - old_params
+        removed = old_params - new_params
+        [
+          removed.any? ? "no longer sends #{removed.join(', ')}" : nil,
+          added.any? ? "now sends #{added.join(', ')}" : nil
+        ].compact.join(" and ")
+      end
+
+      def request_shape(record, key)
+        endpoint = record.respond_to?(:endpoint) ? record.endpoint(key) : nil
+        shape = endpoint && endpoint["request"]
+        shape.is_a?(Hash) ? shape : nil
+      end
+
+      def compare_cell(key, shape, old_cell, new_cell, excluded_metrics, noise_floor, question_changed = nil)
         deltas = []
-        records_moved = records_moved?(old_cell, new_cell)
+        # A changed question strips the verdict off exactly what a changed denominator
+        # does, and for the same reason: the number is real and its direction means
+        # nothing.
+        records_moved = records_moved?(old_cell, new_cell) || !question_changed.nil?
 
         if comparable?(:queries, excluded_metrics)
           deltas << count_delta(key, shape, :queries, old_cell["queries"], new_cell["queries"],
-                                records_moved: records_moved)
+                                records_moved: records_moved, question_changed: question_changed)
         end
         deltas << records_delta(key, shape, old_cell["records"], new_cell["records"]) if
           comparable?(:records, excluded_metrics)
@@ -431,7 +475,7 @@ module Loadwright
       # NO STATISTICAL TREATMENT, deliberately. A query count is close to deterministic:
       # 3 -> 47 is unambiguous, reproducible on any machine, in any mode, under any
       # load. Applying a noise threshold to it would only ever hide a real regression.
-      def count_delta(key, shape, metric, before, after, records_moved: false)
+      def count_delta(key, shape, metric, before, after, records_moved: false, question_changed: nil)
         return nil if before.nil? || after.nil?
         return nil if (after - before).abs <= COUNT_TOLERANCE
 
@@ -439,7 +483,7 @@ module Loadwright
           endpoint: key, metric: "#{metric} (#{shape})", before: before, after: after,
           change: before.zero? ? nil : (after - before) / before.to_f,
           verdict: verdict_for_count(after, before, records_moved),
-          note: count_note(after, before, records_moved)
+          note: count_note(after, before, records_moved, question_changed)
         )
       end
 
@@ -452,7 +496,13 @@ module Loadwright
         after > before ? :regression : :improvement
       end
 
-      def count_note(after, before, records_moved)
+      def count_note(after, before, records_moved, question_changed = nil)
+        if question_changed
+          return "this run #{question_changed}, so the two runs asked this endpoint different " \
+                 "questions and the change is not attributable to the app. An endpoint whose cost " \
+                 "depends on a parameter is only as well measured as the parameters it was sent."
+        end
+
         if records_moved
           return "the number of records returned changed too, so this is not a like-for-like " \
                  "comparison — see the returned-records row for the same cell"

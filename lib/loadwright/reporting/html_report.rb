@@ -315,6 +315,7 @@ module Loadwright
             #{inconclusive_explanation(endpoint)}
             #{findings_list(endpoint)}
             #{coverage_note(endpoint)}
+            #{request_block(endpoint)}
             #{time_breakdown(endpoint)}
             #{latency_table(endpoint)}
             #{cells_table(key)}
@@ -364,6 +365,33 @@ module Loadwright
       # REPORTED ON EVERY ENDPOINT, whatever its state. A reader can then see that an
       # otherwise-clean endpoint was checked with one N+1 detector instead of two,
       # without `inconclusive` having to be overloaded to signal it.
+      # WHAT WE ASKED IT. Without this a reader cannot tell a 404 we caused from one the
+      # endpoint chose, and cannot tell that two runs measured the same endpoint with
+      # different parameters -- which is how a confirmed 73-query finding came back
+      # HEALTHY in the next run with nothing in either report saying the question had
+      # changed.
+      VALUE_SOURCES = {
+        "seeded" => "from a seeded record",
+        "recorded" => "replayed from your specs",
+        "recorded_identifier" => "replayed from your specs, unresolved",
+        "page_size_sweep" => "set by the page-size sweep"
+      }.freeze
+
+      def request_block(endpoint)
+        shape = endpoint[:request]
+        return "" if shape.nil?
+
+        query = Hash(shape[:query])
+        return "" if query.empty?
+
+        rows = query.map do |name, source|
+          "<li><code>#{h(name)}</code> — #{h(VALUE_SOURCES.fetch(source.to_s, source.to_s))}</li>"
+        end
+
+        "<details class=\"request\"><summary>Request sent: <code>#{h(shape[:path])}</code></summary>" \
+          "<ul>#{rows.join}</ul></details>"
+      end
+
       def coverage_note(endpoint)
         description = endpoint.dig(:coverage, :description)
         return "" if description.to_s.empty?

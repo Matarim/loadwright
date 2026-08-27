@@ -133,10 +133,23 @@ module Loadwright
 
       # `duplicates` is the per-request fingerprint tally from RequestMetrics;
       # `tables_queried` and `response_keys` drive the over-fetch hint.
-      def findings(observations:, duplicates: {}, tables_queried: [], response_keys: [], max_bytes: nil)
+      # `scaling_observations` is EVERY cell, where `observations` is the one sweep whose
+      # question this call is answering.
+      #
+      # The two are different on purpose. The slope detector must see one sweep at a
+      # time -- that is the entire point of holding one axis fixed in each. The
+      # fixed/scaling classifier wants the opposite: as many axes as it can get,
+      # because either one answers its question. Handing it the same narrowed set meant
+      # that whenever the page-size sweep ran it saw only page-size cells, which all
+      # share ONE seeded scale by construction -- so the seeded-scale fallback added
+      # for exactly this case could never be reached, and the classifier abstained
+      # while the report printed identical query counts across a hundredfold change in
+      # seeded rows a few lines below.
+      def findings(observations:, duplicates: {}, tables_queried: [], response_keys: [], max_bytes: nil,
+                   scaling_observations: nil)
         results = []
 
-        results.concat(n_plus_one_findings(observations, duplicates))
+        results.concat(n_plus_one_findings(observations, duplicates, scaling_observations || observations))
         results.concat(pagination_findings(observations, max_bytes))
         results.concat(over_fetch_findings(tables_queried, response_keys))
 
@@ -213,14 +226,14 @@ module Loadwright
         measurement.available? ? { value: measurement.value } : { unavailable: measurement.reason }
       end
 
-      def n_plus_one_findings(observations, duplicates)
+      def n_plus_one_findings(observations, duplicates, scaling_observations = observations)
         results = []
 
         # Signal 1 — pattern matching: duplicate fingerprints within one request, the
         # technique Bullet and Prosopite use.
         worst = duplicates.max_by { |_, occurrences| occurrences.length }
         if worst && worst.last.length >= 3
-          scaling = repeat_scaling(observations)
+          scaling = repeat_scaling(scaling_observations)
           results << Finding.new(
             kind: :n_plus_one_pattern_match,
             confidence: :high,

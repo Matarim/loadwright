@@ -956,4 +956,30 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(detail_for("warehouse" => [41])).not_to include("may be ours")
     end
   end
+  # THE FALLBACK THAT COULD NEVER BE REACHED. The seeded-scale axis was added so the
+  # fixed/scaling classifier had something to ask on an API of single-record endpoints,
+  # where there is no returned-record count to read. It never fired: the observations
+  # handed to the classifier were the PAGE-SIZE cells whenever that sweep ran, and
+  # those all share one seeded scale by construction. So the classifier abstained
+  # while the report printed identical query counts across a hundredfold change in
+  # seeded rows a few lines below it.
+  describe "classifying a repeat when only the seeded scale moved" do
+    it "reaches the seeded-scale axis even though the page-size sweep ran" do
+      config.scale_factors = [1, 100]
+      config.page_size_sweep = [5, 100]
+      config.requests_per_endpoint_per_level = 2
+      sql = 'SELECT "warehouses".* FROM "warehouses" WHERE "warehouses"."id" = ?'
+      # A single-object response: no record count to read, which is the whole
+      # premise -- and a flat query count whatever the seeded scale.
+      responder = ->(_request) { { status: 200, body: JSON.generate("id" => 1) } }
+      metrics = { queries: Array.new(3) { { fingerprint: sql } }, query_count: 8 }
+
+      result = runner(context: build_context(metrics: metrics, responder: responder))
+               .run(endpoints: [endpoint])
+      finding = result.outcomes.first.findings.find { |f| f.kind == :n_plus_one_pattern_match }
+
+      expect(finding.evidence[:scaling]).to eq(:fixed_by_seed_scale)
+      expect(finding.suggestion).to include("pass the loaded object down")
+    end
+  end
 end

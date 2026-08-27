@@ -31,9 +31,10 @@ RSpec.describe Loadwright::History::Comparator do
     )
   end
 
-  def endpoint(key, state: "healthy", findings: [], reason: nil)
+  def endpoint(key, state: "healthy", findings: [], reason: nil, query: nil)
     { "endpoint" => key, "state" => state, "reason" => reason,
-      "findings" => findings.map { |f| f.is_a?(Hash) ? f : { "kind" => f.to_s } } }
+      "request" => query && { "path" => key, "query" => query },
+      "findings" => findings.map { |f| f.is_a?(Hash) ? f : { "kind" => f.to_s } } }.compact
   end
 
   def cell(key, queries: 3, latency: 100.0, bytes: 1_000, concurrency: 1, records: nil)
@@ -559,6 +560,58 @@ RSpec.describe Loadwright::History::Comparator do
     it "is false for two identical runs" do
       expect(comparator.compare(record(endpoints: [endpoint("GET /a")]),
                                 record(endpoints: [endpoint("GET /a")]))).not_to be_regressed
+    end
+  end
+  # THE TWO RUNS ASKED THIS ENDPOINT DIFFERENT QUESTIONS. The denominator rule says a
+  # query count is never compared without its record count; this is the same rule one
+  # level out. An endpoint measured at 73 queries came back HEALTHY in the next run
+  # because a changed recording stopped sending the parameter that selects its
+  # expensive representation -- and the comparison would have called that a large
+  # improvement.
+  describe "an endpoint sent different parameters between runs" do
+    def comparison_for(before_query, after_query)
+      before = record(endpoints: [endpoint("GET /a", query: before_query)],
+                      cells: [cell("GET /a", queries: 73)])
+      after = record(endpoints: [endpoint("GET /a", query: after_query)],
+                     cells: [cell("GET /a", queries: 6)])
+
+      comparator.compare(before, after)
+    end
+
+    it "strips the verdict off the query delta rather than calling it an improvement" do
+      delta = comparison_for({ "view" => "recorded" }, {}).deltas.find { |d| d.metric.start_with?("queries") }
+
+      expect(delta.verdict).to eq(:unattributable)
+    end
+
+    it "names what changed, so the reader can see which question moved" do
+      delta = comparison_for({ "view" => "recorded" }, {}).deltas.find { |d| d.metric.start_with?("queries") }
+
+      expect(delta.note).to include("no longer sends view")
+    end
+
+    it "names a parameter that appeared as well as one that vanished" do
+      delta = comparison_for({ "view" => "recorded" }, { "expand" => "recorded" })
+                .deltas.find { |d| d.metric.start_with?("queries") }
+
+      expect(delta.note).to include("no longer sends view").and include("now sends expand")
+    end
+
+    it "compares normally when both runs asked the same question" do
+      delta = comparison_for({ "view" => "recorded" }, { "view" => "recorded" })
+              .deltas.find { |d| d.metric.start_with?("queries") }
+
+      expect(delta.verdict).to eq(:improvement)
+    end
+
+    # A record written before request shapes were persisted carries none, and
+    # inventing a difference from a missing field would strip the verdict off every
+    # delta in a comparison against any older baseline.
+    it "compares normally against a baseline that predates request shapes" do
+      delta = comparison_for(nil, { "view" => "recorded" })
+              .deltas.find { |d| d.metric.start_with?("queries") }
+
+      expect(delta.verdict).to eq(:improvement)
     end
   end
 end

@@ -203,6 +203,7 @@ module Loadwright
         coverage = endpoint.dig(:coverage, :description)
         parts << "\n_#{coverage}_" unless coverage.to_s.empty?
 
+        parts << request_block(endpoint)
         parts << breakdown_block(endpoint)
         parts << latency_block(endpoint)
         parts << cells_block(endpoint[:endpoint].to_s)
@@ -319,6 +320,32 @@ module Loadwright
       end
 
       # ------------------------------------------------------------------ helpers
+
+      # WHAT WE ASKED IT. Without this a reader cannot tell a 404 we caused from one the
+      # endpoint chose, and cannot tell that two runs measured the same endpoint with
+      # different parameters -- which is how a confirmed 73-query finding came back
+      # HEALTHY in the next run, with nothing in either report saying the question had
+      # changed.
+      VALUE_SOURCES = {
+        "seeded" => "from a seeded record",
+        "recorded" => "replayed from your specs",
+        "recorded_identifier" => "**replayed from your specs, unresolved**",
+        "page_size_sweep" => "set by the page-size sweep"
+      }.freeze
+
+      def request_block(endpoint)
+        shape = endpoint[:request]
+        return nil if shape.nil?
+
+        query = Hash(shape[:query])
+        return nil if query.empty?
+
+        rows = query.map do |name, source|
+          "  - `#{name}` — #{VALUE_SOURCES.fetch(source.to_s, source)}"
+        end
+
+        (["", "**Request sent:** `#{shape[:path]}`"] + rows).join("\n")
+      end
 
       def endpoints = Array(@data[:endpoints])
 

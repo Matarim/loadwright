@@ -145,6 +145,9 @@ module Loadwright
         # endpoint key -> query parameter names whose recorded value we replayed
         # because nothing seeded could resolve them. Read when a 404 needs explaining.
         @replayed_identifiers = {}
+        # endpoint key -> what the request actually carried, and where each value came
+        # from. See #request_shape_for.
+        @request_shapes = {}
         reset!
         arm_run_history!
       end
@@ -540,14 +543,48 @@ module Loadwright
         @context.issue(build_request(endpoint, resolution, page_size))
       end
 
+      # WHAT WE ACTUALLY SENT, AND WHERE EACH VALUE CAME FROM.
+      #
+      # Two separate failures in one round traced back to the report never saying this.
+      #
+      # An endpoint answered 404 and the reader had no way to tell whether we had sent
+      # it a resolved id or a placeholder lifted from a spec -- the difference between
+      # their bug and ours.
+      #
+      # And an endpoint that had been measured at 73 queries and 250ms was reported
+      # HEALTHY in the next run, because a change in the recording meant it was no
+      # longer sent the parameter that selects its expensive representation. The two
+      # runs asked it different questions and nothing in either report said so. A
+      # confirmed defect un-found itself, silently.
+      #
+      # The shape is cheap to record, belongs on the endpoint rather than in a log, and
+      # is what History::Comparator needs to refuse a comparison between two runs that
+      # asked different questions.
+      def request_shape_for(key) = @request_shapes[key]
+
+      def note_request_shape(endpoint, request, sources)
+        key = endpoint.to_s
+        return if @request_shapes.key?(key)
+
+        @request_shapes[key] = {
+          path: request.path,
+          query: sources,
+          headers: request.headers.keys.reject { |name| name.to_s.downcase == "authorization" }.sort
+        }
+      end
+
       def build_request(endpoint, resolution, page_size)
-        query = recorded_query_for(endpoint)
+        sources = {}
+        query = recorded_query_for(endpoint, sources)
         # The page-size parameter name is whatever the app accepts; the first
         # configured candidate is used, and an endpoint that ignores it shows up as
         # "unable to vary result size" rather than as flat.
-        query[@config.page_size_parameters.first] = page_size if page_size
+        if page_size
+          query[@config.page_size_parameters.first] = page_size
+          sources[@config.page_size_parameters.first] = :page_size_sweep
+        end
 
-        Execution::Request.new(
+        request = Execution::Request.new(
           verb: endpoint.verb,
           path: resolution&.path || endpoint.path,
           query: query,
@@ -558,6 +595,8 @@ module Loadwright
           body: endpoint.body_for(page_size),
           endpoint_key: endpoint.to_s
         )
+        note_request_shape(endpoint, request, sources)
+        request
       end
 
       # WHAT A PASSING SPEC ACTUALLY SENT. Discovery collects the query parameters of
@@ -571,7 +610,7 @@ module Loadwright
       # the way clients call it; the page-size sweep sets its own. Replaying a recorded
       # per_page would pin the axis the sweep exists to vary, and the result would read
       # as a flat, healthy line.
-      def recorded_query_for(endpoint)
+      def recorded_query_for(endpoint, sources = {})
         return {} unless @config.replay_recorded_query_params
 
         page_size_names = Array(@config.page_size_parameters).map(&:to_s)
@@ -580,7 +619,7 @@ module Loadwright
           next if name.empty? || page_size_names.include?(name)
           next if param[:example].nil?
 
-          out[name] = query_value_for(endpoint, name, param[:example])
+          out[name] = query_value_for(endpoint, name, param[:example], sources)
         end
       end
 
@@ -596,12 +635,19 @@ module Loadwright
       # the endpoint either way -- but the endpoint is MARKED, so a 404 can say the
       # request carried an identifier we could not resolve rather than presenting it as
       # the app's answer.
-      def query_value_for(endpoint, name, recorded)
-        return recorded unless @resolver.respond_to?(:identifier_shaped?) && @resolver.identifier_shaped?(name)
+      def query_value_for(endpoint, name, recorded, sources = {})
+        unless @resolver.respond_to?(:identifier_shaped?) && @resolver.identifier_shaped?(name)
+          sources[name] = :recorded
+          return recorded
+        end
 
         seeded = @resolver.resolve_query_param(name)
-        return seeded unless seeded.nil?
+        unless seeded.nil?
+          sources[name] = :seeded
+          return seeded
+        end
 
+        sources[name] = :recorded_identifier
         (@replayed_identifiers[endpoint.to_s] ||= []) << name
         @replayed_identifiers[endpoint.to_s].uniq!
         recorded
@@ -812,6 +858,7 @@ module Loadwright
           cells: @cells,
           outcomes: @outcomes,
           correlations: @correlations,
+          request_shapes: @request_shapes,
           breaker: @breaker,
           guard: @guard,
           seeder: @seeder,
@@ -1090,7 +1137,12 @@ module Loadwright
 
         findings = correlator.findings(
           observations: observations_for(page_size_cells.empty? ? seed_scale_cells : page_size_cells),
-          duplicates: duplicates
+          duplicates: duplicates,
+          # EVERY cell, for the fixed/scaling question only. The slope needs one sweep
+          # at a time; the repeat classifier needs whichever axis actually moved, and
+          # on an API of single-record endpoints the seeded scale is the only one that
+          # ever does.
+          scaling_observations: observations_for(page_size_cells + seed_scale_cells)
         )
         findings.concat(correlator.findings(observations: observations_for(seed_scale_cells)).select do |finding|
           %i[missing_pagination oversized_payload].include?(finding.kind)
@@ -1180,14 +1232,19 @@ module Loadwright
       # "THIS ENDPOINT 404s" AND "THIS ENDPOINT 404s WITH PARAMETERS WE REPLAYED FROM A
       # SPEC" ARE DIFFERENT SENTENCES. The first is about the app; the second is about
       # us, and pointing a reader at their own code for it wastes their time.
+      # ANY unsuccessful status, not only 404. A replayed placeholder can just as easily
+      # produce a 400 or a 422, and the reader needs the same sentence for those: this
+      # may be ours rather than the endpoint's.
       def replayed_identifier_note(key, cells)
         names = Array(@replayed_identifiers[key])
         return "" if names.empty?
-        return "" unless cells.flat_map { |cell| Array(cell.statuses) }.compact.include?(404)
+
+        statuses = cells.flat_map { |cell| Array(cell.statuses) }.compact
+        return "" if statuses.empty? || statuses.all? { |status| (200..299).cover?(status) }
 
         " This request carried #{names.join(', ')} replayed verbatim from a recording, because " \
-          "nothing seeded could resolve #{names.length == 1 ? 'it' : 'them'} -- so the 404 may be ours " \
-          "rather than the endpoint's. Seed the resource, or name the value in path_param_overrides."
+          "nothing seeded could resolve #{names.length == 1 ? 'it' : 'them'} -- so this status may be " \
+          "ours rather than the endpoint's. Seed the resource, or name the value in path_param_overrides."
       end
 
       def quarantine_detail(key)
