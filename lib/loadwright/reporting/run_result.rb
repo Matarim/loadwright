@@ -201,6 +201,10 @@ module Loadwright
           findings: outcome.findings.map { |finding| finding.respond_to?(:to_h) ? finding.to_h : finding },
           correlation: correlations[key],
           request: request_shapes[key],
+          # SUCCEEDED HERE, FAILED THERE. One verdict on the header while four of six
+          # cells answered 200 makes a reader open the cell table to find out what
+          # actually happened. The counts belong next to the verdict.
+          statuses: status_summary(key),
           # Per cell, and each carrying its own sample count: a percentile without the
           # sample size behind it is not something a reader can judge.
           latency: Array(latency[key]).map(&:to_h),
@@ -208,6 +212,16 @@ module Loadwright
           time_breakdown: time_breakdown_for(key),
           cold_warm: cold_warm[key]&.to_h
         ).compact
+      end
+
+      # { 200 => 4, 400 => 2 }, ordered most common first. nil rather than an empty
+      # hash when nothing was issued, so `.compact` drops the key entirely and a
+      # never-requested endpoint does not render an empty row.
+      def status_summary(key)
+        counts = cells_for(key).flat_map { |cell| Array(cell.statuses) }.compact.tally
+        return nil if counts.empty?
+
+        counts.sort_by { |status, count| [-count, status] }.to_h
       end
 
       # The breakdown always travels with the disclosure. Someone reading one endpoint's

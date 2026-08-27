@@ -5,6 +5,48 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.7] — 2026-08-27
+
+Polish, from a fifth round of outside integration that found nothing Critical or
+High — a first for this project. Both items came from the same run: the first
+**collection-shaped** endpoint the tool has ever measured.
+
+### Fixed
+
+- **A page size the sweep chose is the sweep's doing, not the endpoint's.** The
+  first collection endpoint ever measured answered 200 at its own default and at
+  page size 25, and 400 at page sizes 5 and 100 — same endpoint, same resolved id,
+  a different verdict per cell. It accepts a set of page sizes and the sweep asked
+  for values outside it. Reporting that as an ordinary error status sends a reader
+  to look at their app for something the tool did. It now has its own reason,
+  `page_size_rejected`, which names the values that worked, says to set
+  `page_size_sweep` to values the endpoint accepts, and says what was lost — the
+  N+1-behind-pagination check could not run on the rejected pages, which is the
+  whole purpose of that sweep.
+
+  Still `inconclusive`. Loosening the validity gate for a partly-successful
+  endpoint is exactly how a 404 ended up in the healthy list in 0.0.4; what changes
+  is the reason and the advice, not the verdict.
+
+### Changed
+
+- **Endpoint headers carry the status counts** when the cells disagree — `(4 × 200,
+  2 × 400)` next to the verdict. A single `inconclusive` above four successful
+  cells made a reader open the cell table to find out what actually happened.
+  Omitted entirely when every request agreed.
+
+### Upgrading
+
+- **If you script `loadwright record`** — from CI, a Rakefile, a git hook — the
+  acknowledgement added in 0.0.5 will refuse an unattended run the first time it
+  executes after upgrading, where your `database.yml` declares a test database that
+  `record` will not reach. That is the correct failure: it protects the database
+  your suite is about to write to, and a prompt that cannot be shown counts as
+  unanswered rather than as yes. Add `--accept-database-writes` to the invocation,
+  or set `config.confirm_recording_database = false` if your suite is
+  transactional. Where no distinct test database is declared, nothing is asked.
+  Documented in the README under "Which database your specs will write to".
+
 ## [0.0.6] — 2026-08-27
 
 One fix, from the same round-4 report as 0.0.5 and missed on the first pass.
@@ -522,7 +564,8 @@ Stated here rather than left to be discovered:
 - **Tested on Ruby 4.0 and Rails 8.1.** The gemspec floor of Ruby 3.1 / Rails 7.0
   reflects the APIs used, not a tested matrix.
 
-[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.6...HEAD
+[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.7...HEAD
+[0.0.7]: https://github.com/Matarim/loadwright/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/Matarim/loadwright/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/Matarim/loadwright/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/Matarim/loadwright/compare/v0.0.3...v0.0.4

@@ -50,6 +50,13 @@ module Loadwright
                          "endpoint. It failed on nearly every request, so it was quarantined and the " \
                          "rest of the run continued without it",
       rate_limited: "requests were throttled; allowlist Loadwright or disable rate limiting for this environment",
+      # THE SWEEP CHOSE THE VALUE THAT FAILED. An endpoint answering 200 at its own
+      # default and 400 at page sizes 5 and 100 is not broken -- it accepts a set of
+      # page sizes and we asked for one outside it. Reporting that as an ordinary
+      # error status points the reader at their app for something we did.
+      page_size_rejected: "the endpoint rejected the page sizes the sweep asked for; it answered " \
+                          "successfully at others, so this is the sweep's choice of value rather than " \
+                          "the endpoint failing",
 
       # Coverage — see response-analysis.md. Distinct from the validity-gate reasons
       # above: the response was fine and the measurements we DID take were valid.

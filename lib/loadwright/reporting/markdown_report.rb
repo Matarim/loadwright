@@ -179,8 +179,9 @@ module Loadwright
         (["## Endpoints"] + sorted.map { |endpoint| endpoint_block(endpoint) }).join("\n\n")
       end
 
-      def endpoint_block(endpoint)
-        parts = ["### `#{endpoint[:endpoint]}` — #{STATE_MARKS.fetch(endpoint[:state].to_s, endpoint[:state])}"]
+        def endpoint_block(endpoint)
+        parts = ["### `#{endpoint[:endpoint]}` — #{STATE_MARKS.fetch(endpoint[:state].to_s, endpoint[:state])}" \
+                 "#{status_summary(endpoint)}"]
 
         if endpoint[:state].to_s == "inconclusive"
           parts << ""
@@ -332,6 +333,16 @@ module Loadwright
         "recorded_identifier" => "**replayed from your specs, unresolved**",
         "page_size_sweep" => "set by the page-size sweep"
       }.freeze
+
+      # SUCCEEDED HERE, FAILED THERE. A single verdict on the header while four of six
+      # cells answered 200 makes a reader open the cell table to find out what
+      # happened. Rendered inline, and omitted entirely when every request agreed.
+      def status_summary(endpoint)
+        counts = Hash(endpoint[:statuses])
+        return "" if counts.length < 2
+
+        " (#{counts.map { |status, count| "#{count} x #{status}" }.join(', ')})"
+      end
 
       def request_block(endpoint)
         shape = endpoint[:request]

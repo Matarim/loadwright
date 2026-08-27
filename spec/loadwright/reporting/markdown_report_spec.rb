@@ -113,4 +113,26 @@ RSpec.describe Loadwright::Reporting::MarkdownReport do
 
     expect(text).to include("5 (stepped down from 20)").or include("stepped down")
   end
+  # SUCCEEDED HERE, FAILED THERE. One verdict on the header while four of six cells
+  # answered 200 makes a reader open the cell table to find out what happened.
+  describe "an endpoint whose cells did not agree" do
+    def rendered_with(*status_lists)
+      key = "GET /api/v1/posts"
+      cells = status_lists.map { |statuses| build_cell(endpoint_key: key, statuses: statuses) }
+      outcome = build_outcome(endpoint: build_endpoint(path: "/api/v1/posts"), state: :inconclusive,
+                              reason: :page_size_rejected)
+
+      render(outcomes: [outcome], cells: cells)
+    end
+
+    it "puts the status counts next to the verdict" do
+      output = rendered_with([200, 200, 200, 200], [400, 400])
+
+      expect(output).to include("4 x 200").and include("2 x 400")
+    end
+
+    it "says nothing when every request agreed" do
+      expect(rendered_with([200, 200], [200, 200])).not_to include("4 x 200")
+    end
+  end
 end

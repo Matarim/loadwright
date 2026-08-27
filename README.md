@@ -724,6 +724,37 @@ asking for a load test. A failing spec still contributes its recording — the r
 was captured before the assertion ran. Pass `--specs` more than once to record from
 several paths.
 
+#### Which database your specs will write to
+
+`record` boots your app and then runs RSpec **in the same process** — it has to,
+because the recorder is a module prepended to a class there. A consequence that is
+easy to miss: your app is already loaded by then, so the `ENV["RAILS_ENV"] ||=
+"test"` in a conventional `rails_helper` does nothing, and **your suite runs against
+whatever database the CLI booted into** — normally development.
+
+A fully transactional suite rolls everything back and leaves nothing behind. One
+that truncates, commits, or uses `before(:all)` will write to that database, and a
+suite that truncates between examples would empty it.
+
+So `record` names the database before a single example runs, and where your
+`database.yml` declares a test database it will not reach, it **asks**:
+
+```console
+Run your specs against myapp_development? [y/N]
+```
+
+**If you script `record`** — from CI, a Rakefile, a git hook — this is a breaking
+change as of 0.0.7, and it is meant to be: a prompt that cannot be shown counts as
+unanswered, not as yes. Add the flag to your invocation:
+
+```console
+$ bundle exec loadwright record --specs spec/requests --accept-database-writes
+```
+
+or set `config.confirm_recording_database = false` if your suite is transactional
+and you would rather not think about it again. Where no distinct test database is
+declared, nothing is asked at all.
+
 **A recording knows which database it came from.** `record` runs your specs against
 `test`; `run` measures `development`. Recorded ids from the wrong database do not
 exist in the one being measured, so Loadwright drops those values and says so, and

@@ -1252,6 +1252,43 @@ DIAG-20:
     workaround before this was fixed and it produces exactly one undifferentiated
     endpoint.
 
+DIAG-31:
+  symptom: >
+    "a collection endpoint is inconclusive but most of its cells returned 200" /
+    "it 400s at some page sizes and not others"
+  cause: >
+    The page-size sweep asked for a value the endpoint does not accept. The endpoint
+    is not broken; it accepts a set of page sizes and the sweep chose outside it.
+  fix: >
+    Set page_size_sweep to values the endpoint accepts. 0.0.7+ reports this as
+    `page_size_rejected` and names the sizes that worked.
+  say_this: >
+    The N+1-behind-pagination check did not run on the rejected pages, which is what
+    that sweep exists for -- so a clean verdict on the seed-scale axis is half the
+    coverage. A valid OpenAPI document declaring the page-size schema is the durable
+    fix, because then the sweep knows the legal values.
+  do_not: >
+    Do not report this endpoint as broken, and do not suggest disabling
+    require_successful_response to get a number out of it.
+
+DIAG-32:
+  symptom: >
+    "loadwright record used to work in CI and now exits 3" / "record refuses without
+    a terminal"
+  cause: >
+    0.0.5+ asks for an acknowledgement where the host declares a test database that
+    `record` will not reach -- it boots the app first, so a conditional RAILS_ENV
+    assignment in rails_helper is a no-op and the suite runs against development. A
+    prompt that cannot be shown counts as unanswered, not as yes.
+  fix: |
+    Add --accept-database-writes to the scripted invocation, or set
+    config.confirm_recording_database = false where the suite is transactional.
+  say_this: >
+    This is a deliberate breaking change and the failure is the correct one: a suite
+    that truncates between examples would empty the database it is running against.
+    Ask whether their suite is fully transactional before recommending the config
+    switch over the flag.
+
 DIAG-30:
   symptom: >
     "the run aborted on the circuit breaker after I widened included_paths" /

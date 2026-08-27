@@ -1010,6 +1010,11 @@ module Loadwright
           # A more specific reason when the run-level pattern supports one.
           # `:unsuccessful_status` only says an error path was measured;
           # `:auth_failed` and `:rate_limited` name the fix.
+          # A page size WE chose is our doing, not the endpoint's, and it gets its own
+          # reason before the generic one.
+          rejected = page_size_rejection(cells)
+          return inconclusive(endpoint, :page_size_rejected, rejected) if rejected
+
           diagnosed = traffic_reason_for(key)
           return inconclusive(endpoint, diagnosed || invalid.reason,
                               "#{invalid.detail}#{replayed_identifier_note(key, cells)}")
@@ -1249,6 +1254,47 @@ module Loadwright
         " This request carried #{names.join(', ')} replayed verbatim from a recording, because " \
           "nothing seeded could resolve #{names.length == 1 ? 'it' : 'them'} -- so this status may be " \
           "ours rather than the endpoint's. Seed the resource, or name the value in path_param_overrides."
+      end
+
+      # THE SWEEP DROVE IT OUT OF RANGE.
+      #
+      # The first collection-shaped endpoint ever measured answered 200 at its own
+      # default and at page size 25, and 400 at page sizes 5 and 100 -- same endpoint,
+      # same resolved id, a different verdict per cell. It accepts a set of page sizes
+      # and the sweep asked for values outside it.
+      #
+      # Reporting that as an ordinary error status sends the reader to look at their
+      # app for something we did. It is the same species as the replayed-identifier
+      # note: when the tool supplied the value that failed, say so.
+      #
+      # Still inconclusive, deliberately. Loosening the validity gate for a
+      # partly-successful endpoint is exactly how a 404 ended up in the healthy list;
+      # what changes here is the REASON and the advice, not the verdict.
+      def page_size_rejection(cells)
+        page_cells = cells.select { |cell| cell.sweep == :page_size && Array(cell.statuses).any? }
+        seed_cells = cells.select { |cell| cell.sweep == :seed_scale && Array(cell.statuses).any? }
+        return nil if page_cells.empty? || seed_cells.empty?
+
+        # Every seed-scale cell fine, so nothing about the endpoint itself is failing.
+        return nil unless seed_cells.all? { |cell| all_successful?(cell) }
+
+        rejected = page_cells.reject { |cell| all_successful?(cell) }
+        accepted = page_cells.select { |cell| all_successful?(cell) }
+        return nil if rejected.empty?
+
+        statuses = rejected.flat_map { |cell| Array(cell.statuses) }.reject { |s| (200..299).cover?(s) }.uniq
+        worked = (accepted.map(&:page_size) + [nil]).compact.uniq
+
+        "answered #{statuses.join('/')} at page size #{rejected.map(&:page_size).join(', ')}, and " \
+          "answered successfully at its own default#{worked.empty? ? '' : " and at #{worked.join(', ')}"}. " \
+          "The page-size sweep chose those values; this endpoint accepts a different set, so it was " \
+          "driven out of range rather than failing. Set page_size_sweep to values it accepts. Until then " \
+          "the N+1-behind-pagination check could not run on the rejected pages, which is what the " \
+          "page-size sweep exists for."
+      end
+
+      def all_successful?(cell)
+        Array(cell.statuses).compact.all? { |status| (200..299).cover?(status) }
       end
 
       def quarantine_detail(key)

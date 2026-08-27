@@ -982,4 +982,58 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(finding.suggestion).to include("pass the loaded object down")
     end
   end
+  # THE SWEEP DROVE IT OUT OF RANGE. The first collection-shaped endpoint ever
+  # measured answered 200 at its own default and at page size 25, and 400 at page
+  # sizes 5 and 100 -- same endpoint, same resolved id, a different verdict per cell.
+  # It accepts a set of page sizes and the sweep asked for values outside it.
+  # Reporting that as an ordinary error status sends the reader to look at their app
+  # for something the tool did.
+  describe "an endpoint that rejects the page sizes the sweep chose" do
+    let(:outcome) do
+      config.scale_factors = [1, 100]
+      config.page_size_sweep = [5, 25]
+      config.requests_per_endpoint_per_level = 2
+      # 400 for page size 5, 200 for everything else -- including every seed-scale
+      # cell, which sends no page-size parameter at all.
+      responder = lambda do |request|
+        rejected = request.query[config.page_size_parameters.first].to_i == 5
+        rejected ? { status: 400, body: "" } : { status: 200, body: JSON.generate([{ "id" => 1 }]) }
+      end
+
+      result = runner(context: build_context(responder: responder)).run(endpoints: [endpoint])
+      result.outcomes.first
+    end
+
+    it "blames the sweep's choice of value rather than the endpoint" do
+      expect(outcome.reason).to eq(:page_size_rejected)
+    end
+
+    it "names the page size it rejected and says it answered elsewhere" do
+      expect(outcome.detail).to include("400 at page size 5").and include("answered successfully")
+    end
+
+    it "says what to change, and what was lost by not being able to sweep there" do
+      expect(outcome.detail).to include("Set page_size_sweep").and include("N+1-behind-pagination")
+    end
+
+    # NOT loosened to healthy. Letting a partly-successful endpoint through the
+    # validity gate is exactly how a 404 ended up in the healthy list; what changes
+    # here is the reason and the advice, not the verdict.
+    it "is still inconclusive" do
+      expect(outcome).to be_inconclusive
+    end
+
+    # An endpoint failing at EVERY page size is not being driven out of range -- it is
+    # failing, and the ordinary reason is the right one.
+    it "does not blame the sweep when the endpoint fails everywhere" do
+      config.scale_factors = [1, 100]
+      config.page_size_sweep = [5, 25]
+      config.requests_per_endpoint_per_level = 2
+      responder = ->(_request) { { status: 400, body: "" } }
+
+      result = runner(context: build_context(responder: responder)).run(endpoints: [endpoint])
+
+      expect(result.outcomes.first.reason).not_to eq(:page_size_rejected)
+    end
+  end
 end

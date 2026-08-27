@@ -311,7 +311,7 @@ module Loadwright
 
         <<~HTML
           <article class="endpoint #{h(state_class(endpoint[:state]))}" id="#{h(anchor(key))}">
-            <h3>#{h(key)} <span class="badge">#{h(state_label(endpoint[:state]))}</span></h3>
+            <h3>#{h(key)} <span class="badge">#{h(state_label(endpoint[:state]))}</span>#{status_summary(endpoint)}</h3>
             #{inconclusive_explanation(endpoint)}
             #{findings_list(endpoint)}
             #{coverage_note(endpoint)}
@@ -376,6 +376,17 @@ module Loadwright
         "recorded_identifier" => "replayed from your specs, unresolved",
         "page_size_sweep" => "set by the page-size sweep"
       }.freeze
+
+      # SUCCEEDED HERE, FAILED THERE. One verdict on the header while four of six cells
+      # answered 200 makes a reader open the cell table to find out what happened.
+      # Omitted entirely when every request agreed.
+      def status_summary(endpoint)
+        counts = Hash(endpoint[:statuses])
+        return "" if counts.length < 2
+
+        rendered = counts.map { |status, count| "#{count}&times;#{h(status)}" }.join(", ")
+        " <span class=\"statuses\">#{rendered}</span>"
+      end
 
       def request_block(endpoint)
         shape = endpoint[:request]
@@ -788,6 +799,10 @@ module Loadwright
           .state-healthy .badge { color: var(--healthy); }
           .state-has-findings .badge { color: var(--findings); }
           .state-inconclusive .badge { color: var(--inconclusive); }
+          .statuses { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .75rem;
+                      color: var(--muted); margin-left: .4rem; }
+          details.request { margin: .5rem 0; font-size: .85rem; color: var(--muted); }
+          details.request ul { margin: .4rem 0 .2rem 1.1rem; padding: 0; }
           .explanation { background: var(--panel); border-radius: 6px; padding: .7rem .9rem; margin: .6rem 0; }
           ul.findings { list-style: none; padding: 0; margin: .6rem 0; }
           ul.findings li { padding: .5rem .7rem; border-radius: 5px; background: var(--panel);
