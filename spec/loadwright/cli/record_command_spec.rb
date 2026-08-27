@@ -132,4 +132,88 @@ RSpec.describe Loadwright::CLI::RecordCommand do
       expect { command({}, runner: ->(_paths) { 0 }).call }.not_to raise_error
     end
   end
+  # AN ACKNOWLEDGEMENT, NOT A REFUSAL. The host declares a test database and believes
+  # its suite runs there; it will not, because `record` boots the app first. That is
+  # detectable rather than hypothetical, and the costs are wildly asymmetric: a
+  # transactional suite that proceeds loses nothing, a truncating one loses a
+  # developer's database irreversibly, and "Ctrl-C now" only helps somebody watching
+  # the scrollback in the second before their suite starts.
+  describe "acknowledging that the specs will write to the booted database" do
+    def with_databases(current:, test: nil)
+      db_config = double("db_config", database: current)
+      test_config = test && double("test_config", database: test)
+      configurations = double("configurations", configs_for: [test_config].compact)
+      migrations = double("migration_context", needs_migration?: false)
+      stub_const("ActiveRecord", Module.new)
+      stub_const("ActiveRecord::Base",
+                 double("Base", connection_db_config: db_config, configurations: configurations,
+                                connection_pool: double("pool", migration_context: migrations)))
+      yield
+    end
+
+    def command_with(stdin, options = {})
+      described_class.new(options: { specs: "spec/requests" }.merge(options),
+                          stdout: stdout, stderr: stderr, stdin: stdin,
+                          loader: loader, runner: ->(_paths) { 0 })
+    end
+
+    let(:tty) { double("stdin", tty?: true, gets: "y\n") }
+    let(:declining_tty) { double("stdin", tty?: true, gets: "\n") }
+    let(:pipe) { double("stdin", tty?: false) }
+
+    it "asks before running when a declared test database will not be reached" do
+      with_databases(current: "widgets_development", test: "widgets_test") do
+        command_with(tty).call
+      end
+
+      expect(stdout.string).to include("Run your specs against widgets_development?")
+    end
+
+    it "does not record when the answer is no" do
+      status = with_databases(current: "widgets_development", test: "widgets_test") do
+        command_with(declining_tty).call
+      end
+
+      expect(status).to eq(described_class::REFUSED)
+      expect(stderr.string).to include("not recording")
+    end
+
+    # Nothing to miss: the suite is already on the database it declares.
+    it "asks nothing when there is no distinct test database to miss" do
+      with_databases(current: "widgets_test", test: "widgets_test") do
+        command_with(pipe).call
+      end
+
+      expect(stdout.string).not_to include("Run your specs against")
+    end
+
+    # A prompt that cannot be shown is not a prompt that was answered.
+    it "refuses rather than assuming yes when it cannot ask" do
+      status = with_databases(current: "widgets_development", test: "widgets_test") do
+        command_with(pipe).call
+      end
+
+      expect(status).to eq(described_class::REFUSED)
+      expect(stderr.string).to include("--accept-database-writes")
+    end
+
+    it "proceeds non-interactively when the flag says so" do
+      with_databases(current: "widgets_development", test: "widgets_test") do
+        command_with(pipe, accept_database_writes: true).call
+      end
+
+      expect(stderr.string).not_to include("--accept-database-writes")
+    end
+
+    it "can be switched off entirely" do
+      Loadwright.configuration.confirm_recording_database = false
+      with_databases(current: "widgets_development", test: "widgets_test") do
+        command_with(pipe).call
+      end
+
+      expect(stdout.string).not_to include("Run your specs against")
+    ensure
+      Loadwright.reset_configuration!
+    end
+  end
 end

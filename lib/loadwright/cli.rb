@@ -311,6 +311,13 @@ module Loadwright
         o.on("--specs PATH", "For `record`: spec path to run and capture (repeatable)") do |v|
           (@options[:specs] ||= []) << v
         end
+        # `record` runs the host's specs against the database the CLI booted into, and
+        # asks first when a distinct test database is declared and will not be reached.
+        # This is how you answer that non-interactively.
+        o.on("--accept-database-writes",
+             "For `record`: acknowledge that your specs will run against the booted database") do
+          @options[:accept_database_writes] = true
+        end
         o.on("--full", "For `init`: write the complete annotated key surface") { @options[:full] = true }
         o.on("--force", "For `init`: overwrite an existing initializer") { @options[:force] = true }
         o.on("--baseline", "For `compare`: compare against the designated baseline") do

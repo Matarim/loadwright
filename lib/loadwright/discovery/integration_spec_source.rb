@@ -126,7 +126,12 @@ module Loadwright
         # nothing is a bad trade for a capture that produced nothing, and refusing the
         # write is what makes the existing message true.
         if @captured.empty? && File.file?(output_path)
-          @warnings << "captured no requests, so #{output_path} was left as it was"
+          # NAMES WHAT SURVIVED, not just what did not happen. "Nothing was written" is
+          # true and still leaves someone who has been bitten once going to check the
+          # file. The count is already in hand.
+          kept = existing_request_count(output_path)
+          @warnings << "captured no requests, so #{output_path} was left as it was" \
+                       "#{kept ? " -- its #{kept} recorded request(s) are intact" : ''}"
           return output_path
         end
 
@@ -173,6 +178,12 @@ module Loadwright
         grouped = recordings.group_by { |r| [r["template"], r["verb"].to_s.downcase.to_sym] }
 
         grouped.map { |(template, verb), group| build_endpoint(template, verb, group) }
+      end
+
+      def existing_request_count(path)
+        Array(JSON.parse(File.read(path))["requests"]).length
+      rescue StandardError
+        nil
       end
 
       def default_output_path

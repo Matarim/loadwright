@@ -302,6 +302,7 @@ config.allow_production = false              # layer 3 of 4; see Safety, above
 config.allow_mutating_requests = false       # POST/PUT/PATCH/DELETE are skipped by default
 config.max_error_rate_before_abort = 0.2     # circuit breaker; contention is excluded from this
 config.long_run_confirmation_threshold_minutes = 10
+config.confirm_recording_database = true    # `record` asks before running your specs against a non-test database
 ```
 
 `max_error_rate_before_abort` counts *application* errors. Contention errors are

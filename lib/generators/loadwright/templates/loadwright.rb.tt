@@ -70,6 +70,18 @@ if defined?(Loadwright)
     #   /\.internal\z/,
     # ]
 
+    # `loadwright record` runs YOUR SPECS, in this process, against whatever database
+    # the CLI booted into -- normally development. Booting the app first makes the
+    # `ENV["RAILS_ENV"] ||= "test"` in a conventional rails_helper a no-op, so your
+    # suite does not reach your test database.
+    #
+    # A fully transactional suite rolls everything back and leaves nothing behind. One
+    # that truncates between examples would EMPTY that database. So when a distinct
+    # test database is declared and will not be reached, `record` asks before running
+    # rather than only warning. Answer it non-interactively with
+    # `--accept-database-writes`.
+    config.confirm_recording_database = true
+
     # Must be true, AND the confirmation phrase must be typed, AND
     # --i-understand-the-risk must be passed, for a run to proceed outside
     # enabled_environments. Leave false absent a reviewed reason.

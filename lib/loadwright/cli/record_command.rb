@@ -26,10 +26,11 @@ module Loadwright
       FAILED = 1
       REFUSED = 3
 
-      def initialize(options:, stdout: $stdout, stderr: $stderr, loader: nil, runner: nil)
+      def initialize(options:, stdout: $stdout, stderr: $stderr, stdin: $stdin, loader: nil, runner: nil)
         @options = options
         @stdout = stdout
         @stderr = stderr
+        @stdin = stdin
         @loader = loader
         @runner = runner
       end
@@ -40,6 +41,8 @@ module Loadwright
 
         (@loader || AppLoader.new(stdout: @stdout)).load!
         warn_about_recording_database!
+        return REFUSED unless confirm_database_writes!
+
         warn_about_pending_migrations!
 
         source = Discovery::IntegrationSpecSource.new(config: config, stdout: @stdout)
@@ -100,6 +103,40 @@ module Loadwright
                      "truncates, commits, or uses before(:all) will write to this database -- and a " \
                      "suite that truncates between examples will empty it. Ctrl-C now if that is not " \
                      "what you want."
+      end
+
+      # THE ONE CASE WORTH MORE THAN A WARNING. The host declares a test database and
+      # believes its suite runs there; it will not. That is detectable, not
+      # hypothetical, and the costs of being wrong are wildly asymmetric -- a
+      # transactional suite that proceeds loses nothing, a truncating one loses a
+      # developer's database irreversibly, and "Ctrl-C now" only helps somebody
+      # watching the scrollback in the second before their suite starts.
+      #
+      # So: an acknowledgement, not a refusal. The decision is the user's; it was the
+      # invisibility that was wrong. Where there is no distinct test database to miss,
+      # nothing is asked at all.
+      def confirm_database_writes!
+        return true unless config.confirm_recording_database
+        return true if @options[:accept_database_writes]
+
+        declared = declared_test_database
+        return true if declared.nil? || declared == current_database
+
+        unless @stdin.respond_to?(:tty?) && @stdin.tty?
+          @stderr.puts "loadwright: refusing to run your specs against #{current_database} without an " \
+                       "acknowledgement, because #{declared} is declared as your test database and will " \
+                       "not be reached. Standard input is not a terminal, so pass " \
+                       "--accept-database-writes (or set confirm_recording_database = false) if that is " \
+                       "what you intend."
+          return false
+        end
+
+        @stdout.print "Run your specs against #{current_database}? [y/N] "
+        @stdout.flush
+        return true if @stdin.gets.to_s.strip.casecmp("y").zero?
+
+        @stderr.puts "loadwright: not recording."
+        false
       end
 
       def current_database

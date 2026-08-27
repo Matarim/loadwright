@@ -107,6 +107,20 @@ module Loadwright
     # discovers a four-hour sweep by waiting through it.
     setting :long_run_confirmation_threshold_minutes, 10, section: :safety
 
+    # `record` runs the host's specs IN THIS PROCESS, against whatever database the CLI
+    # booted into -- normally development, because booting the app first makes the
+    # `ENV["RAILS_ENV"] ||= "test"` in a conventional rails_helper a no-op. A fully
+    # transactional suite rolls everything back; one that truncates between examples
+    # would EMPTY that database.
+    #
+    # When a distinct test database is declared and will not be reached -- which is the
+    # detectable, dangerous case -- `record` asks for an acknowledgement rather than
+    # only warning. The costs are wildly asymmetric: a transactional suite that runs
+    # anyway loses nothing, and a truncating one loses a developer's database
+    # irreversibly, so the friction belongs on that side. Not a refusal: the decision
+    # is genuinely the user's, and `--accept-database-writes` makes it non-interactively.
+    setting :confirm_recording_database, true, section: :safety
+
     # SIDE-EFFECT CONTAINMENT
     setting :suppress_mail_delivery, true, section: :containment
     setting :suppress_background_jobs, true, section: :containment
