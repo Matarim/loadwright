@@ -39,6 +39,7 @@ module Loadwright
         return missing_specs if paths.empty?
 
         (@loader || AppLoader.new(stdout: @stdout)).load!
+        warn_about_recording_database!
         warn_about_pending_migrations!
 
         source = Discovery::IntegrationSpecSource.new(config: config, stdout: @stdout)
@@ -55,6 +56,78 @@ module Loadwright
       private
 
       def config = @config ||= Loadwright.configuration
+
+      # WHICH DATABASE YOUR SUITE IS ABOUT TO WRITE TO.
+      #
+      # `record` boots config/environment.rb and then runs RSpec IN THIS PROCESS. It
+      # has to: the recorder is a module prepended to a class here, and a subprocess
+      # would produce a green suite and an empty recording. But the consequence went
+      # unsaid, and it is a real one. Because the app is already loaded, the
+      # `ENV["RAILS_ENV"] ||= "test"` in a conventional rails_helper is a no-op -- so
+      # the host's entire test suite executes against whatever database the CLI booted
+      # into, which is normally development.
+      #
+      # A fully transactional suite rolls everything back and nothing leaks. That is
+      # luck rather than containment: an example using truncation, a `before(:all)`, an
+      # explicit commit, or a spec that deliberately tests transactional behaviour
+      # writes to development data and stays there. A suite that truncates between
+      # examples would empty the developer's development database.
+      #
+      # Loadwright's containment covers mail, jobs and outbound HTTP. It cannot cover
+      # this, because this is the host's own code doing exactly what it was written to
+      # do, in an environment it was never written for.
+      #
+      # SO: SAY SO, BEFORE THE SPECS RUN. Not a refusal -- running these specs is what
+      # the user asked for, and the honest reading of the safety model is that this is
+      # their suite and their call. But it is their call only if they know they are
+      # making it, and the one thing a tool with this safety record must not do is this
+      # silently.
+      def warn_about_recording_database!
+        current = current_database
+        return if current.nil?
+
+        @stdout.puts "loadwright: your specs are about to run IN THIS PROCESS, against the " \
+                     "#{current} database (RAILS_ENV=#{rails_env})."
+
+        declared = declared_test_database
+        if declared && declared != current
+          @stdout.puts "  Your test database is #{declared}. `record` boots the app first, so a " \
+                       "conditional RAILS_ENV assignment in rails_helper does nothing and your suite " \
+                       "will NOT reach it."
+        end
+
+        @stdout.puts "  A fully transactional suite rolls back and leaves nothing behind. One that " \
+                     "truncates, commits, or uses before(:all) will write to this database -- and a " \
+                     "suite that truncates between examples will empty it. Ctrl-C now if that is not " \
+                     "what you want."
+      end
+
+      def current_database
+        return nil unless defined?(::ActiveRecord::Base)
+
+        name = ::ActiveRecord::Base.connection_db_config.database.to_s
+        name.empty? ? nil : name
+      rescue StandardError
+        nil
+      end
+
+      # What the host's own database.yml calls its test database, where it says.
+      # Absent rather than guessed: a nil here costs one line of the warning.
+      def declared_test_database
+        return nil unless defined?(::ActiveRecord::Base)
+
+        config = ::ActiveRecord::Base.configurations.configs_for(env_name: "test").first
+        name = config&.database.to_s
+        name.empty? ? nil : name
+      rescue StandardError
+        nil
+      end
+
+      def rails_env
+        defined?(::Rails) && ::Rails.respond_to?(:env) ? ::Rails.env.to_s : (ENV["RAILS_ENV"] || "unknown")
+      rescue StandardError
+        "unknown"
+      end
 
       # `record` runs the host's specs, so it inherits their prerequisites. A stale
       # test schema fails every spec file with the same stack trace, and the signal is

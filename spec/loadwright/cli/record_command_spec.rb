@@ -69,4 +69,67 @@ RSpec.describe Loadwright::CLI::RecordCommand do
       expect(stderr.string).to include("Only ActionDispatch::Integration requests")
     end
   end
+  # `record` boots the app and then runs RSpec IN THIS PROCESS -- it has to, because
+  # the recorder is a module prepended to a class here. The consequence went unsaid:
+  # the `ENV["RAILS_ENV"] ||= "test"` in a conventional rails_helper is a no-op by
+  # then, so the host's whole test suite runs against the database the CLI booted
+  # into. A transactional suite rolls back and nothing leaks; a truncating one would
+  # empty a developer's development database.
+  #
+  # Not a refusal -- running these specs is what was asked for. But it is the user's
+  # call only if they know they are making it.
+  describe "which database the specs are about to write to" do
+    def with_databases(current:, test: nil)
+      db_config = double("db_config", database: current)
+      test_config = test && double("test_config", database: test)
+      configurations = double("configurations", configs_for: [test_config].compact)
+      stub_const("ActiveRecord", Module.new)
+      migrations = double("migration_context", needs_migration?: false)
+      stub_const("ActiveRecord::Base",
+                 double("Base", connection_db_config: db_config, configurations: configurations,
+                                connection_pool: double("pool", migration_context: migrations)))
+      yield
+    end
+
+    it "names the database before a single example runs" do
+      with_databases(current: "widgets_development") do
+        command({}, runner: ->(_paths) { 0 }).call
+      end
+
+      expect(stdout.string).to include("IN THIS PROCESS").and include("widgets_development")
+    end
+
+    it "says what a non-transactional suite would do to it" do
+      with_databases(current: "widgets_development") do
+        command({}, runner: ->(_paths) { 0 }).call
+      end
+
+      expect(stdout.string).to include("truncates between examples will empty it")
+    end
+
+    # The specific trap: the host DOES declare a test database, and believes its suite
+    # uses it.
+    it "says the declared test database will not be reached" do
+      with_databases(current: "widgets_development", test: "widgets_test") do
+        command({}, runner: ->(_paths) { 0 }).call
+      end
+
+      expect(stdout.string).to include("widgets_test").and include("will NOT reach it")
+    end
+
+    it "says nothing extra when the suite is already on the test database" do
+      with_databases(current: "widgets_test", test: "widgets_test") do
+        command({}, runner: ->(_paths) { 0 }).call
+      end
+
+      expect(stdout.string).not_to include("will NOT reach it")
+    end
+
+    # Not being able to ask is not a reason to refuse to record.
+    it "records anyway when there is no database to ask about" do
+      hide_const("ActiveRecord")
+
+      expect { command({}, runner: ->(_paths) { 0 }).call }.not_to raise_error
+    end
+  end
 end
