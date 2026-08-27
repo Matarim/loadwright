@@ -296,6 +296,46 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(transport.issued_count).to eq(0)
     end
 
+    # THE DRY RUN IS WHERE A CONFIGURATION PROBLEM SHOULD SURFACE. The page-size sweep
+    # correctly refuses to run against too little data, and refusing is right -- but
+    # it means one of the two N+1 detectors did not execute, and finding that out
+    # after a completed run is late.
+    describe "when the page-size sweep will not be able to run" do
+      def dry_run_output
+        config.scale_factors = [1, 10]
+        config.page_size_sweep = [5, 25, 100]
+        transport = Loadwright::Execution::Transport::Null.new(config: config, dry_run: true)
+        context = Loadwright::Execution::ExecutionContext.new(
+          config: config, transport: transport,
+          collector: ExecutionHelpers::ScriptedCollector.new(config: config)
+        )
+        runner(context: context).run(endpoints: [endpoint])
+        stdout.string
+      end
+
+      it "says so before the run, not after it" do
+        expect(dry_run_output).to include("the page-size sweep will NOT run")
+      end
+
+      it "says what that costs, so a healthy verdict is read with it in mind" do
+        expect(dry_run_output).to include("one of the two N+1 detectors")
+      end
+
+      it "stays quiet when the sweep can run" do
+        config.scale_factors = [1, 200]
+        config.page_size_sweep = [5, 25, 100]
+        transport = Loadwright::Execution::Transport::Null.new(config: config, dry_run: true)
+        context = Loadwright::Execution::ExecutionContext.new(
+          config: config, transport: transport,
+          collector: ExecutionHelpers::ScriptedCollector.new(config: config)
+        )
+
+        runner(context: context).run(endpoints: [endpoint])
+
+        expect(stdout.string).not_to include("page-size sweep will NOT run")
+      end
+    end
+
     it "prints the resolved matrix and the estimate" do
       transport = Loadwright::Execution::Transport::Null.new(config: config, dry_run: true)
       context = Loadwright::Execution::ExecutionContext.new(

@@ -391,6 +391,23 @@ module Loadwright
         end
       end
 
+      # THE DRY RUN IS WHERE A CONFIGURATION PROBLEM SHOULD SURFACE. Discovering after
+      # a completed run that half the N+1 detection never executed is late; after a
+      # forty-minute one it is expensive. The seed-scale sweep on its own cannot catch
+      # an N+1 hiding behind pagination -- that is the whole reason the page-size sweep
+      # exists -- so every paginated endpoint in the healthy list has had one of two
+      # detectors applied to it. Coverage#describe says so per endpoint; this says it
+      # before the run rather than after.
+      def warn_about_unmeasurable_page_size_sweep
+        return if page_size_sweep_measurable?
+
+        @warnings << page_size_sweep_unmeasurable_reason
+        @stdout.puts "loadwright: the page-size sweep will NOT run — #{page_size_sweep_unmeasurable_reason}"
+        @stdout.puts "  That is one of the two N+1 detectors. The other (duplicate-fingerprint pattern " \
+                     "matching) still runs, so endpoints are still checked — with half the coverage, " \
+                     "which each endpoint's `checked:` line will say."
+      end
+
       def run_page_size_sweep(endpoints)
         unless page_size_sweep_measurable?
           @warnings << page_size_sweep_unmeasurable_reason
@@ -1171,6 +1188,7 @@ module Loadwright
                             minutes: estimate.estimated_minutes, latency: ASSUMED_LATENCY_MS)
         @stdout.puts "  #{estimate.mutating_requests} mutating request(s)" if estimate.mutating_requests.positive?
         @stdout.puts "  #{@guard.describe_budget}" if @guard
+        warn_about_unmeasurable_page_size_sweep
 
         planned.group_by(&:endpoint_key).each do |key, cells|
           @stdout.puts "  #{key}"
