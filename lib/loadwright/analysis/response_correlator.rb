@@ -35,6 +35,11 @@ module Loadwright
       FIXED_REPEAT_DETAIL = " — and the query count did not grow with the number of records returned, " \
                             "so this is a fixed number of repeats per request rather than one per record"
 
+      # The weaker denominator, labelled as such. See #scaling_against_seeded.
+      SEEDED_FIXED_REPEAT_DETAIL = " — and the query count did not move across the seeded scale factors, " \
+                                   "though the number of records returned could not be read from these " \
+                                   "responses to confirm it"
+
       # Slope of queries against returned records. At 1.0 the endpoint issues one
       # query per record, which is the textbook N+1 signature. Well below that is
       # batching; the threshold sits low enough to catch a partial N+1 (an N+1 on one
@@ -220,7 +225,8 @@ module Loadwright
             kind: :n_plus_one_pattern_match,
             confidence: :high,
             detail: "the same query ran #{worst.last.length} times in a single request: #{worst.first}" \
-                    "#{FIXED_REPEAT_DETAIL if scaling == :fixed}",
+                    "#{FIXED_REPEAT_DETAIL if scaling == :fixed}" \
+                    "#{SEEDED_FIXED_REPEAT_DETAIL if scaling == :fixed_by_seed_scale}",
             evidence: { fingerprint: worst.first, occurrences: worst.last.length,
                         scaling: scaling == :unknown ? nil : scaling,
                         call_site: worst.last.first[:call_site],
@@ -267,10 +273,34 @@ module Loadwright
       # measured is not flatness.
       def repeat_scaling(observations)
         usable = Array(observations).reject { |o| o.records.nil? || o.queries.nil? }
-        return :unknown if usable.length < 2
-        return :unknown if usable.map(&:records).uniq.length < 2
+        if usable.length >= 2 && usable.map(&:records).uniq.length >= 2
+          return usable.map(&:queries).uniq.length == 1 ? :fixed : :scaling
+        end
 
-        usable.map(&:queries).uniq.length == 1 ? :fixed : :scaling
+        scaling_against_seeded(observations)
+      end
+
+      # THE AXIS WE STILL HAVE. Returned record count is the right denominator and it
+      # is not always available -- an endpoint that answers with a single object has no
+      # record count to read, and on an API made mostly of detail endpoints the
+      # classifier had no input at all and abstained on every finding. Abstaining was
+      # correct. Having nothing else to ask was a gap.
+      #
+      # Seeded scale is a weaker denominator and a real one: a query count identical at
+      # seed scale 1 and seed scale 100 did not move while the data underneath it moved
+      # a hundredfold.
+      #
+      # It gets its OWN value rather than being folded into :fixed, because it rests on
+      # an assumption :fixed does not. A paginated collection returns the same page
+      # whatever the seeded scale, so flatness here is exactly what a per-record N+1
+      # behind pagination looks like -- the blind spot the page-size sweep exists for.
+      # The suggestion names that assumption instead of hiding it.
+      def scaling_against_seeded(observations)
+        usable = Array(observations).reject { |o| o.seeded.nil? || o.queries.nil? }
+        return :unknown if usable.length < 2
+        return :unknown if usable.map(&:seeded).uniq.length < 2
+
+        usable.map(&:queries).uniq.length == 1 ? :fixed_by_seed_scale : :scaling
       end
 
       def pagination_findings(observations, max_bytes)

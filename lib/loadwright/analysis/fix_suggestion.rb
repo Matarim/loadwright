@@ -37,7 +37,11 @@ module Loadwright
         # Order matters: COUNT and the `SELECT 1 AS one` existence probe are both
         # narrower than the general child-rows shape, which would otherwise swallow
         # them and give the wrong advice.
-        return fixed_repeat_suggestion(sql, repeats) if scaling == :fixed && lookup_shape?(sql)
+        if lookup_shape?(sql)
+          return fixed_repeat_suggestion(sql, repeats) if scaling == :fixed
+          return seeded_fixed_repeat_suggestion(sql, repeats) if scaling == :fixed_by_seed_scale
+          return unclassified_repeat_suggestion(sql, repeats) if scaling == :unknown
+        end
 
         count_suggestion(sql) ||
           existence_suggestion(sql) ||
@@ -64,7 +68,7 @@ module Loadwright
       # actually MEASURED across cells that returned different numbers of records; an
       # unmeasured repeat falls through to the general advice rather than guessing.
       def fixed_repeat_suggestion(sql, repeats)
-        table = (PARENT_PER_RECORD.match(sql) || CHILDREN_PER_RECORD.match(sql)).captures.first
+        table = lookup_table(sql)
         times = repeats ? "#{repeats} times" : "several times"
 
         "The same query against `#{table}` ran #{times} in one request, and the query count did NOT " \
@@ -73,6 +77,48 @@ module Loadwright
           "and the row is very likely already loaded (routing to this endpoint had to find it). Pass the " \
           "loaded object down the call chain, or memoize the lookup, rather than preloading. Worth fixing " \
           "as waste on every request, but it will not get worse as your data grows."
+      end
+
+      # THE SAME CONCLUSION, RESTING ON A WEAKER MEASUREMENT, and saying so. The query
+      # count did not move across the seeded scale factors, but the returned record
+      # count could not be read from these responses -- and a paginated collection is
+      # flat against seeded scale by construction, which is exactly what a per-record
+      # N+1 behind pagination looks like.
+      def seeded_fixed_repeat_suggestion(sql, repeats)
+        table = lookup_table(sql)
+        times = repeats ? "#{repeats} times" : "several times"
+
+        "The same query against `#{table}` ran #{times} in one request, and the query count did not " \
+          "move across the seeded scale factors -- so this looks like a fixed number of repeats per " \
+          "request rather than one per record, and `includes` would not help: pass the loaded object " \
+          "down the call chain or memoize the lookup instead. ONE CHECK FIRST, because the returned " \
+          "record count could not be read from this endpoint's responses: if it returns a PAGINATED " \
+          "collection, a per-record N+1 would also look flat against seeded scale, and the preload is " \
+          "the right fix after all. If it returns a single record, this is a fixed repeat."
+      end
+
+      # ABSTAINED. Nothing measurable separated the two cases, and the default used to
+      # be confident preload advice -- which was wrong on every finding in one real run,
+      # where all of them turned out to be fixed re-fetches. A suggestion that names
+      # both branches and the question that decides between them costs a reader a few
+      # seconds; a confident wrong one costs them a refactor.
+      def unclassified_repeat_suggestion(sql, repeats)
+        table = lookup_table(sql)
+        association = singularize(table)
+        times = repeats ? "#{repeats} times" : "several times"
+
+        "The same query against `#{table}` ran #{times} in one request, and this run could not tell " \
+          "which kind of repeat it is -- neither the returned record count nor the seeded scale varied " \
+          "enough to compare against. Two different defects wear this signature and the fixes are " \
+          "opposites. If the query count GROWS as the endpoint returns more records, it is a per-record " \
+          "N+1: preload it with `includes(:#{association})` (the association name may differ from the " \
+          "table name). If it stays FLAT, the row is already in memory and is being found again: pass " \
+          "the loaded object down the call chain, or memoize the lookup. Vary scale_factors or the " \
+          "page-size parameter and re-run, and this will answer itself."
+      end
+
+      def lookup_table(sql)
+        (PARENT_PER_RECORD.match(sql) || CHILDREN_PER_RECORD.match(sql)).captures.first
       end
 
       def count_suggestion(sql)

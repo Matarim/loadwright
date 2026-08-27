@@ -247,14 +247,55 @@ RSpec.describe Loadwright::Analysis::ResponseCorrelator do
       end
 
       # Flatness that was never measured is not flatness: one cell, or cells that all
-      # returned the same number of records, answers nothing.
-      it "claims nothing either way when the records never varied" do
-        same = [observation(records: 5, queries: 12), observation(records: 5, queries: 12)]
+      # returned the same number of records AND the same seeded scale, answers nothing.
+      it "claims nothing either way when neither axis varied" do
+        same = [observation(records: 5, queries: 12, seeded: 10),
+                observation(records: 5, queries: 12, seeded: 10)]
 
         finding = correlator.findings(observations: same, duplicates: duplicates).first
 
         expect(finding.evidence).not_to have_key(:scaling)
-        expect(finding.suggestion).to include("includes(:warehouse)")
+        expect(finding.suggestion).to include("could not tell which kind of repeat")
+      end
+
+      # THE AXIS STILL AVAILABLE. An endpoint answering with a single object has no
+      # record count to read, so on an API made mostly of detail endpoints the
+      # classifier had no input at all and abstained on every finding -- correctly, and
+      # with nothing else to ask. Seeded scale is weaker and real: a query count
+      # identical at seed scale 1 and seed scale 100 did not move while the data under
+      # it moved a hundredfold.
+      it "falls back to seeded scale when no record count could be read" do
+        no_records = [observation(records: nil, queries: 12, seeded: 1),
+                      observation(records: nil, queries: 12, seeded: 100)]
+
+        finding = correlator.findings(observations: no_records, duplicates: duplicates).first
+
+        expect(finding.evidence[:scaling]).to eq(:fixed_by_seed_scale)
+        expect(finding.suggestion).to include("pass the loaded object down")
+      end
+
+      # It is a WEAKER measurement and gets its own value rather than being folded into
+      # :fixed, because a paginated collection is flat against seeded scale by
+      # construction -- exactly what a per-record N+1 behind pagination looks like.
+      it "names the assumption that fallback rests on" do
+        no_records = [observation(records: nil, queries: 12, seeded: 1),
+                      observation(records: nil, queries: 12, seeded: 100)]
+
+        finding = correlator.findings(observations: no_records, duplicates: duplicates).first
+
+        expect(finding.suggestion).to include("PAGINATED")
+        expect(finding.detail).to include("could not be read")
+      end
+
+      # The returned-record axis wins wherever it is available: it is the denominator
+      # the whole design is built on, and the fallback exists only for its absence.
+      it "prefers the record-count axis when it has one" do
+        both = [observation(records: 5, queries: 12, seeded: 1),
+                observation(records: 50, queries: 12, seeded: 100)]
+
+        finding = correlator.findings(observations: both, duplicates: duplicates).first
+
+        expect(finding.evidence[:scaling]).to eq(:fixed)
       end
     end
 

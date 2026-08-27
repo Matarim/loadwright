@@ -1,7 +1,12 @@
 # frozen_string_literal: true
 
 RSpec.describe Loadwright::Analysis::FixSuggestion do
-  def suggest(sql) = described_class.for(sql)
+  # `:scaling` is the situation preload advice belongs to -- the run measured the
+  # query count growing as more records came back. Passing it explicitly keeps these
+  # examples about SHAPE RECOGNITION, which is what they are for, rather than about
+  # what the classifier does when it has nothing to go on (see "when nothing could be
+  # measured either way", below).
+  def suggest(sql) = described_class.for(sql, scaling: :scaling)
 
   # THE ONE THIS EXISTS FOR. Almost every piece of N+1 advice says "add includes",
   # and for a repeated COUNT that is wrong: a preloaded association is still counted
@@ -81,6 +86,7 @@ RSpec.describe Loadwright::Analysis::FixSuggestion do
       end
     end
   end
+
   # A TABLE ENDING IN "ses". The hand-rolled rules stripped the trailing "es" and
   # produced a non-word, so following the suggestion verbatim raised
   # ActiveRecord::AssociationNotFoundError -- on three of five findings in one real
@@ -116,9 +122,11 @@ RSpec.describe Loadwright::Analysis::FixSuggestion do
       expect(described_class.for(sql, repeats: 4, scaling: :scaling)).to include("includes(:warehouse)")
     end
 
-    # Flatness that was never measured is not flatness.
-    it "gives the preloading advice when nothing was measured either way" do
-      expect(described_class.for(sql, repeats: 4)).to include("includes(:warehouse)")
+    # Flatness that was never measured is not flatness -- and neither is scaling, so
+    # the unmeasured case gets neither verdict. See "when nothing could be measured
+    # either way" below.
+    it "claims neither when nothing was measured" do
+      expect(described_class.for(sql, repeats: 4)).to include("could not tell which kind of repeat")
     end
 
     # A repeated COUNT is a counter-cache question whether or not it scales, and
@@ -127,6 +135,43 @@ RSpec.describe Loadwright::Analysis::FixSuggestion do
       count_sql = 'SELECT COUNT(*) FROM "warehouses" WHERE "warehouses"."depot_id" = ?'
 
       expect(described_class.for(count_sql, repeats: 4, scaling: :fixed)).to include("counter cache")
+    end
+  end
+
+  # ABSTAINING FROM THE CLASSIFICATION AND THEN GIVING CONFIDENT ADVICE is the same
+  # mistake as a confidently wrong all-clear, one level down. In one real run the
+  # classifier correctly declined on all seven findings -- and all seven then carried
+  # preload advice, which was the wrong fix for every one of them.
+  describe "when nothing could be measured either way" do
+    let(:sql) { 'SELECT "warehouses".* FROM "warehouses" WHERE "warehouses"."id" = ?' }
+
+    it "names both branches rather than choosing one" do
+      suggestion = described_class.for(sql, repeats: 4, scaling: :unknown)
+
+      expect(suggestion).to include("could not tell which kind of repeat")
+      expect(suggestion).to include("includes(:warehouse)").and include("pass the loaded object down")
+    end
+
+    it "says what would answer the question" do
+      expect(described_class.for(sql, scaling: :unknown)).to include("Vary scale_factors")
+    end
+  end
+
+  # The weaker denominator, named as such: a paginated collection is flat against
+  # seeded scale by construction, which is exactly what a per-record N+1 hiding behind
+  # pagination looks like.
+  describe "a repeat measured flat against seeded scale only" do
+    let(:sql) { 'SELECT "warehouses".* FROM "warehouses" WHERE "warehouses"."id" = ?' }
+
+    it "gives the fixed-repeat advice" do
+      expect(described_class.for(sql, repeats: 4, scaling: :fixed_by_seed_scale))
+        .to include("pass the loaded object down").or include("Pass the loaded object down")
+    end
+
+    it "names the assumption it rests on rather than hiding it" do
+      suggestion = described_class.for(sql, repeats: 4, scaling: :fixed_by_seed_scale)
+
+      expect(suggestion).to include("PAGINATED")
     end
   end
 end
