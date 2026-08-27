@@ -191,4 +191,127 @@ RSpec.describe Loadwright::Engine::CircuitBreaker do
       expect(subject).to be_tripped
     end
   end
+  # SEVERAL BROKEN ENDPOINTS ARE STILL CONCENTRATION, NOT SPREAD.
+  #
+  # The share rule asks "does ONE endpoint own 80% of the errors". When a handful are
+  # each failing on nearly every request, none of them does -- so nothing was a
+  # candidate and the run aborted around them.
+  #
+  # Observed for real: a user widened included_paths to reach a newly-recovered
+  # surface, the breaker tripped at 38%, and every one of those failures was on the
+  # OLD surface from endpoints already known to be broken. The run died before it
+  # reached the endpoints the widening was for. Adding coverage removed coverage.
+  describe "a handful of endpoints each failing on nearly every request" do
+    subject(:breaker) { described_class.new(config: config, minimum_observations: 10) }
+
+    # Three broken endpoints among ten, each failing every request; the rest fine.
+    # The surface size is declared, as the engine declares it, so the answer does not
+    # depend on which endpoints the matrix reached first.
+    def run_mixed_surface
+      breaker.expected_endpoints = 10
+      3.times do |n|
+        6.times { breaker.record_error("GET /broken-#{n}") }
+      end
+      7.times do |n|
+        6.times { breaker.record_success("GET /fine-#{n}") }
+      end
+    end
+
+    it "offers a broken endpoint for quarantine rather than tripping" do
+      run_mixed_surface
+
+      expect(breaker.quarantine_candidate).to start_with("GET /broken-")
+    end
+
+    it "does not trip while a broken endpoint is still quarantinable" do
+      run_mixed_surface
+
+      expect(breaker).not_to be_tripped
+    end
+
+    # Quarantine each in turn and the run survives, which is the whole point: the
+    # seven healthy endpoints still get measured.
+    it "lets the run continue once each broken endpoint is set aside" do
+      run_mixed_surface
+
+      3.times do
+        candidate = breaker.quarantine_candidate
+        break if candidate.nil?
+
+        breaker.quarantine!(candidate)
+      end
+
+      expect(breaker).not_to be_tripped
+      expect(breaker.quarantined.length).to eq(3)
+    end
+
+    # THE ORDER DEPENDENCE, which is the actual complaint. Whether the healthy surface
+    # gets measured at all must not depend on whether the broken endpoints happen to be
+    # exercised first.
+    it "quarantines the same way when the broken endpoints run first" do
+      breaker.expected_endpoints = 10
+      3.times { |n| 6.times { breaker.record_error("GET /broken-#{n}") } }
+
+      expect(breaker.quarantine_candidate).to start_with("GET /broken-")
+      expect(breaker).not_to be_tripped
+    end
+
+    it "records why each was quarantined, so a widened allowlist is legible" do
+      run_mixed_surface
+      breaker.quarantine!(breaker.quarantine_candidate)
+
+      reason = breaker.to_h[:quarantine_reasons].values.first
+
+      expect(reason).to eq(errors: 6, observations: 6)
+    end
+  end
+
+  # THE CASE THE GLOBAL BREAKER EXISTS FOR. Most of the surface failing is spread --
+  # a wrong token, an app that is down -- and quarantining through it one endpoint at
+  # a time would keep hammering something that is simply broken.
+  describe "most of the surface failing" do
+    subject(:breaker) { described_class.new(config: config, minimum_observations: 10) }
+
+    it "trips instead of quarantining its way through the matrix" do
+      breaker.expected_endpoints = 8
+      6.times do |n|
+        6.times { breaker.record_error("GET /broken-#{n}") }
+      end
+      2.times do |n|
+        6.times { breaker.record_success("GET /fine-#{n}") }
+      end
+
+      expect(breaker.quarantine_candidate).to be_nil
+      expect(breaker).to be_tripped
+    end
+  end
+
+  # "31 of 81 failed" gives a reader no way to tell whether the failures were spread
+  # across the surface or came from three endpoints they already knew about.
+  describe "the abort message" do
+    subject(:breaker) { described_class.new(config: config, minimum_observations: 10) }
+
+    it "names the endpoints most of the failures came from" do
+      breaker.expected_endpoints = 8
+      6.times do |n|
+        6.times { breaker.record_error("GET /broken-#{n}") }
+      end
+      2.times { |n| 6.times { breaker.record_success("GET /fine-#{n}") } }
+
+      expect(breaker.trip.message).to include("Most of the failures came from").and include("GET /broken-")
+    end
+  end
+
+  # An endpoint asked twice is not an endpoint we can call broken.
+  describe "too few requests to judge an endpoint" do
+    subject(:breaker) { described_class.new(config: config, minimum_observations: 10) }
+
+    it "does not quarantine on a couple of failures" do
+      2.times { breaker.record_error("GET /unlucky") }
+      2.times { breaker.record_error("GET /also-unlucky") }
+      8.times { breaker.record_success("GET /fine") }
+
+      expect(breaker.quarantine_candidate).to be_nil
+    end
+  end
 end

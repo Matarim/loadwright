@@ -667,10 +667,25 @@ module Loadwright
           "Errors" => breaker[:errors],
           "Observations" => breaker[:observations],
           "Contention events (excluded from the rate)" => breaker[:contention_events],
+          # NAMED, WITH COUNTS. Widening an allowlist and getting a pile of quarantines
+          # needs to be legible as "these specific endpoints were already broken", not
+          # as something the newly added surface did.
+          "Quarantined as broken" => quarantined_summary(breaker),
           "Trip reason" => breaker[:trip_reason]
-        }
+        }.compact
 
         "<h3>Circuit breaker</h3>#{definition_table(rows)}"
+      end
+
+      def quarantined_summary(breaker)
+        quarantined = Array(breaker[:quarantined_endpoints])
+        return nil if quarantined.empty?
+
+        reasons = breaker[:quarantine_reasons] || {}
+        quarantined.map do |key|
+          reason = reasons[key] || reasons[key.to_s] || reasons[key.to_sym]
+          reason ? "#{key} (#{reason[:errors]}/#{reason[:observations]} failed)" : key.to_s
+        end.join(", ")
       end
 
       def config_table

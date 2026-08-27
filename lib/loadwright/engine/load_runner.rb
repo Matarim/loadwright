@@ -246,6 +246,10 @@ module Loadwright
         # Held so the interrupt path can build a result for the endpoints this run was
         # actually asked about, rather than for an empty list.
         @endpoints = endpoints
+        # So the breaker's spread check counts the surface rather than whichever
+        # endpoints the matrix happened to reach first. See CircuitBreaker
+        # #expected_endpoints.
+        @breaker.expected_endpoints = endpoints.length
         return dry_run(endpoints) if @context.transport.dry_run
 
         @started_at = Time.now

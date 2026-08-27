@@ -5,6 +5,43 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.6] — 2026-08-27
+
+One fix, from the same round-4 report as 0.0.5 and missed on the first pass.
+
+### Fixed
+
+- **A cluster of broken endpoints no longer aborts a run that also covers healthy
+  ones.** Error-concentration quarantine asked "does ONE endpoint own 80% of the
+  errors". When several endpoints are each failing on nearly every request, none
+  of them does — so nothing was a candidate and the global breaker aborted the run
+  around them.
+
+  Observed for real: a user widened `included_paths` to reach a surface the
+  previous release had just recovered. The run resolved 46 exercisable endpoints,
+  then tripped at 38% — and **every one of those failures was on the old surface**,
+  from a handful of endpoints already known to be broken. The run died before
+  reaching the endpoints the widening was for. Adding coverage removed coverage,
+  and nothing in the output said the new surface was innocent.
+
+  Quarantine now also fires on an endpoint's **own** failure rate, which is what
+  the breaker's "this endpoint is broken" half was always supposed to mean. The
+  global abort is left for failure genuinely *spread* across the surface — a wrong
+  token, an app that is down — with a guard so that quarantining can never work its
+  way through most of the matrix one endpoint at a time.
+
+  The spread check counts the endpoints the run **plans** to exercise, not the ones
+  it has reached. Counting what has been seen is what made the old behaviour
+  order-dependent: a cluster of broken endpoints at the front of the matrix looked
+  like "everything is broken" before a single healthy one had been measured.
+
+### Changed
+
+- **The abort message names the endpoints most of the failures came from**, and the
+  report lists what was quarantined with its failure count. "31 of 81 failed" gives
+  a reader no way to tell whether the failures were spread across their API or came
+  from three endpoints they already knew about.
+
 ## [0.0.5] — 2026-08-27
 
 Five fixes from a fourth round of outside integration. One of them is the most
@@ -485,7 +522,8 @@ Stated here rather than left to be discovered:
 - **Tested on Ruby 4.0 and Rails 8.1.** The gemspec floor of Ruby 3.1 / Rails 7.0
   reflects the APIs used, not a tested matrix.
 
-[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.6...HEAD
+[0.0.6]: https://github.com/Matarim/loadwright/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/Matarim/loadwright/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/Matarim/loadwright/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/Matarim/loadwright/compare/v0.0.2...v0.0.3

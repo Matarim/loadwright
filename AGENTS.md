@@ -1252,6 +1252,28 @@ DIAG-20:
     workaround before this was fixed and it produces exactly one undifferentiated
     endpoint.
 
+DIAG-30:
+  symptom: >
+    "the run aborted on the circuit breaker after I widened included_paths" /
+    "adding endpoints to the allowlist made the run measure fewer of them"
+  cause: >
+    Before 0.0.6, quarantine required ONE endpoint to own 80% of the errors. Several
+    endpoints each failing on nearly every request satisfied nothing, so the global
+    breaker aborted the run around them -- and the abort could land before the newly
+    added surface was ever reached, so widening an allowlist REMOVED coverage.
+  fix: |
+    Upgrade to 0.0.6+. Quarantine now fires on an endpoint's own failure rate, the
+    spread check counts the endpoints the run plans to exercise rather than the ones
+    it has reached, and the abort message names the worst contributors.
+  say_this: >
+    Read the quarantine list before concluding anything about a widened allowlist. An
+    abort whose failures all came from endpoints that were already broken says nothing
+    about the surface that was added.
+  do_not: >
+    Do not tell a user to raise max_error_rate_before_abort to get past this. That is
+    the withdrawn guidance resource-contention.md Part 6 already names, and it trades a
+    real signal for a quieter run.
+
 DIAG-28:
   symptom: >
     "an endpoint that 404s is in the healthy list" / "two endpoints with the same

@@ -27,13 +27,23 @@ module Loadwright
     #
     # Both counts are reported, so neither mechanism hides the other's activity.
     class CircuitBreaker
-      Trip = Struct.new(:error_rate, :errors, :observations, :threshold, keyword_init: true) do
+      Trip = Struct.new(:error_rate, :errors, :observations, :threshold, :worst_endpoints,
+                        keyword_init: true) do
+        # NAMES WHO FAILED. "31 of 81 failed" gives a reader no way to tell whether the
+        # failures were spread across the surface or came from three endpoints they
+        # already knew about -- which is the difference between "your app is broken"
+        # and "these three are, and everything else was fine until the run died around
+        # them".
         def message
-          format(
+          base = format(
             "circuit breaker tripped: %<errors>d of %<observations>d requests failed (%<pct>.1f%%), " \
             "over the %<threshold>.1f%% threshold in max_error_rate_before_abort",
             errors: errors, observations: observations, pct: error_rate * 100, threshold: threshold * 100
           )
+          return base if Array(worst_endpoints).empty?
+
+          named = worst_endpoints.map { |key, count| "#{key} (#{count})" }.join(", ")
+          "#{base}. Most of the failures came from: #{named}"
         end
       end
 
@@ -47,7 +57,32 @@ module Loadwright
       # losing the concentration signal.
       CONCENTRATION_THRESHOLD = 0.8
 
+      # An endpoint failing at or above this rate is broken, whatever anything else is
+      # doing. The share rule above cannot see this: when SEVERAL endpoints are each
+      # failing on nearly every request, no single one owns 80% of the errors, so
+      # nothing was a candidate and the whole run aborted around them.
+      ENDPOINT_FAILURE_THRESHOLD = 0.8
+
+      # Below this, an endpoint has not been asked enough times to call it broken.
+      MINIMUM_ENDPOINT_OBSERVATIONS = 5
+
+      # QUARANTINE IS FOR A SUBSET, NOT FOR THE SURFACE. If most of the surface is
+      # failing, that is spread rather than concentration -- a wrong token, an app that
+      # is down -- and the run should abort rather than quarantine its way through the
+      # entire matrix one endpoint at a time. Kept strictly below half so "most of the
+      # API is broken" can never be reclassified as a series of local problems.
+      MAX_BROKEN_SHARE = 0.5
+
       attr_reader :observations, :errors, :contention_events, :trip
+
+      # HOW MANY ENDPOINTS THE RUN PLANS TO EXERCISE, set by the engine before the
+      # sweeps. Without it the spread check can only count endpoints SEEN SO FAR, and
+      # early in a run that is whichever ones happened to be exercised first -- so a
+      # cluster of broken endpoints at the front of the matrix looks like "everything
+      # is broken" and aborts before a single healthy one is reached. That order
+      # dependence is exactly the failure this mechanism exists to remove: widening an
+      # allowlist must never REMOVE coverage that was already being collected.
+      attr_accessor :expected_endpoints
 
       def initialize(config: Loadwright.configuration, minimum_observations: MINIMUM_OBSERVATIONS)
         @threshold = config.max_error_rate_before_abort
@@ -56,6 +91,8 @@ module Loadwright
         @errors = 0
         @contention_events = 0
         @errors_by_endpoint = Hash.new(0)
+        @observations_by_endpoint = Hash.new(0)
+        @quarantine_reasons = {}
         @endpoints_seen = []
         @quarantined = []
         @trip = nil
@@ -65,6 +102,7 @@ module Loadwright
       def record_success(endpoint_key = nil)
         @mutex.synchronize do
           @observations += 1
+          @observations_by_endpoint[endpoint_key] += 1 if endpoint_key
           note_endpoint(endpoint_key)
         end
         nil
@@ -76,7 +114,10 @@ module Loadwright
         @mutex.synchronize do
           @observations += 1
           @errors += 1
-          @errors_by_endpoint[endpoint_key] += 1 if endpoint_key
+          if endpoint_key
+            @errors_by_endpoint[endpoint_key] += 1
+            @observations_by_endpoint[endpoint_key] += 1
+          end
           note_endpoint(endpoint_key)
           @trip ||= evaluate
         end
@@ -122,7 +163,16 @@ module Loadwright
 
       def quarantine!(endpoint_key)
         @mutex.synchronize do
-          @quarantined << endpoint_key unless @quarantined.include?(endpoint_key)
+          unless @quarantined.include?(endpoint_key)
+            @quarantined << endpoint_key
+            # RECORDED, so widening an allowlist and getting a pile of quarantines is
+            # legible: a reader can see the failures came from a specific known subset
+            # rather than from the surface they were trying to add.
+            @quarantine_reasons[endpoint_key] = {
+              errors: @errors_by_endpoint[endpoint_key],
+              observations: @observations_by_endpoint[endpoint_key]
+            }
+          end
           # Its errors stop counting: it is no longer being measured, and leaving them
           # in the numerator would abort the run for an endpoint already set aside.
           @errors -= @errors_by_endpoint[endpoint_key]
@@ -140,6 +190,7 @@ module Loadwright
           {
             threshold: @threshold,
             quarantined_endpoints: @quarantined.dup,
+            quarantine_reasons: @quarantine_reasons.transform_values(&:dup),
             observations: @observations,
             errors: @errors,
             error_rate: @observations.zero? ? 0.0 : @errors.fdiv(@observations),
@@ -164,23 +215,66 @@ module Loadwright
         # error re-evaluates without it.
         return nil if concentrated_endpoint
 
-        Trip.new(error_rate: rate, errors: @errors, observations: @observations, threshold: @threshold)
+        Trip.new(error_rate: rate, errors: @errors, observations: @observations, threshold: @threshold,
+                 worst_endpoints: @errors_by_endpoint.sort_by { |_, count| -count }.first(3))
       end
 
       def note_endpoint(key)
         @endpoints_seen << key if key && !@endpoints_seen.include?(key)
       end
 
-      # Called with the mutex held. nil unless one endpoint owns nearly all the errors
+      # Called with the mutex held. nil unless there is an endpoint worth setting aside
       # AND the run has more than one endpoint to carry on WITH -- quarantining the
       # only endpoint under test would leave the run measuring nothing.
+      #
+      # TWO RULES, because one of them could not see the case that mattered.
+      #
+      # The SHARE rule catches one endpoint owning nearly all the errors. It is blind
+      # to several endpoints each failing on nearly every request: no single one owns
+      # 80% of the errors, so nothing was a candidate and the run aborted around them.
+      # Observed for real -- a user widened included_paths to reach a newly recovered
+      # surface, the breaker tripped at 38%, and every one of those failures was on the
+      # OLD surface from endpoints already known to be broken. The run died before
+      # reaching the endpoints the widening was for. Adding coverage removed coverage,
+      # and nothing in the output said the new surface was innocent.
+      #
+      # The RATE rule catches it directly: an endpoint failing on nearly every request
+      # is broken whatever anything else is doing, which is what the breaker's own
+      # "this endpoint is broken" half is supposed to mean.
       def concentrated_endpoint
         return nil if (@endpoints_seen - @quarantined).length < 2
 
+        by_share = endpoint_owning_most_errors
+        return by_share if by_share
+
+        broken = broken_endpoints
+        return nil if broken.empty?
+        return nil if broken.length > (surface_size * MAX_BROKEN_SHARE)
+
+        broken.max_by { |key| @errors_by_endpoint[key] }
+      end
+
+      def endpoint_owning_most_errors
         worst, count = @errors_by_endpoint.max_by { |_, value| value }
-        return nil if worst.nil?
+        return nil if worst.nil? || @errors.zero?
 
         count.fdiv(@errors) >= CONCENTRATION_THRESHOLD ? worst : nil
+      end
+
+      # Endpoints failing on nearly every request they were sent.
+      def broken_endpoints
+        @errors_by_endpoint.keys.select do |key|
+          seen = @observations_by_endpoint[key]
+          seen >= MINIMUM_ENDPOINT_OBSERVATIONS &&
+            @errors_by_endpoint[key].fdiv(seen) >= ENDPOINT_FAILURE_THRESHOLD
+        end
+      end
+
+      # The whole surface where the engine told us how big it is, and what we have seen
+      # otherwise. Counting only what has been seen makes the answer depend on the order
+      # the matrix happens to run in.
+      def surface_size
+        [expected_endpoints.to_i, @endpoints_seen.length].max
       end
     end
   end
