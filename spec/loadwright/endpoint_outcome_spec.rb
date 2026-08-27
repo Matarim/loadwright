@@ -205,4 +205,22 @@ RSpec.describe Loadwright::EndpointOutcome, ".derive" do
 
     expect(outcome).not_to be_countable_as_clean
   end
+  # ONE SITUATION, ONE SENTENCE. Two endpoints returning 500 on every request were
+  # reported two different ways -- one "quarantined", one "an error path was
+  # measured" -- because two different mechanisms noticed. Both end at inconclusive,
+  # so nothing downstream differs, but a reader reasonably infers a distinction and
+  # goes looking for it.
+  describe "an endpoint that answered a non-success status on every request" do
+    it "reads the same whichever mechanism caught it" do
+      shared = "an error path was measured, not the endpoint"
+
+      expect(described_class::REASONS[:unsuccessful_status]).to include(shared)
+      expect(described_class::REASONS[:endpoint_erroring]).to include(shared)
+    end
+
+    # The distinction is kept where it costs a reader nothing.
+    it "stays distinguishable in the machine-readable reason" do
+      expect(described_class::REASONS.keys).to include(:unsuccessful_status, :endpoint_erroring)
+    end
+  end
 end

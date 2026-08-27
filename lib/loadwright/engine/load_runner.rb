@@ -658,15 +658,35 @@ module Loadwright
 
       # Inconclusive, never healthy: the endpoint failed on nearly every request, and
       # what remains unmeasured about it is unmeasured.
+      #
+      # LEADS WITH THE SAME SENTENCE THE VALIDITY GATE USES, because it is the same
+      # situation: every request came back a non-success status. Which mechanism
+      # noticed -- the gate, or the error-concentration quarantine -- is an
+      # implementation detail, and reporting it as two differently-worded outcomes
+      # sent a reader looking for a distinction that does not exist. The distinction
+      # survives where it is useful: the reason SYMBOL is still :endpoint_erroring in
+      # the machine-readable output.
       def record_error_quarantine(endpoint)
         return if @outcomes.any? { |o| o.endpoint == endpoint && o.reason == :endpoint_erroring }
 
         @outcomes << EndpointOutcome.inconclusive(
           endpoint: endpoint, reason: :endpoint_erroring,
-          detail: "failed on nearly every request, so it was quarantined and the rest of the run " \
-                  "continued without it",
+          detail: "#{erroring_status_phrase(endpoint)}. An error path was measured, not the endpoint. " \
+                  "It failed on nearly every request, so it was quarantined and the rest of the run " \
+                  "continued without it.",
           capability_epoch: @context.capability_epoch
         )
+      end
+
+      # The status the endpoint actually answered with, where any request got far
+      # enough to have one.
+      def erroring_status_phrase(endpoint)
+        statuses = @cells.select { |cell| cell.endpoint_key == endpoint.to_s }
+                         .flat_map { |cell| Array(cell.statuses) }.compact
+        return "every request failed" if statuses.empty?
+
+        dominant = statuses.tally.max_by { |_, count| count }.first
+        "returned HTTP #{dominant}"
       end
 
       def record_unresolved(endpoint, resolution)

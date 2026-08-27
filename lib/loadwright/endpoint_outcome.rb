@@ -42,7 +42,12 @@ module Loadwright
       path_params_unresolved: "path parameters could not be resolved to real records",
       no_example_available: "endpoint discovered but no usable example request was available",
       auth_failed: "authentication failed uniformly; auth_token_provider is likely misconfigured",
-      endpoint_erroring: "the endpoint failed on nearly every request, so it was quarantined and the " \
+      # SAME SENTENCE AS :unsuccessful_status, deliberately. Both mean every request
+      # came back a non-success status; which mechanism noticed is not something a
+      # reader should have to model. The symbol stays distinct for the machine-readable
+      # output, where the difference is worth having.
+      endpoint_erroring: "endpoint returned an error status; an error path was measured, not the " \
+                         "endpoint. It failed on nearly every request, so it was quarantined and the " \
                          "rest of the run continued without it",
       rate_limited: "requests were throttled; allowlist Loadwright or disable rate limiting for this environment",
 
