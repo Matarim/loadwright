@@ -1208,9 +1208,17 @@ DIAG-23:
     `record` runs specs against TEST; `run` measures DEVELOPMENT. Recorded ids are
     from the wrong database.
   fix: >
-    Nothing to do on 0.0.2+: recordings carry the environment they came from, and
-    values from a different one are dropped with a warning while the parameter stays
-    declared. Resolve it with path_param_overrides or by seeding the resource.
+    Nothing to do on 0.0.3+: a recording records the DATABASE it was made against,
+    sampled inside the spec that issued the request, and values from a different one
+    are dropped with a warning while the parameter stays declared. Resolve it with
+    path_param_overrides or by seeding the resource.
+  note: >
+    0.0.2 had this mechanism and wrote the wrong value into it. It sampled the
+    environment in the CLI process, which boots before the specs and does not follow
+    them to the test database -- so a recording made entirely of test ids was tagged
+    "development", the guard compared "development" to "development", and nothing was
+    dropped. If a user is on 0.0.2, do not rely on this guard; check whether the
+    recorded ids exist in the database being measured.
 
 DIAG-19:
   symptom: >
@@ -1238,6 +1246,43 @@ DIAG-20:
     Do not tell the user to set included_paths to the mount prefix. That was the
     workaround before this was fixed and it produces exactly one undifferentiated
     endpoint.
+
+DIAG-24:
+  symptom: >
+    "every request to this endpoint returned 406" / "returned 400 and the endpoint
+    is marked inconclusive, but our own spec for it passes"
+  cause: >
+    The run rebuilds a request from the recording, and before 0.0.3 it sent neither
+    the recorded headers nor the recorded query parameters. An endpoint that needs an
+    Accept header answered 406; one with a required query parameter answered 400.
+    Marking those inconclusive is correct -- an error path was measured -- but the
+    cause was the reconstruction, not the app.
+  fix: |
+    Fixed in 0.0.3: config.replay_recorded_headers (default Accept, Content-Type) and
+    config.replay_recorded_query_params (default true).
+    IF IT STILL HAPPENS, the header the endpoint needs is not on the replay list. Add
+    it by name. The identity's auth header always wins over a recorded one, and the
+    page-size sweep's parameter always wins over a recorded page size.
+  do_not: >
+    Do not tell the user to disable require_successful_response. That converts a
+    request the tool built wrongly into a measurement it reports as an endpoint.
+
+DIAG-25:
+  symptom: >
+    "the report says the page-size sweep was skipped" / "N+1 shows as (pattern) only"
+  cause: >
+    The page-size sweep needs a seed scale at least as large as the largest page, or
+    it measures the same rows repeatedly and draws a flat line that reads as healthy.
+    It refuses rather than doing that.
+  fix: |
+    Raise scale_factors past max(page_size_sweep), or lower page_size_sweep.
+    The dry run says this before the run; it is not something to discover afterwards.
+  say_this: >
+    That sweep is one of TWO N+1 detectors, and it is the one that catches an N+1
+    hiding behind pagination -- which the seed-scale sweep cannot see by construction.
+    A paginated endpoint in the healthy list has had one of two detectors applied.
+    Each endpoint's `checked:` line names which ones ran. Do not report such an
+    endpoint as N+1-free without that caveat.
 
 DIAG-18:
   symptom: >
@@ -1282,6 +1327,15 @@ the_one_to_get_right: >
   That is correct and is the most common wrong advice about N+1s: preloading still
   counts with a query unless the code stops calling .count. Do not "improve" it
   back to "add includes".
+fixed_vs_scaling_repeats: >
+  A finding may carry `evidence.scaling: fixed`. That means the run MEASURED the
+  query count staying flat while the number of records returned changed -- so the
+  request repeats a fixed number of lookups rather than one per record, and the row
+  is very likely already in memory. `includes` does not help there; passing the
+  loaded object down the call chain or memoizing does. `scaling: scaling` is the
+  ordinary per-record N+1. An absent key means the comparison was not available
+  (one cell, or every cell returned the same number of records) and you should not
+  assert either way.
 ```
 
 ### 9.1 The three states — never collapse to two
