@@ -416,7 +416,9 @@ module Loadwright
         return already_seeded if scale <= already_seeded
 
         @seeder.seed!(scale - already_seeded)
-        @resolver&.seeded_ids = @seeder.created_ids
+        # path_values, not created_ids: what the API routes on, which is the primary
+        # key unless factory_map named another column.
+        @resolver&.seeded_ids = @seeder.path_values
         scale
       end
 

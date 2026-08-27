@@ -241,7 +241,15 @@ step_1_gemfile:
   verify: bundle list | grep loadwright
 
 step_2_generate:
-  command: bundle exec rails generate loadwright:install
+  command: bundle exec loadwright init          # or `rails generate loadwright:install --minimal`
+  full_surface: bundle exec rails generate loadwright:install
+  prefer_minimal: >
+    RECOMMEND THE SHORT FORM. Assigning a key freezes it at today's value, so a
+    release that improves a default never reaches an initializer that names it. That
+    is not hypothetical: a widened credential-redaction list did not reach anyone
+    whose generated file assigned redact_header_patterns.
+    Corollary for troubleshooting: if a user reports behaviour that a newer version
+    should have fixed, CHECK WHETHER THEIR INITIALIZER ASSIGNS THAT KEY.
   creates:
     - config/initializers/loadwright.rb
     - .gitignore entries for tmp/loadwright/
@@ -1167,6 +1175,42 @@ DIAG-17:
   agent_instruction: >
     Findings from before and after the downgrade are not equally trustworthy.
     Never summarise such a run as one confidence level. See GAP-02, INV-13.
+
+DIAG-21:
+  symptom: >
+    "every request 404s" / "path params resolve to a number but my API uses a guid"
+  cause: >
+    The API routes on a PUBLIC IDENTIFIER (guid, slug, uuid) and Loadwright
+    substituted the primary key. Common: to_param and friendly_id exist for this.
+  fix: |
+    Name the column in factory_map -- it is where the knowledge belongs:
+      config.factory_map = { "widget" => { factory: :widget, param: :guid } }
+    Or state the value; an override beats everything Loadwright infers:
+      config.path_param_overrides = { "/api/v1/widgets/{widget_id}" => { widget_id: -> { ... } } }
+  note: >
+    Before 0.0.2 the override sat THIRD in the resolution order, behind seeded and
+    recorded ids, so the documented fix could not take effect. It is now FIRST.
+
+DIAG-22:
+  symptom: >
+    "URI::InvalidURIError: bad URI" naming a path with a literal { in it
+  cause: >
+    An endpoint whose declared parameter list contradicted its own template. Fixed in
+    0.0.2: the template is authoritative, and a resolved path still containing `{` is
+    reported unresolved rather than requested.
+  do_not: >
+    Do not treat this as a config error to work around. It is a bug; upgrade.
+
+DIAG-23:
+  symptom: >
+    "recorded ids do not exist" / "everything 404s after loadwright record"
+  cause: >
+    `record` runs specs against TEST; `run` measures DEVELOPMENT. Recorded ids are
+    from the wrong database.
+  fix: >
+    Nothing to do on 0.0.2+: recordings carry the environment they came from, and
+    values from a different one are dropped with a warning while the parameter stays
+    declared. Resolve it with path_param_overrides or by seeding the resource.
 
 DIAG-19:
   symptom: >

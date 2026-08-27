@@ -29,21 +29,32 @@ RSpec.describe Loadwright::Discovery::PathParamResolver do
       )
     end
 
-    # 1. A seeded record's real id. The primary path, and the only source
-    #    guaranteed to exist in the database right now.
-    it "prefers a seeded id over everything else" do
+    # 1. AN EXPLICIT OVERRIDE WINS. The user has stated a fact the tool inferred
+    #    wrongly, and it is opt-in and empty by default, so nothing is lost by
+    #    trusting it. It used to sit THIRD -- behind seeded and recorded ids -- which
+    #    meant it was never consulted on the exact APIs it exists for: one routing on
+    #    a public guid or slug got a primary key substituted, 404'd every request, and
+    #    the documented fix ("add path_param_overrides") could not take effect.
+    it "prefers an explicit override over everything else" do
       config.path_param_overrides = { "/api/v1/posts/{id}/comments" => { id: "override" } }
 
+      resolution = resolver(seeded: { "post" => [4271] }).resolve(target)
+
+      expect(resolution.path).to eq("/api/v1/posts/override/comments")
+      expect(resolution.sources[:id]).to eq(:override)
+    end
+
+    # 2. A seeded record's identifier -- the only source guaranteed to exist in the
+    #    database right now.
+    it "falls back to a seeded id when there is no override" do
       resolution = resolver(seeded: { "post" => [4271] }).resolve(target)
 
       expect(resolution.path).to eq("/api/v1/posts/4271/comments")
       expect(resolution.sources[:id]).to eq(:seeded)
     end
 
-    # 2. An id a spec demonstrably used successfully.
+    # 3. An id a spec demonstrably used successfully.
     it "falls back to a recorded id" do
-      config.path_param_overrides = { "/api/v1/posts/{id}/comments" => { id: "override" } }
-
       resolution = resolver.resolve(target)
 
       expect(resolution.path).to eq("/api/v1/posts/recorded-1/comments")
@@ -142,6 +153,42 @@ RSpec.describe Loadwright::Discovery::PathParamResolver do
       target = endpoint(path: "/api/v1/posts/{id}", recorded_path_values: { id: %w[42 43] })
 
       expect((0..2).map { |i| subject.resolve(target, index: i).values[:id] }).to eq(%w[42 43 42])
+    end
+  end
+
+  # A LITERAL `{` MUST NEVER LEAVE THE BUILDING. `path_params` was taken verbatim
+  # from a recording's `path_values` keys, so an empty hash meant "this endpoint has
+  # no parameters" -- even though its template plainly contains one. Resolution
+  # early-returned, and the raw template went out as a URL:
+  #
+  #   URI::InvalidURIError: bad URI ... /api/v1/posts/{id}/comments
+  #
+  # 25 times a cell, tripping the breaker at 100%. The unresolved BRANCH is handled
+  # well; this simply never reached it.
+  describe "a template whose parameters were not declared" do
+    it "still treats the template's parameters as parameters" do
+      target = endpoint(path: "/api/v1/posts/{id}/comments", path_params: [])
+
+      expect(target.path_params).to eq([:id])
+    end
+
+    it "reports it unresolved rather than requesting the raw template" do
+      target = endpoint(path: "/api/v1/posts/{id}/comments", path_params: [])
+
+      result = resolver.resolve(target)
+
+      expect(result).to be_a(described_class::Unresolved)
+    end
+
+    # Belt and braces at the choke point: whatever a source returns, a path that still
+    # carries a placeholder is unresolved, not a request.
+    it "refuses a substitution that leaves a placeholder behind" do
+      target = endpoint(path: "/api/v1/posts/{id}/comments/{comment_id}",
+                        recorded_path_values: { id: %w[7] })
+
+      result = resolver.resolve(target)
+
+      expect(result).to be_a(described_class::Unresolved)
     end
   end
 

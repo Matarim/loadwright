@@ -120,6 +120,11 @@ module Loadwright
         payload = {
           "version" => FORMAT_VERSION,
           "recorded_at" => Time.now.utc.iso8601,
+          # WHICH DATABASE THESE IDS CAME FROM. `record` runs specs against test;
+          # `run` measures development. That is the documented two-command workflow,
+          # so recorded ids are routinely ids that do not exist in the database being
+          # measured -- and every request 404s.
+          "environment" => current_environment,
           "unrecognised_count" => @unrecognised.to_i,
           "requests" => requests
         }
@@ -143,6 +148,33 @@ module Loadwright
       end
 
       private
+
+      # RECORDED IDS ARE DROPPED when the recording came from a different database.
+      # They are ids that demonstrably worked -- in `test`, which is where `record`
+      # runs its specs, while `run` measures `development`. Keeping them means every
+      # request 404s and the endpoint is reported as broken. The parameter stays
+      # DECLARED, so it resolves from an override or a seeded record, or is honestly
+      # reported unresolvable.
+      def warn_about_environment_mismatch(payload, input_path)
+        recorded_env = payload["environment"].to_s
+        return if recorded_env.empty? || recorded_env == "unknown"
+        return if recorded_env == current_environment
+
+        @warnings << "#{input_path} was recorded in #{recorded_env} and this run targets " \
+                     "#{current_environment}, so its recorded ids almost certainly do not exist here. " \
+                     "They are ignored; path parameters resolve from path_param_overrides or from " \
+                     "seeded records instead."
+        @stdout.puts "loadwright: #{@warnings.last}"
+        @ignore_recorded_values = true
+      end
+
+      def current_environment
+        return ::Rails.env.to_s if defined?(::Rails) && ::Rails.respond_to?(:env)
+
+        ENV["RAILS_ENV"] || ENV["RACK_ENV"] || "unknown"
+      rescue StandardError
+        "unknown"
+      end
 
       def report_inferred(requests)
         inferred = requests.select { |request| request["inferred_template"] }
@@ -236,6 +268,8 @@ module Loadwright
                 "Re-record with `loadwright record --specs <dir>`."
         end
 
+        warn_about_environment_mismatch(payload, input_path)
+
         if payload["unrecognised_count"].to_i.positive?
           @warnings << "#{payload['unrecognised_count']} recorded request(s) could not be mapped to a " \
                        "route template and were skipped; those endpoints are not covered by this run"
@@ -255,6 +289,10 @@ module Loadwright
           end
         end
         recorded_values.each_value(&:uniq!)
+        # Keys kept, values dropped: the parameter stays declared so the template and
+        # the parameter list cannot disagree, and resolution falls through to an
+        # override or a seeded record.
+        recorded_values.each_key { |key| recorded_values[key] = [] } if @ignore_recorded_values
 
         richest = group.max_by { |r| (r["body"] || {}).size + (r["query"] || {}).size }
 

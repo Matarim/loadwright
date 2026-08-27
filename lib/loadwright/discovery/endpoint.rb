@@ -40,9 +40,12 @@ module Loadwright
         @graphql_operation_type = graphql_operation_type&.to_sym
         @graphql_page_size_variable = graphql_page_size_variable
         @operation_id = operation_id
-        # Derived from the template when not stated, because a route-discovered
-        # endpoint has no parameter list but its path still names its params.
-        @path_params = (path_params || self.class.params_in(path)).map(&:to_sym)
+        # THE TEMPLATE IS AUTHORITATIVE, and a declared list may only ADD to it.
+        # `path_params || params_in(path)` let an explicitly EMPTY list win -- which
+        # is what a recording with no captured values produces -- so an endpoint whose
+        # path plainly reads `/posts/{id}` claimed to have no parameters, resolution
+        # early-returned, and the raw template went out as a URL.
+        @path_params = (Array(path_params).map(&:to_sym) | self.class.params_in(path).map(&:to_sym))
         @query_params = query_params.freeze
         @request_body = request_body
         @request_schema = request_schema

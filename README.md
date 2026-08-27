@@ -99,6 +99,16 @@ end
 
 ```console
 $ bundle install
+$ bundle exec loadwright init            # the settings most apps need
+```
+
+Or `bundle exec rails generate loadwright:install` for the fully annotated surface
+(`--minimal` there does the same thing as `init`). **The short form is the better
+default**: every key it leaves out keeps its default, so a later release that improves
+one reaches you instead of being frozen at whatever the value was the day you
+generated the file.
+
+```console
 $ bundle exec rails generate loadwright:install
       create  config/initializers/loadwright.rb
       append  .gitignore
@@ -656,6 +666,33 @@ traced too, which is where batched loaders do their work.
 `graphql` is **not** a dependency of this gem. The tracer is a plain module that
 only does anything when your schema opts in.
 
+### APIs keyed on a public identifier
+
+If your routes take a guid, slug or uuid rather than the primary key — which is the
+norm for any API that declines to leak sequential ids — say which column:
+
+```ruby
+config.factory_map = {
+  "widget" => { factory: :widget, param: :guid }
+}
+```
+
+Loadwright then substitutes the `guid` into `/api/v1/widgets/{widget_id}` instead of
+the primary key. Cleanup still tracks the primary key, and still deletes only rows it
+created.
+
+Or state the value outright, which beats everything Loadwright infers:
+
+```ruby
+config.path_param_overrides = {
+  "/api/v1/widgets/{widget_id}" => { widget_id: -> { Widget.last&.guid } }
+}
+```
+
+Parameter names ending `_id`, `_guid`, `_uuid`, `_slug`, `_code`, `_key`, `_token`,
+`_number` and `_ref` are all mapped back to their resource, so `{widget_guid}` finds
+the `widget` you seeded.
+
 ### Recording your specs
 
 ```console
@@ -672,7 +709,13 @@ loop, and the misses are invisible. Executing them has no such failure mode.
 It is a separate command because running your test suite is a big, slow,
 side-effecting thing to do, and should never happen as an implicit consequence of
 asking for a load test. A failing spec still contributes its recording — the request
-was captured before the assertion ran.
+was captured before the assertion ran. Pass `--specs` more than once to record from
+several paths.
+
+**A recording knows which database it came from.** `record` runs your specs against
+`test`; `run` measures `development`. Recorded ids from the wrong database do not
+exist in the one being measured, so Loadwright drops those values and says so, and
+the parameters resolve from `path_param_overrides` or from seeded records instead.
 
 Recording is how path parameters get resolved. Before recording, an endpoint like
 `GET /api/v1/authors/{id}` is reported `inconclusive — path parameters could not be

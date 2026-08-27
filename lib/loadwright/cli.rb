@@ -8,6 +8,7 @@ require "loadwright/history/comparator"
 require "loadwright/reporting/comparison_report"
 require "loadwright/cli/run_command"
 require "loadwright/cli/record_command"
+require "loadwright/cli/init_command"
 
 module Loadwright
   # Command-line entry point.
@@ -33,6 +34,7 @@ module Loadwright
   #     config.long_run_confirmation_threshold_minutes (CLAUDE.md corollary 7).
   class CLI
     COMMANDS = {
+      "init" => "Write config/initializers/loadwright.rb with the settings most apps need",
       "run" => "Discover, seed, and exercise endpoints under the scale x concurrency matrix",
       "record" => "Run the app's own specs and record the requests they make, for discovery",
       "runs" => "List persisted run records (`runs list`)",
@@ -97,6 +99,7 @@ module Loadwright
       when "compare" then cmd_compare(argv)
       when "run" then cmd_run
       when "record" then cmd_record
+      when "init" then cmd_init
       end
     end
 
@@ -108,6 +111,10 @@ module Loadwright
 
     def cmd_record
       RecordCommand.new(options: @options, stdout: @stdout, stderr: @stderr).call
+    end
+
+    def cmd_init
+      InitCommand.new(options: @options, stdout: @stdout, stderr: @stderr).call
     end
 
     # --------------------------------------------------------------------- runs
@@ -299,7 +306,13 @@ module Loadwright
         o.on("--mode MODE", %w[in_process http], "Override config.execution_mode for this run") do |v|
           @options[:mode] = v.to_sym
         end
-        o.on("--specs PATH", "For `record`: spec directory to run and capture") { |v| @options[:specs] = v }
+        # APPENDS. It used to overwrite, so `--specs a --specs b` silently recorded
+        # only b -- recording less than was asked for, without saying so.
+        o.on("--specs PATH", "For `record`: spec path to run and capture (repeatable)") do |v|
+          (@options[:specs] ||= []) << v
+        end
+        o.on("--full", "For `init`: write the complete annotated key surface") { @options[:full] = true }
+        o.on("--force", "For `init`: overwrite an existing initializer") { @options[:force] = true }
         o.on("--baseline", "For `compare`: compare against the designated baseline") do
           @options[:baseline] = true
         end

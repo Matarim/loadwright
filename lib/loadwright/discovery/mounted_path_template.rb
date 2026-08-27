@@ -53,7 +53,7 @@ module Loadwright
         return false if template.empty? || path.empty? || template == path
         return false if template.include?("{")
 
-        path.start_with?("#{template.chomp('/')}/")
+        path.split("?").first.to_s.start_with?("#{template.chomp('/')}/")
       end
 
       def assign_templates(group)
@@ -93,7 +93,11 @@ module Loadwright
         end.to_h
       end
 
-      def segments(path) = path.to_s.split("/").reject(&:empty?)
+      # Query string stripped, and empty segments dropped so a `//` from joining a
+      # mount prefix to an inner path does not survive into the template. A trailing
+      # `?view=detailed` otherwise made the last segment unrecognisable as an id, so
+      # the whole path stayed literal and became one endpoint per record.
+      def segments(path) = path.to_s.split("?").first.to_s.split("/").reject(&:empty?)
     end
   end
 end

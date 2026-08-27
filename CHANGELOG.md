@@ -56,8 +56,38 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   The tracer no-ops outside a run, so it is safe to leave installed, and `graphql`
   remains a non-dependency: it is a plain module your schema opts into.
 
+- **`loadwright init`** — writes `config/initializers/loadwright.rb` with the settings
+  most apps actually need, 77 lines instead of 497. `rails generate
+  loadwright:install --minimal` does the same. Everything it omits keeps its default,
+  which is the point: assigning a key freezes it at today's value.
+
 ### Fixed
 
+- **Path parameters resolved to the primary key, and an explicit override could not
+  override it.** An API routing on a public identifier — guid, slug, uuid, which is
+  the norm for anything that declines to leak sequential ids — got its primary key
+  substituted and 404'd every request. `path_param_overrides` sat *third* in the
+  resolution order, behind two inferences, so the documented fix could not take
+  effect. An override is now **first**; `factory_map` accepts `param:` to name the
+  column the API routes on; and parameter names ending `_guid`, `_uuid`, `_slug`,
+  `_code`, `_key`, `_token`, `_number` and `_ref` now map back to their resource
+  rather than only `_id`.
+- **An endpoint could request its own raw template.** A declared-but-empty parameter
+  list won over the template, so a path visibly containing `{id}` claimed to have no
+  parameters and went out as a URL — `URI::InvalidURIError`, once per request. The
+  template is now authoritative, and a resolved path still containing `{` is reported
+  unresolved rather than requested.
+- **Recorded ids came from the wrong database.** `record` runs specs against `test`;
+  `run` measures `development`. Recordings now carry the environment they were made
+  in, and values from a different one are dropped with a warning while the parameter
+  stays declared.
+- **The generated initializer replaced the redaction defaults.** Assigning
+  `redact_header_patterns` froze it, so the broadened credential list did not reach
+  anyone who had generated a file before it shipped. That key is now commented out,
+  with `redact_additional_patterns` shown as the way to add.
+- **`--specs` kept only the last value.** It now accumulates.
+- **Reconstructed mounted paths carried a doubled slash**, and a query string could
+  stop an id-shaped segment being recognised — leaving one endpoint per record.
 - **`loadwright record` broke any rswag-based suite.** It called `RSpec.reset`,
   which replaces the `Configuration` singleton and discards every setting a gem
   registered at *require* time. Those gems are already loaded by then — Loadwright

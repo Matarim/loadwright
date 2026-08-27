@@ -62,6 +62,7 @@ module Loadwright
         @failures = []
         @warnings = []
         @created_ids = {}
+        @path_values = {}
         @models = {}
         @inserted_tables = []
         @request_written_tables = []
@@ -223,7 +224,7 @@ module Loadwright
             return
           end
 
-          track(resource, records)
+          track(resource, records, spec[:param] || :id)
           created += records.length
           remaining -= batch
 
@@ -243,12 +244,36 @@ module Loadwright
         ::FactoryBot.create_list(factory, count, *traits, **attributes)
       end
 
-      def track(resource, records)
+      # TWO LISTS, and they are not interchangeable.
+      #
+      # `created_ids` is the PRIMARY KEY, always, because cleanup is bounded by id and
+      # nothing may widen that.
+      #
+      # `path_values` is what the API actually routes on -- `id` unless factory_map
+      # says otherwise. An API that routes on a public guid or slug got its primary key
+      # substituted into the path, 404'd every request, and reported the endpoint as
+      # broken. Both are common: to_param and friendly_id exist for exactly this.
+      def track(resource, records, param = :id)
         ids = records.filter_map { |record| record.id if record.respond_to?(:id) }
         (@created_ids[resource] ||= []).concat(ids)
 
+        values = records.filter_map { |record| record.public_send(param) if record.respond_to?(param) }
+        (@path_values[resource] ||= []).concat(values)
+
         records.each { |record| @models[resource] ||= record.class }
       end
+
+      # What the resolver substitutes into a path. Falls back to ids for a resource
+      # whose param yielded nothing, so an unknown column degrades to today's
+      # behaviour rather than to no endpoints at all.
+      public def path_values
+        @created_ids.keys.to_h do |resource|
+          values = @path_values[resource]
+          [resource, values.nil? || values.empty? ? @created_ids[resource] : values]
+        end
+      end
+
+      private
 
       def model_for(resource) = @models[resource]
 

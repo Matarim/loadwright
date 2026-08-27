@@ -1,0 +1,77 @@
+# frozen_string_literal: true
+
+# Loadwright — the settings most apps actually need.
+#
+# EVERY KEY NOT LISTED HERE KEEPS ITS DEFAULT, and that is deliberate: assigning a
+# key freezes it at today's value, so a later release that improves a default never
+# reaches you. Add a key when you need it, not in advance.
+# `rails generate loadwright:install` writes the full annotated surface if you want
+# to read what else exists.
+#
+# The `if defined?` guard is required. Rails loads initializers in EVERY environment,
+# this gem lives in the :development, :test group, and without the guard a production
+# boot raises NameError. Do not remove it.
+if defined?(Loadwright)
+  Loadwright.configure do |config|
+    # ---- How requests are issued -------------------------------------------
+    # :in_process finds query-structure problems with no setup. :http adds real
+    # server concurrency, and is the only mode that can answer pool questions.
+    config.execution_mode = :in_process
+
+    # ---- Authentication ----------------------------------------------------
+    # The #1 first-run failure is leaving this unset on an API that needs it.
+    # Either return a token...
+    # config.auth_token_provider = -> { ENV.fetch("LOADWRIGHT_TOKEN") }
+    #
+    # ...or log in the way your own clients do (better for session/cookie apps):
+    # config.auth_login = {
+    #   path: "/api/v1/login",
+    #   credentials: [{ email: "dev@example.com", password: "password" }],
+    #   extract: { json: "token" }   # or { header: "Set-Cookie" }
+    # }
+    #
+    # :bearer_token (Authorization), :session (Cookie), or :header (X-Api-Key).
+    # config.auth_strategy = :bearer_token
+    #
+    # Anything else every request needs. A credential belongs above, not here.
+    # config.default_headers = { "Accept" => "application/json" }
+
+    # ---- What to exercise --------------------------------------------------
+    # Start narrow. A whole monolith is measured in hours; one path prefix is
+    # measured in minutes, and tells you whether this is worth more of your time.
+    # config.included_paths = [%r{^/api/v1/widgets}]
+    # config.excluded_paths = [%r{^/admin/}, %r{^/internal/}]
+
+    # Where endpoints come from. Route discovery needs no configuration and is on.
+    # config.openapi_spec_paths  = [Rails.root.join("swagger/v1/swagger.yaml")]
+    # config.integration_spec_paths = [Rails.root.join("spec/requests")]
+
+    # ---- Path parameters ---------------------------------------------------
+    # An API keyed on a public identifier (guid, slug, uuid) rather than the
+    # primary key: name the column and Loadwright will use it.
+    # config.factory_map = {
+    #   "widget" => { factory: :widget, trait: :with_parts, param: :guid }
+    # }
+    #
+    # Or state the value outright. An override beats everything Loadwright infers.
+    # config.path_param_overrides = {
+    #   "/api/v1/widgets/{widget_id}" => { widget_id: -> { Widget.last&.guid } }
+    # }
+
+    # ---- How much load -----------------------------------------------------
+    # Both scale factors should exceed your biggest page size, or the page-size
+    # sweep cannot vary the result set and is skipped.
+    config.scale_factors = [1, 10]
+    config.concurrency_levels = [1]
+    config.requests_per_endpoint_per_level = 25
+
+    # :conservative on a database you share with anyone else.
+    # config.contention_profile = :balanced
+
+    # ---- Safety ------------------------------------------------------------
+    # Left at their defaults on purpose. Mutating requests are NOT sent, and no run
+    # happens outside development and test. Turning either on is a deliberate act:
+    # read the README's safety section first.
+    # config.allow_mutating_requests = false
+  end
+end

@@ -67,11 +67,31 @@ RSpec.describe Loadwright::CLI do
     it "hands `record` to RecordCommand with the spec path" do
       command = instance_double(Loadwright::CLI::RecordCommand, call: 0)
       allow(Loadwright::CLI::RecordCommand).to receive(:new) do |options:, **|
-        expect(options).to include(specs: "spec/requests")
+        expect(options).to include(specs: ["spec/requests"])
         command
       end
 
       expect(run("record", "--specs", "spec/requests")).to eq(0)
+    end
+
+    # It used to OVERWRITE, so `--specs a --specs b` recorded only b -- silently
+    # recording less than was asked for, which is the failure mode the rest of this
+    # gem is careful to avoid.
+    it "accumulates repeated --specs rather than keeping only the last" do
+      command = instance_double(Loadwright::CLI::RecordCommand, call: 0)
+      allow(Loadwright::CLI::RecordCommand).to receive(:new) do |options:, **|
+        expect(options[:specs]).to eq(["spec/requests/a_spec.rb", "spec/requests/b_spec.rb"])
+        command
+      end
+
+      expect(run("record", "--specs", "spec/requests/a_spec.rb", "--specs", "spec/requests/b_spec.rb")).to eq(0)
+    end
+
+    it "hands `init` to InitCommand" do
+      command = instance_double(Loadwright::CLI::InitCommand, call: 0)
+      allow(Loadwright::CLI::InitCommand).to receive(:new).and_return(command)
+
+      expect(run("init")).to eq(0)
     end
 
     # The command's exit code is the process's exit code; swallowing it would make

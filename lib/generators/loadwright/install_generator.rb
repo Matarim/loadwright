@@ -47,8 +47,12 @@ module Loadwright
       # (reporting.md and run-comparison.md both require this.)
       GITIGNORE_ENTRIES = ["/tmp/loadwright/"].freeze
 
+      class_option :minimal, type: :boolean, default: false,
+                             desc: "Write only the settings most apps need, leaving the rest at their defaults"
+
       def create_initializer
-        template "loadwright.rb.tt", "config/initializers/loadwright.rb"
+        source = options[:minimal] ? "loadwright.minimal.rb.tt" : "loadwright.rb.tt"
+        template source, "config/initializers/loadwright.rb"
       end
 
       def add_output_dirs_to_gitignore

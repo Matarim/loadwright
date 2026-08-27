@@ -15,12 +15,13 @@ module Loadwright
     #
     # Resolution order, per discovery-and-load-engine.md:
     #
-    #   1. A seeded record's real id — the primary path, and the only source that is
-    #      guaranteed to exist right now.
-    #   2. An id captured during integration-spec recording — those requests
+    #   1. An explicit config.path_param_overrides entry — for slugs, UUIDs,
+    #      composite keys, and external identifiers nothing can infer. First,
+    #      because it is opt-in: reaching for it states a fact we inferred wrongly.
+    #   2. A seeded record's identifier — the only source guaranteed to exist in
+    #      the database being measured right now.
+    #   3. An id captured during integration-spec recording — those requests
     #      demonstrably worked, though against a different database state.
-    #   3. An explicit config.path_param_overrides entry — for slugs, UUIDs,
-    #      composite keys, and external identifiers nothing can infer.
     #   4. The OpenAPI example, last, because it is least likely to correspond to
     #      real data.
     #
@@ -38,7 +39,12 @@ module Loadwright
         end
       end
 
-      SOURCE_ORDER = %i[seeded recorded override example].freeze
+      # AN EXPLICIT OVERRIDE FIRST. It is opt-in and empty by default, so reaching for
+      # it means the user has stated a fact the tool inferred wrongly -- and it used to
+      # sit third, behind two inferences, which made it unreachable on exactly the APIs
+      # it exists for. An API routing on a public guid got a primary key substituted,
+      # 404'd every request, and the documented fix could not take effect.
+      SOURCE_ORDER = %i[override seeded recorded example].freeze
 
       def initialize(config: Loadwright.configuration, seeded_ids: {})
         @config = config
@@ -75,7 +81,16 @@ module Loadwright
 
         return Unresolved.new(endpoint: endpoint, params: missing) if missing.any?
 
-        Resolution.new(path: substitute(endpoint.path, values), values: values, sources: sources)
+        path = substitute(endpoint.path, values)
+
+        # The choke point every source passes through. Whatever a substitution
+        # produced, a path still carrying a placeholder is unresolved -- never a
+        # request. A literal `{` in an outbound URL raises URI::InvalidURIError once
+        # per request and reads as the endpoint being broken.
+        return Unresolved.new(endpoint: endpoint, params: Endpoint.params_in(path).map(&:to_sym)) if
+          path.include?("{")
+
+        Resolution.new(path: path, values: values, sources: sources)
       end
 
       def to_h
@@ -142,11 +157,18 @@ module Loadwright
         endpoint.query_params.find { |q| q[:name].to_s == param.to_s }&.dig(:example)
       end
 
+      # Identifier suffixes an API puts on a path parameter. `_id` alone left
+      # `{order_guid}`, `{account_uuid}` and `{author_slug}` unresolvable -- and those
+      # are the parameter names used by precisely the APIs that route on a public
+      # identifier rather than a primary key.
+      ID_SUFFIXES = %w[_id _guid _uuid _slug _code _key _token _number _ref].freeze
+
       def resource_for(endpoint, param)
         name = param.to_s
 
-        # {post_id} -> post
-        return singularize(name.delete_suffix("_id")) if name.end_with?("_id")
+        # {post_id} -> post, {order_guid} -> order
+        suffix = ID_SUFFIXES.find { |candidate| name.end_with?(candidate) && name != candidate }
+        return singularize(name.delete_suffix(suffix)) if suffix
 
         # /posts/{id} -> the segment before the parameter
         segments = endpoint.path.split("/").reject(&:empty?)
