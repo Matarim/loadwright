@@ -142,6 +142,9 @@ module Loadwright
         @discovery = discovery
         @warnings = []
         @quarantined_keys = []
+        # endpoint key -> query parameter names whose recorded value we replayed
+        # because nothing seeded could resolve them. Read when a 404 needs explaining.
+        @replayed_identifiers = {}
         reset!
         arm_run_history!
       end
@@ -577,8 +580,31 @@ module Loadwright
           next if name.empty? || page_size_names.include?(name)
           next if param[:example].nil?
 
-          out[name] = param[:example]
+          out[name] = query_value_for(endpoint, name, param[:example])
         end
+      end
+
+      # AN IDENTIFIER IN A QUERY STRING IS STILL AN IDENTIFIER. A recorded id in the
+      # PATH is the weakest evidence in a four-source chain, behind an override and a
+      # seeded row, because a spec's ids do not exist in the database being measured.
+      # The same id in a query string was replayed as fact -- so a placeholder went out
+      # verbatim, matched nothing, and the endpoint answered 404 as though it were
+      # broken.
+      #
+      # A seeded value wins where there is one. Where there is not, the recorded value
+      # still goes -- dropping a required parameter trades a 404 for a 400 and loses
+      # the endpoint either way -- but the endpoint is MARKED, so a 404 can say the
+      # request carried an identifier we could not resolve rather than presenting it as
+      # the app's answer.
+      def query_value_for(endpoint, name, recorded)
+        return recorded unless @resolver.respond_to?(:identifier_shaped?) && @resolver.identifier_shaped?(name)
+
+        seeded = @resolver.resolve_query_param(name)
+        return seeded unless seeded.nil?
+
+        (@replayed_identifiers[endpoint.to_s] ||= []) << name
+        @replayed_identifiers[endpoint.to_s].uniq!
+        recorded
       end
 
       # By name, not wholesale: a recording holds the whole content-negotiation and
@@ -934,7 +960,8 @@ module Loadwright
           # `:unsuccessful_status` only says an error path was measured;
           # `:auth_failed` and `:rate_limited` name the fix.
           diagnosed = traffic_reason_for(key)
-          return inconclusive(endpoint, diagnosed || invalid.reason, invalid.detail)
+          return inconclusive(endpoint, diagnosed || invalid.reason,
+                              "#{invalid.detail}#{replayed_identifier_note(key, cells)}")
         end
 
         shapes = cells.map(&:shape)
@@ -1148,6 +1175,19 @@ module Loadwright
             seeded: cell.scale_factor, page_size: cell.page_size
           )
         end
+      end
+
+      # "THIS ENDPOINT 404s" AND "THIS ENDPOINT 404s WITH PARAMETERS WE REPLAYED FROM A
+      # SPEC" ARE DIFFERENT SENTENCES. The first is about the app; the second is about
+      # us, and pointing a reader at their own code for it wastes their time.
+      def replayed_identifier_note(key, cells)
+        names = Array(@replayed_identifiers[key])
+        return "" if names.empty?
+        return "" unless cells.flat_map { |cell| Array(cell.statuses) }.compact.include?(404)
+
+        " This request carried #{names.join(', ')} replayed verbatim from a recording, because " \
+          "nothing seeded could resolve #{names.length == 1 ? 'it' : 'them'} -- so the 404 may be ours " \
+          "rather than the endpoint's. Seed the resource, or name the value in path_param_overrides."
       end
 
       def quarantine_detail(key)

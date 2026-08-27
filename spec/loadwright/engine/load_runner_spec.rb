@@ -843,6 +843,40 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(request_for(pinned, page_size: 100).query).to eq("per_page" => 100)
     end
 
+    # AN IDENTIFIER IN A QUERY STRING IS STILL AN IDENTIFIER. A recorded id in the
+    # PATH is the weakest evidence in a four-source chain, behind an override and a
+    # seeded row, because a spec's ids do not exist in the database being measured.
+    # The same id in a query string was replayed as fact -- so a spec placeholder went
+    # out verbatim, matched nothing, and the endpoint answered 404 as though it were
+    # the broken one.
+    describe "a recorded query parameter that looks like an identifier" do
+      let(:with_id) { endpoint(query_params: [{ name: "warehouse_id", example: "spec-placeholder" }]) }
+
+      def resolver_with(seeded)
+        Loadwright::Discovery::PathParamResolver.new(config: config, seeded_ids: seeded)
+      end
+
+      it "prefers a seeded value over the one the spec happened to send" do
+        run = runner(resolver: resolver_with("warehouse" => [41, 42]))
+
+        expect(run.send(:build_request, with_id, nil, nil).query).to eq("warehouse_id" => 41)
+      end
+
+      it "still sends the recorded value when nothing seeded can resolve it" do
+        run = runner(resolver: resolver_with({}))
+
+        expect(run.send(:build_request, with_id, nil, nil).query).to eq("warehouse_id" => "spec-placeholder")
+      end
+
+      # An ordinary filter is not an identifier, and replaying it is exactly right.
+      it "leaves a parameter that is not identifier-shaped alone" do
+        filtered = endpoint(query_params: [{ name: "view", example: "summary" }])
+        run = runner(resolver: resolver_with("warehouse" => [41]))
+
+        expect(run.send(:build_request, filtered, nil, nil).query).to eq("view" => "summary")
+      end
+    end
+
     it "sends nothing recorded when the replay is switched off" do
       config.replay_recorded_query_params = false
       config.replay_recorded_headers = []
@@ -889,6 +923,37 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       finding = finding_for([1, 10, 100])
 
       expect(finding.evidence[:occurrences]).to be <= 8
+    end
+  end
+  # "THIS ENDPOINT 404s" AND "THIS ENDPOINT 404s WITH PARAMETERS WE REPLAYED FROM A
+  # SPEC" ARE DIFFERENT SENTENCES. The first is about the app. The second is about us,
+  # and pointing a reader at their own code for it wastes their time -- which is what
+  # happened when replaying recorded query parameters turned a clean zero-404 run into
+  # three of them.
+  describe "a 404 that may be ours" do
+    let(:not_found) { ->(_request) { { status: 404, body: "" } } }
+
+    def detail_for(seeded)
+      resolver = Loadwright::Discovery::PathParamResolver.new(config: config, seeded_ids: seeded)
+      with_id = endpoint(query_params: [{ name: "warehouse_id", example: "spec-placeholder" }])
+
+      result = runner(context: build_context(responder: not_found), resolver: resolver)
+               .run(endpoints: [with_id])
+      result.outcomes.first.detail
+    end
+
+    it "says the request carried an identifier we could not resolve" do
+      expect(detail_for({})).to include("warehouse_id").and include("may be ours")
+    end
+
+    it "names the two ways to fix it" do
+      expect(detail_for({})).to include("path_param_overrides")
+    end
+
+    # Resolved from a seeded row, so the 404 is the endpoint's own answer and saying
+    # otherwise would send a reader looking at us instead of at their app.
+    it "says nothing when the identifier resolved from a seeded record" do
+      expect(detail_for("warehouse" => [41])).not_to include("may be ours")
     end
   end
 end

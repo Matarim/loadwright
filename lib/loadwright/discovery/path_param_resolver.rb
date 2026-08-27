@@ -93,6 +93,36 @@ module Loadwright
         Resolution.new(path: path, values: values, sources: sources)
       end
 
+      # THE SAME CARE FOR A QUERY PARAMETER THAT LOOKS LIKE AN IDENTIFIER.
+      #
+      # A recorded identifier in the PATH is treated as the weakest kind of evidence --
+      # fourth in a deliberately ordered chain, behind an override and a seeded row --
+      # because a spec's ids do not exist in the database being measured. The same
+      # identifier in a QUERY STRING was treated as fact and replayed verbatim, which
+      # is the same mistake with a different punctuation mark: the placeholder matches
+      # nothing, the endpoint answers 404, and it reads as the endpoint being broken.
+      #
+      # Returns a seeded value for an identifier-shaped name, or nil. Nil is not a
+      # failure here: the caller keeps the recorded value, because a request missing a
+      # required parameter is a worse outcome than one carrying a stale id, and says
+      # what it did.
+      def resolve_query_param(name, index: 0)
+        resource = resource_from_name(name)
+        return nil if resource.nil?
+
+        ids = Array(@seeded_ids[resource] || @seeded_ids[resource.to_sym])
+        return nil if ids.empty?
+
+        ids[index % ids.length]
+      end
+
+      # True for `widget_id`, `account_guid`, `order_ref`. False for `view`, `page`,
+      # `q` -- an ordinary filter is not an identifier and replaying it is exactly
+      # right.
+      def identifier_shaped?(name)
+        !resource_from_name(name).nil?
+      end
+
       def to_h
         {
           seeded_resources: @seeded_ids.keys,
@@ -163,12 +193,22 @@ module Loadwright
       # identifier rather than a primary key.
       ID_SUFFIXES = %w[_id _guid _uuid _slug _code _key _token _number _ref].freeze
 
+      # The suffix half of resource_for, without a path to fall back on. A bare `id` in
+      # a query string names no resource and stays unresolved rather than guessing.
+      def resource_from_name(name)
+        name = name.to_s
+        suffix = ID_SUFFIXES.find { |candidate| name.end_with?(candidate) && name != candidate }
+        return nil unless suffix
+
+        singularize(name.delete_suffix(suffix))
+      end
+
       def resource_for(endpoint, param)
         name = param.to_s
 
         # {post_id} -> post, {order_guid} -> order
-        suffix = ID_SUFFIXES.find { |candidate| name.end_with?(candidate) && name != candidate }
-        return singularize(name.delete_suffix(suffix)) if suffix
+        resource = resource_from_name(name)
+        return resource if resource
 
         # /posts/{id} -> the segment before the parameter
         segments = endpoint.path.split("/").reject(&:empty?)
