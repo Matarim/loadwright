@@ -5,6 +5,80 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.5] — 2026-08-27
+
+Five fixes from a fourth round of outside integration. One of them is the most
+serious defect this project has shipped.
+
+### Fixed
+
+- **A 4xx or 5xx is an error path, however it was expected.** An endpoint that
+  answered `404` to every one of its 171 requests was reported **healthy, with
+  coverage complete**, while a sibling endpoint with byte-identical cell data was
+  correctly `inconclusive`. That is the confidently-wrong all-clear this entire
+  tool argues against, produced by the tool, inconsistently, inside a single run.
+
+  The validity gate consulted `expected_statuses` for any non-2xx, justified by a
+  comment about honouring a declared redirect. That list holds neither
+  declarations nor successes. From a **recording** it is every status the specs
+  were observed producing — and a suite makes requests it expects to fail, so a
+  spec asserting a rejection against a bogus id taught us that 404 was expected
+  here. From an **OpenAPI document** it is every declared response key, and every
+  document declares its 401, 404 and 422 — so any app discovering from a working
+  document had the same bug with a far wider blast radius, unhit only because the
+  integration that found this has OpenAPI discovery disabled.
+
+  A 3xx still passes when a source saw one, which was the original and correct
+  intent. The gate also now names the likely cause, because "a spec was asserting
+  a rejection" is a different sentence from "your endpoint is broken".
+  **Mutation-audited**, since a green suite did not protect this.
+- **The fixed/scaling classifier can reach the axis it was given.** 0.0.4 added a
+  seeded-scale fallback for APIs with no returned-record count to read. It never
+  fired once: the observations handed to the classifier were the **page-size**
+  cells whenever that sweep ran, and those all share one seeded scale by
+  construction. So it abstained while the report printed identical query counts
+  across a hundredfold change in seeded rows a few lines below. The slope detector
+  still sees one sweep at a time — that is what holding an axis fixed is for — and
+  the classifier now sees every cell, because either axis answers its question.
+- **`record` asks before running a suite against a database that is not the
+  declared test one.** 0.0.4's warning was right for a transactional suite and too
+  weak for the case that is both detectable and dangerous. The costs are wildly
+  asymmetric — a transactional suite that proceeds loses nothing, a truncating one
+  empties a developer's database irreversibly — so the friction goes there and
+  nowhere else. An acknowledgement, not a refusal: `--accept-database-writes`
+  answers it non-interactively, `confirm_recording_database` turns it off, and a
+  prompt that cannot be shown counts as unanswered rather than as yes.
+- **An empty capture names what survived.** "Nothing was written" was true and
+  still left someone who had been bitten once going to check the file.
+
+### Added
+
+- **Every endpoint reports the request that was actually sent**, and where each
+  value came from: from a seeded record, replayed from your specs, replayed and
+  unresolved, or set by the page-size sweep. Two separate failures traced back to
+  a report that never said this — a 404 nobody could attribute to us or to the
+  app, and a confirmed 73-query finding that came back **healthy** in the next run
+  because a changed recording stopped sending the parameter that selects its
+  expensive representation. A confirmed defect un-found itself and neither report
+  said the two runs had asked different questions.
+- **`History::Comparator` refuses to attribute a change across a changed
+  question.** A query count is never compared without its record count; it is not
+  comparable across two runs that sent different parameters either. A changed
+  parameter set strips the verdict exactly as a changed denominator does, and the
+  note names which parameter moved. A baseline written before request shapes were
+  persisted carries none, and absence is not treated as a difference.
+- **The replayed-identifier note covers any unsuccessful status**, not only 404.
+  A placeholder produces a 400 or a 422 just as easily.
+
+### Note
+
+Round 4's report proposed widening identifier-shape promotion to recover
+templates carrying a literal segment. The tester withdrew that themselves on
+inspection, and we agree: the shapes involved are indistinguishable from
+legitimate route components, and promoting "segments that vary between
+recordings" was built once and silently merged sibling endpoints. The id-shape
+rule stays as it is.
+
 ## [0.0.4] — 2026-08-27
 
 Six fixes from a third round of outside integration, and one correction to the
@@ -411,7 +485,8 @@ Stated here rather than left to be discovered:
 - **Tested on Ruby 4.0 and Rails 8.1.** The gemspec floor of Ruby 3.1 / Rails 7.0
   reflects the APIs used, not a tested matrix.
 
-[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/Matarim/loadwright/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/Matarim/loadwright/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/Matarim/loadwright/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/Matarim/loadwright/compare/v0.0.1...v0.0.2

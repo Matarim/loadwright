@@ -1252,6 +1252,44 @@ DIAG-20:
     workaround before this was fixed and it produces exactly one undifferentiated
     endpoint.
 
+DIAG-28:
+  symptom: >
+    "an endpoint that 404s is in the healthy list" / "two endpoints with the same
+    404 data got different verdicts"
+  cause: >
+    Before 0.0.5 the validity gate treated any status in `expected_statuses` as a
+    success. That list is every status a RECORDING observed (a spec asserting a
+    rejection records its 404) and every response key an OPENAPI DOCUMENT declares
+    (every document declares 401/404/422). The endpoint was then given a full
+    performance verdict on its error path.
+  fix: >
+    Upgrade to 0.0.5+. A 4xx or 5xx is now an error path whoever expected it; a 3xx
+    a source saw still passes.
+  do_not: |
+    Do not tell a user on an older version that their healthy list is trustworthy if
+    any endpoint in it was discovered from a spec asserting a rejection, or if they
+    discover from an OpenAPI document. Have them check the status column per cell.
+    NEVER reconcile this by suggesting they add statuses to a doc or a recording --
+    that is the mechanism that caused it.
+
+DIAG-29:
+  symptom: >
+    "this endpoint was a finding last run and is healthy now, and nothing changed" /
+    "the query count dropped by 60 and the report says improvement"
+  cause: >
+    The two runs sent the endpoint different query parameters. Discovery replays what
+    a recording holds, and a re-recording can change which parameters travel with
+    which template -- so an endpoint whose cost depends on a parameter stops being
+    asked the expensive question and reports clean.
+  fix: |
+    0.0.5+ records the request each endpoint was sent, with the provenance of every
+    value, and Comparator strips the verdict off a delta whose parameter set moved.
+    Read the "Request sent" block on both runs before believing an improvement.
+  say_this: >
+    An endpoint whose cost depends on a parameter is only as well measured as the
+    parameter set it was called with. This is a limit of the approach, not a bug --
+    but a change in it is now visible instead of silent.
+
 DIAG-26:
   symptom: >
     "does loadwright record touch my database?" / "my specs wrote to development" /
