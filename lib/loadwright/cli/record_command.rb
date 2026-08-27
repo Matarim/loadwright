@@ -153,11 +153,17 @@ module Loadwright
         MSG
       end
 
+      # NAMES WHAT IS STILL THERE. The message used to assert that nothing was written
+      # to the path while the file at that path had just been replaced by an empty one,
+      # so a reader had no reason to check. write! now refuses the write; this says
+      # which of the two things happened.
       def nothing_recorded_message(path)
+        existing = File.file?(path) ? "\n#{path} was left as it was, so an earlier recording is still usable." : ""
+
         <<~MSG.strip
           loadwright: the specs ran but made no recordable requests, so nothing was written to #{path}.
           Only ActionDispatch::Integration requests are recorded -- the `get`/`post` helpers in request
-          and integration specs. Controller specs and unit specs make no HTTP request to capture.
+          and integration specs. Controller specs and unit specs make no HTTP request to capture.#{existing}
         MSG
       end
     end

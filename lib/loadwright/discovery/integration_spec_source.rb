@@ -113,6 +113,23 @@ module Loadwright
 
       def write!(output_path = default_output_path)
         require "fileutils"
+
+        # AN EMPTY CAPTURE DOES NOT OVERWRITE A GOOD RECORDING, and the message that
+        # follows it says nothing was written -- which used to be the opposite of what
+        # happened. Pointing `record` at a narrower spec path to investigate something,
+        # capturing nothing, and finding the previous recording replaced by an empty
+        # one is an ordinary way to work; the next command then refuses with "0
+        # endpoints", several steps removed from the cause. The message was written to
+        # reassure at exactly the moment it should have warned.
+        #
+        # Recording is the slowest step in the workflow. Replacing a good one with
+        # nothing is a bad trade for a capture that produced nothing, and refusing the
+        # write is what makes the existing message true.
+        if @captured.empty? && File.file?(output_path)
+          @warnings << "captured no requests, so #{output_path} was left as it was"
+          return output_path
+        end
+
         FileUtils.mkdir_p(File.dirname(output_path))
 
         # A mounted Rack app (Grape, Sinatra, Roda) is ONE Rails route, so recognition
@@ -250,6 +267,12 @@ module Loadwright
 
       def capture(verb:, path:, session:)
         request = session.request
+        # Normalised HERE as well as inside the recognizer, so the path stored in the
+        # recording, the samples printed for an unmapped request, and the path the
+        # router was asked about are all the same string. A mounted app whose mount
+        # point and sub-path each contribute a slash produces `//...`, which is a
+        # protocol-relative URL to anything that parses it.
+        path = RouteRecognizer.normalize_slashes(path)
         recognition = @recognizer.recognize(verb, path)
 
         # A path the router does not recognise is dropped, and the count reported.

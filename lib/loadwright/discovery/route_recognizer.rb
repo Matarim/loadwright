@@ -25,6 +25,26 @@ module Loadwright
 
       def available? = !router.nil?
 
+      # A LEADING `//` IS A PROTOCOL-RELATIVE URL, and Rack parses it as one.
+      #
+      #   env_for("/a/b/c")   -> PATH_INFO "/a/b/c"
+      #   env_for("//a/b/c")  -> PATH_INFO "/b/c"      <- "a" read as the authority
+      #
+      # The router was then asked to recognise a path with its first segment silently
+      # missing, answered nil, and the recording was dropped and counted. Every one of
+      # twenty-two recordings lost in one real run had this shape, all from a single
+      # mounted Rack app whose mount point and sub-path each contributed a slash. The
+      # router recognises both forms perfectly well when asked directly -- the loss
+      # happened entirely inside request construction, before it ever saw the path.
+      #
+      # Safe by construction: what arrives here is an application-relative path that a
+      # request was actually issued against, never a URL, so no authority can be lost
+      # by collapsing the runs. Interior runs are collapsed for the same reason -- a
+      # path is not more itself for having been joined twice.
+      def self.normalize_slashes(path)
+        path.to_s.gsub(%r{/{2,}}, "/")
+      end
+
       # Returns a Recognition, or nil when the router does not recognise the path.
       # nil is a real answer, not a failure to be papered over: the caller drops the
       # recording and reports the count, because keeping the concrete path would
@@ -68,7 +88,7 @@ module Loadwright
         require "action_dispatch"
         require "rack/mock_request"
 
-        env = Rack::MockRequest.env_for(path, method: verb.to_s.upcase)
+        env = Rack::MockRequest.env_for(self.class.normalize_slashes(path), method: verb.to_s.upcase)
         ::ActionDispatch::Request.new(env)
       rescue StandardError
         nil

@@ -252,4 +252,46 @@ RSpec.describe Loadwright::Discovery::IntegrationSpecSource do
       expect(source.endpoints(input_path: @output).first.description).to eq("api/v1/posts#index")
     end
   end
+  # RECORDING IS THE SLOWEST STEP IN THE WORKFLOW, and an empty capture used to
+  # replace a good recording with nothing while printing that nothing was written to
+  # that path. A reader had no reason to check; the next command refused with "0
+  # endpoints", several steps removed from the cause.
+  describe "a capture that recorded nothing" do
+    let(:output) { @output }
+
+    def existing_recording!
+      File.write(output, JSON.generate(
+                           "version" => described_class::FORMAT_VERSION,
+                           "requests" => [{ "verb" => "get", "template" => "/api/v1/widgets/{id}",
+                                            "path" => "/api/v1/widgets/7",
+                                            "path_values" => { "id" => "7" }, "status" => 200 }]
+                         ))
+    end
+
+    it "leaves an existing recording alone rather than emptying it" do
+      existing_recording!
+      before = File.read(output)
+
+      described_class.new(config: config, stdout: StringIO.new).write!(output)
+
+      expect(File.read(output)).to eq(before)
+    end
+
+    it "says the file was left as it was, so the message is true either way" do
+      existing_recording!
+      source = described_class.new(config: config, stdout: StringIO.new)
+
+      source.write!(output)
+
+      expect(source.warnings.join).to include("left as it was")
+    end
+
+    # Nothing to protect: writing the empty file is how a first run reports honestly
+    # that it captured nothing.
+    it "still writes when there is no recording to protect" do
+      described_class.new(config: config, stdout: StringIO.new).write!(output)
+
+      expect(JSON.parse(File.read(output))["requests"]).to eq([])
+    end
+  end
 end
