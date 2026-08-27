@@ -5,6 +5,92 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3] — 2026-08-27
+
+Seven fixes from a second round of outside integration. Two of them are the same
+species as the round-2 batch and worth naming as such: **the fix landed but the
+last mile did not.** Environment tagging was added and tagged the wrong value;
+orphan adoption existed and ran on one code path only. Neither was a design
+problem — both were a step short of complete, and both reported all clear while
+incomplete, which is the failure mode this tool exists to argue against.
+
+### Fixed
+
+- **A recording now records which DATABASE it was made against**, sampled inside
+  the spec that issued the request. 0.0.2 added the environment tag and then
+  sampled it in the CLI process — which boots before the specs run and does not
+  follow them to the test database. A recording made entirely of test ids was
+  tagged `development`, the guard compared `development` to `development`,
+  passed, and dropped nothing. The environment name was only ever a proxy for
+  "did these ids come from the database this run measures"; the database name
+  answers it directly, and the environment comparison remains the fallback for a
+  recording that carries no database. A guard that reports all clear without
+  working is worse than no guard.
+- **Cleanup no longer spares a row because another table has one with that
+  number.** The associated-row sweep skipped an exclusion list built by
+  flattening every resource's tracked ids into one array and applying it to a
+  single table. Ids are per-table sequences, so the collisions were spared: rows
+  created by the run, above that table's own watermark, left behind because some
+  other table had a row with that number — while the log reported the count of
+  what cleanup had decided to delete. Cleanup now also asks the database
+  afterwards, and says so if anything created during the run is still there.
+  Silent litter accumulates run over run and is invisible until somebody counts.
+- **Fix suggestions name an association you can actually type.** The name came
+  from hand-rolled suffix stripping, which turned a table ending in `ses` into a
+  non-word — `includes(:<nonword>)` raises `AssociationNotFoundError` if you
+  follow it. It now goes through ActiveSupport's inflector, which also means a
+  host that registered an irregular inflection gets its own answer.
+- **`includes` is no longer suggested for a repeat that does not scale.** A
+  request that finds the same already-loaded row four times wears the same
+  signature as a per-record N+1 inside one request — but not across cells: a
+  per-record N+1 issues more queries as more records come back, and a fixed
+  multiplier does not. Where that flatness is measured, the finding says so
+  (`evidence.scaling: fixed`) and the advice becomes "pass the loaded object
+  down, or memoize" instead of "preload". Where it was not measured, the advice
+  is unchanged — flatness that was never measured is not flatness.
+- **The request is rebuilt from what the recording actually held.** Discovery
+  captured the query parameters and headers of a passing spec's request and the
+  run sent neither, so an endpoint needing an `Accept` header answered 406 and
+  one with a required query parameter answered 400 — coverage lost to the
+  reconstruction rather than to anything about the app. Governed by
+  `replay_recorded_headers` (default `Accept`, `Content-Type`) and
+  `replay_recorded_query_params` (default `true`). Headers are replayed by name,
+  never wholesale; the identity's auth header wins over a recorded one, and the
+  page-size sweep's parameter wins over a recorded page size.
+- **Unmapped recordings are named, not just counted.** A recorded request the
+  router does not recognise is dropped and counted honestly — but those endpoints
+  then appeared nowhere else, making them the one "could not measure" case with
+  no row of its own. The samples were already collected at record time and thrown
+  away at write time; they now travel with the recording.
+- **One situation, one sentence.** Two endpoints returning 500 on every request
+  were described two different ways depending on which mechanism noticed first —
+  the validity gate, or error-concentration quarantine. Both now lead with the
+  same sentence and the quarantine detail names the status it saw. The reason
+  symbols stay distinct in the machine-readable output.
+
+### Changed
+
+- **The dry run says when the page-size sweep will not be able to run.** The
+  sweep correctly refuses when the largest scale factor cannot fill the largest
+  page. What was easy to underweight is the consequence: that sweep is one of two
+  N+1 detectors and is specifically the one that catches an N+1 hiding behind
+  pagination, so a paginated endpoint in the healthy list has had half the check
+  applied. It is reachable from the shipped defaults, and it belongs in the dry
+  run rather than in a report you read afterwards.
+- **The generated initializer stops assigning two lists it is only documenting.**
+  `production_hostname_patterns` and `page_size_parameters` now ship commented
+  out with their current defaults named, the way `redact_header_patterns`
+  already does. Assigning a copy of today's list freezes it: a release that
+  learns to recognise a production host yours matches would never reach an app
+  generated before it, and the safety list is the worst one in the file to
+  freeze. Existing initializers are worth auditing for the same pattern.
+
+### Note on `v0.0.2`
+
+Bundler resolves the annotated tag `v0.0.2` to `d4f81e4`, the tag OBJECT. The
+commit it points at is `1ac8a89` (`git rev-parse v0.0.2^{}`). The tag has not
+moved; the two SHAs are the two halves of one annotated tag.
+
 ## [0.0.2] — 2026-08-27
 
 ### Added
@@ -233,6 +319,7 @@ Stated here rather than left to be discovered:
 - **Tested on Ruby 4.0 and Rails 8.1.** The gemspec floor of Ruby 3.1 / Rails 7.0
   reflects the APIs used, not a tested matrix.
 
-[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/Matarim/loadwright/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/Matarim/loadwright/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/Matarim/loadwright/releases/tag/v0.0.1
