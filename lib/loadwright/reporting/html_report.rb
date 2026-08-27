@@ -315,6 +315,7 @@ module Loadwright
             #{inconclusive_explanation(endpoint)}
             #{findings_list(endpoint)}
             #{coverage_note(endpoint)}
+            #{sub_threshold_note(endpoint)}
             #{request_block(endpoint)}
             #{time_breakdown(endpoint)}
             #{latency_table(endpoint)}
@@ -386,6 +387,16 @@ module Loadwright
 
         rendered = counts.map { |status, count| "#{count}&times;#{h(status)}" }.join(", ")
         " <span class=\"statuses\">#{rendered}</span>"
+      end
+
+      # NOT A FINDING, AND NOT INVISIBLE EITHER.
+      def sub_threshold_note(endpoint)
+        summary = endpoint.dig(:correlation, :sub_threshold_duplicates)
+        return "" if summary.nil?
+
+        "<p class=\"note coverage\">Repeated queries seen, below the finding threshold: the most " \
+          "repeated ran #{h(summary[:occurrences])}&times; in one request " \
+          "(threshold #{h(summary[:threshold])}).</p>"
       end
 
       def request_block(endpoint)

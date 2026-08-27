@@ -202,4 +202,31 @@ RSpec.describe Loadwright::Reporting::ComparisonReport do
       end
     end
   end
+  # "Re-run under matching configuration" is unhelpful when the dimension that moved
+  # is the tool: there is no configuration to match, and the reading it has to prevent
+  # is a pleasant one -- a finding that vanished because a detector was corrected
+  # looks exactly like a fix.
+  describe "a refusal caused by the tool's own version" do
+    let(:comparison) do
+      Loadwright::History::Comparator::Result.new(
+        comparable: false, warnings: [], new_findings: [], resolved_findings: [],
+        changed_findings: [], deltas: [], transitions: [], endpoints_added: [],
+        endpoints_removed: [], excluded_signals: [],
+        divergences: [Loadwright::History::Comparator::Divergence.new(
+          dimension: "loadwright_version", before: "0.0.4", after: "0.0.5"
+        )]
+      )
+    end
+
+    it "says to re-measure the baseline rather than to match configuration" do
+      output = described_class.new.render(comparison)
+
+      expect(output).to include("Re-run the earlier side with the version you have now")
+      expect(output).not_to include("under matching configuration")
+    end
+
+    it "names what the refusal is protecting against" do
+      expect(described_class.new.render(comparison)).to include("a change to the detector")
+    end
+  end
 end

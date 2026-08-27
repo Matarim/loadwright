@@ -117,7 +117,8 @@ module Loadwright
         ]
 
         unless inconclusive.zero?
-          lines << "#{pluralise(inconclusive, 'endpoint')} could not be validly measured. " \
+          lines << "#{pluralise(inconclusive, 'endpoint')} did not produce a verdict" \
+                   "#{inconclusive_breakdown}. " \
                    "#{inconclusive == 1 ? 'It is' : 'They are'} **not** counted as passing."
           lines << ""
         end
@@ -204,6 +205,7 @@ module Loadwright
         coverage = endpoint.dig(:coverage, :description)
         parts << "\n_#{coverage}_" unless coverage.to_s.empty?
 
+        parts << sub_threshold_block(endpoint)
         parts << request_block(endpoint)
         parts << breakdown_block(endpoint)
         parts << latency_block(endpoint)
@@ -344,6 +346,16 @@ module Loadwright
         " (#{counts.map { |status, count| "#{count} x #{status}" }.join(', ')})"
       end
 
+      # NOT A FINDING, AND NOT INVISIBLE EITHER. An endpoint that issued the same query
+      # twice per request used to look identical to one that issued it once.
+      def sub_threshold_block(endpoint)
+        summary = endpoint.dig(:correlation, :sub_threshold_duplicates)
+        return nil if summary.nil?
+
+        "\n_Repeated queries seen, below the finding threshold: the most repeated ran " \
+          "#{summary[:occurrences]}x in one request (threshold #{summary[:threshold]})._"
+      end
+
       def request_block(endpoint)
         shape = endpoint[:request]
         return nil if shape.nil?
@@ -359,6 +371,17 @@ module Loadwright
       end
 
       def endpoints = Array(@data[:endpoints])
+
+      # DECLINED IS NOT UNMEASURABLE. Reported apart so a reader improving coverage can
+      # see which part of the number is a config switch away.
+      def inconclusive_breakdown
+        summary = Hash(@data[:summary])
+        declined = summary[:declined].to_i
+        return "" if declined.zero?
+
+        " (#{summary[:not_measurable].to_i} could not be measured, #{declined} declined by " \
+          "configuration and never requested)"
+      end
 
       def config_value(key) = @metadata.dig(:config, key, :value)
 

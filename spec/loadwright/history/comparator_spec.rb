@@ -9,7 +9,7 @@ RSpec.describe Loadwright::History::Comparator do
   # than round-tripped through RunStore, so a comparison bug cannot hide behind a
   # serialisation bug.
   def record(endpoints: nil, cells: nil, config_overrides: {}, machine: nil, git: nil,
-             capabilities: nil, page_sizes: nil, aborted: false)
+             capabilities: nil, page_sizes: nil, aborted: false, version: "9.9.9")
     snapshot = Loadwright::Configuration::COMPARABILITY_KEYS.to_h do |key|
       [key.to_s, { "value" => config_overrides.fetch(key, config.public_send(key)), "from" => "default" }]
     end
@@ -18,6 +18,7 @@ RSpec.describe Loadwright::History::Comparator do
       run_id: "r#{object_id}", path: "/dev/null",
       data: {
         "metadata" => {
+          "loadwright_version" => version,
           "config" => snapshot,
           "machine" => machine || { "cpu_count" => 8, "os" => "darwin", "ruby_version" => "3.3.0" },
           "git" => git || { "sha" => "abc123", "dirty" => false },
@@ -612,6 +613,59 @@ RSpec.describe Loadwright::History::Comparator do
               .deltas.find { |d| d.metric.start_with?("queries") }
 
       expect(delta.verdict).to eq(:improvement)
+    end
+  end
+  # THE TOOL ITSELF IS A DIMENSION. `resolved_for` already refuses to call a finding
+  # fixed when the endpoint stopped being measurable -- and it watched the endpoint's
+  # state while missing the other door: the detector changing underneath two runs.
+  #
+  # Between two releases the pattern-match repeat count went from a sum across cells
+  # to the per-request figure it had always claimed to be. An endpoint reporting "the
+  # same query ran 4 times" under the old counting had a true repeat of 2, below the
+  # reporting threshold, so it correctly stopped being a finding. Comparing those two
+  # runs answers "resolved" -- your fix worked, on an application nobody touched.
+  describe "two runs measured by different versions of the tool" do
+    let(:before) do
+      record(version: "0.0.4", endpoints: [endpoint("GET /a", state: "has_findings",
+                                                    findings: [:n_plus_one_pattern_match])],
+             cells: [cell("GET /a", queries: 8)])
+    end
+
+    let(:after) do
+      record(version: "0.0.5", endpoints: [endpoint("GET /a")], cells: [cell("GET /a", queries: 8)])
+    end
+
+    it "refuses rather than reporting a fix nobody made" do
+      expect(comparator.compare(before, after)).not_to be_comparable
+    end
+
+    it "names the version as the dimension that moved" do
+      divergence = comparator.compare(before, after).divergences.first
+
+      expect(divergence.dimension).to eq("loadwright_version")
+      expect([divergence.before, divergence.after]).to eq(%w[0.0.4 0.0.5])
+    end
+
+    it "computes no deltas and claims nothing resolved" do
+      comparison = comparator.compare(before, after)
+
+      expect(comparison.deltas).to be_empty
+      expect(comparison.resolved_findings).to be_empty
+    end
+
+    it "compares normally when both runs came from the same version" do
+      same = record(version: "0.0.4", endpoints: [endpoint("GET /a")], cells: [cell("GET /a", queries: 8)])
+
+      expect(comparator.compare(before, same)).to be_comparable
+    end
+
+    # A record written before the version was persisted carries none, and inventing a
+    # divergence from a missing field would refuse every comparison against an older
+    # baseline.
+    it "compares normally when a record predates the version being recorded" do
+      older = record(version: nil, endpoints: [endpoint("GET /a")], cells: [cell("GET /a", queries: 8)])
+
+      expect(comparator.compare(older, after)).to be_comparable
     end
   end
 end

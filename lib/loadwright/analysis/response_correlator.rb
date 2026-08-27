@@ -40,6 +40,18 @@ module Loadwright
                                    "though the number of records returned could not be read from these " \
                                    "responses to confirm it"
 
+      # THE DEFAULT REPORTING THRESHOLD for a repeated query, and the reason it is a
+      # threshold rather than "any repeat": two identical queries in one request are
+      # produced just as readily by two unrelated call sites as by a loop, and a finding
+      # on every one of those would bury the real ones.
+      #
+      # Two is still waste, though, and this used to be the difference between a
+      # finding and SILENCE -- an endpoint running the same query twice appeared in the
+      # clean list with nothing to distinguish it from one that ran it once. Sub-
+      # threshold repeats are now reported as an observation (see #duplicate_summary):
+      # not a finding, not invisible either.
+      DEFAULT_DUPLICATE_THRESHOLD = 3
+
       # Slope of queries against returned records. At 1.0 the endpoint issues one
       # query per record, which is the textbook N+1 signature. Well below that is
       # batching; the threshold sits low enough to catch a partial N+1 (an N+1 on one
@@ -179,13 +191,14 @@ module Loadwright
         }
       end
 
-      def to_h(observations)
+      def to_h(observations, duplicates = {})
         {
           queries_per_returned_record: measurement_to_h(queries_per_record(observations)),
           n_plus_one_slope: measurement_to_h(n_plus_one_slope(observations)),
           payload_growth_correlation: measurement_to_h(payload_growth(observations)),
+          sub_threshold_duplicates: duplicate_summary(duplicates),
           observations: observations.map(&:to_h)
-        }
+        }.compact
       end
 
       private
@@ -222,6 +235,34 @@ module Loadwright
         Measurement.unavailable(@capability.reason_for(signal) || "#{signal} is unavailable")
       end
 
+      public
+
+      # NOT A FINDING, AND NOT INVISIBLE EITHER. A repeat below the reporting threshold
+      # used to produce silence, so an endpoint issuing the same query twice per
+      # request sat in the clean list looking identical to one that issued it once.
+      # That is the same silence that let three endpoints move from a high-confidence
+      # finding to "healthy" across four rounds with nothing to explain the transition.
+      #
+      # nil rather than an empty hash when there is nothing to say, so `.compact` drops
+      # the key and a genuinely duplicate-free endpoint renders no row.
+      def duplicate_summary(duplicates)
+        worst = duplicates.max_by { |_, occurrences| occurrences.length }
+        return nil if worst.nil?
+        return nil if worst.last.length >= duplicate_threshold
+
+        {
+          fingerprint: worst.first,
+          occurrences: worst.last.length,
+          threshold: duplicate_threshold,
+          note: "repeated queries were observed but not reported as a finding: the most repeated ran " \
+                "#{worst.last.length} time(s) in a single request, under the reporting threshold of " \
+                "#{duplicate_threshold}. Not nothing, and not a finding -- lower " \
+                "n_plus_one_duplicate_threshold to see it as one."
+        }
+      end
+
+      private
+
       def measurement_to_h(measurement)
         measurement.available? ? { value: measurement.value } : { unavailable: measurement.reason }
       end
@@ -232,7 +273,7 @@ module Loadwright
         # Signal 1 — pattern matching: duplicate fingerprints within one request, the
         # technique Bullet and Prosopite use.
         worst = duplicates.max_by { |_, occurrences| occurrences.length }
-        if worst && worst.last.length >= 3
+        if worst && worst.last.length >= duplicate_threshold
           scaling = repeat_scaling(scaling_observations)
           results << Finding.new(
             kind: :n_plus_one_pattern_match,
@@ -284,6 +325,15 @@ module Loadwright
       # :unknown wherever the comparison is not available -- fewer than two cells, or
       # every cell returning the same number of records. Flatness that was never
       # measured is not flatness.
+      # Never below 2: "the same query ran once" is not a repeat, and a threshold of 1
+      # would make a finding of every query an endpoint issues.
+      def duplicate_threshold
+        value = @config.n_plus_one_duplicate_threshold
+        value.to_i < 2 ? DEFAULT_DUPLICATE_THRESHOLD : value.to_i
+      rescue StandardError
+        DEFAULT_DUPLICATE_THRESHOLD
+      end
+
       def repeat_scaling(observations)
         usable = Array(observations).reject { |o| o.records.nil? || o.queries.nil? }
         if usable.length >= 2 && usable.map(&:records).uniq.length >= 2

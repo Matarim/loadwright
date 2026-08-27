@@ -41,6 +41,14 @@ module Loadwright
       # Setup problems that prevent a request being issued at all.
       path_params_unresolved: "path parameters could not be resolved to real records",
       no_example_available: "endpoint discovered but no usable example request was available",
+      # DECLINED BY POLICY, NOT UNMEASURABLE. This used to share :no_example_available
+      # with an endpoint that genuinely had nothing to send -- two situations with
+      # different fixes, collapsed into one number. In one real run 45 of 73
+      # inconclusive endpoints were this, so a reader trying to improve coverage could
+      # not tell that most of the gap was one config switch away rather than a
+      # measurement failure.
+      mutating_not_allowed: "endpoint uses a mutating verb and allow_mutating_requests is false, so it " \
+                            "was never requested. Not a measurement failure: nothing was attempted",
       auth_failed: "authentication failed uniformly; auth_token_provider is likely misconfigured",
       # SAME SENTENCE AS :unsuccessful_status, deliberately. Both mean every request
       # came back a non-success status; which mechanism noticed is not something a
@@ -81,6 +89,12 @@ module Loadwright
     QUARANTINE_REASONS = %i[quarantined].freeze
     EXTERNAL_REASONS   = %i[externally_blocked].freeze
     SKIPPED_REASONS    = %i[circuit_breaker run_aborted interrupted].freeze
+
+    # Reasons that mean "we chose not to look", as distinct from "we looked and could
+    # not answer". Both are :inconclusive -- the three states are load-bearing and this
+    # is not a fourth -- but they must be COUNTED separately, or a reader improving
+    # coverage cannot tell which part of the number is theirs to move.
+    DECLINED_REASONS   = %i[mutating_not_allowed].freeze
 
     class << self
       def healthy(endpoint:, capability_epoch: 0, coverage: nil)
@@ -163,6 +177,10 @@ module Loadwright
     def quarantined?       = inconclusive? && QUARANTINE_REASONS.include?(reason)
     def externally_blocked? = inconclusive? && EXTERNAL_REASONS.include?(reason)
     def skipped?           = inconclusive? && SKIPPED_REASONS.include?(reason)
+
+    # Never attempted, by the user's own configuration. Reported, but not a gap this
+    # run can be blamed for -- the endpoint-level twin of Coverage's :not_applicable.
+    def declined?          = inconclusive? && DECLINED_REASONS.include?(reason)
 
     # Only endpoints we actually measured and found clean belong in the clean
     # list, the summary rankings, or a pass/fail exit code. response-analysis.md

@@ -1028,7 +1028,7 @@ module Loadwright
         return inconclusive(endpoint, :quarantined, quarantine_detail(key)) if @guard&.quarantined?(key)
 
         findings = findings_for(endpoint, cells)
-        @correlations[key] = correlator.to_h(observations_for(cells))
+        @correlations[key] = correlator.to_h(observations_for(cells), duplicates_for(cells))
 
         # The state comes from finding-class COVERAGE, not from how many signals
         # happened to produce a number. EndpointOutcome.derive owns the precedence so
@@ -1225,6 +1225,16 @@ module Loadwright
 
           sentence = attribution.annotate(finding)
           finding.detail = "#{finding.detail} — #{sentence}" if sentence
+        end
+      end
+
+      # The worst single request across cells, same rule the finding itself uses.
+      def duplicates_for(cells)
+        cells.each_with_object({}) do |cell, out|
+          Array(cell.duplicates).each do |fingerprint, occurrences|
+            existing = out[fingerprint]
+            out[fingerprint] = occurrences if existing.nil? || occurrences.length > existing.length
+          end
         end
       end
 

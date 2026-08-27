@@ -5,6 +5,65 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.8] — 2026-08-27
+
+### Fixed
+
+- **A repeated query below the reporting threshold is reported, not dropped.** An
+  endpoint issuing the same query twice per request appeared in the clean list
+  looking identical to one that issued it once — the detector had seen something
+  and said nothing.
+
+  That silence is how three endpoints moved from a high-confidence
+  `n_plus_one_pattern_match` to "healthy" across four rounds with nothing anywhere
+  to explain the transition. The counts themselves were being *corrected* — before
+  0.0.5 a repeat count was a sum across cells, so a two-cell run reporting "ran 4
+  times" was a true per-request repeat of 2, under the threshold of 3 — but no
+  report said so, in either direction. Endpoints fell under the threshold and
+  simply stopped being mentioned.
+
+  Sub-threshold repeats now render on the endpoint as an observation: not a
+  finding, not invisible. The threshold is `n_plus_one_duplicate_threshold`
+  (default 3, floor 2), so lowering it to 2 turns them into findings.
+- **An endpoint declined by policy is counted apart from one that could not be
+  measured.** A mutating endpoint held behind `allow_mutating_requests = false`
+  shared the reason `:no_example_available` with an endpoint that genuinely had
+  nothing to send. Two situations, different fixes, different owners, one number.
+
+  In one real run **45 of 73 inconclusive endpoints were policy declines**, so the
+  headline said "73 could not be validly measured" when 45 of them were never
+  attempted and are one config switch away, and the 28 real gaps were buried
+  inside it. Policy declines now carry `:mutating_not_allowed`, the summary
+  reports `not_measurable` and `declined` separately, and the state stays
+  `inconclusive` — three states remain load-bearing and this is not a fourth.
+
+- **Two runs from different versions of Loadwright are not comparable.** The
+  comparability gate covered configuration and the app's observed page size, and
+  left out the tool doing the measuring.
+
+  `Comparator#resolved_for` already refuses to call a finding fixed when the
+  endpoint stopped being measurable — it watches the endpoint's state, and missed
+  the other door entirely: **the detector changing underneath two runs.** Between
+  0.0.4 and 0.0.5 the pattern-match repeat count went from a sum across cells to
+  the per-request figure it had always claimed to be. An endpoint reporting "the
+  same query ran 4 times" under the old counting had a true per-request repeat of
+  2 — below the reporting threshold — so it correctly stopped being a finding.
+  Compare those two runs and the answer comes back `resolved:
+  n_plus_one_pattern_match`: your fix worked, on an application nobody had
+  touched.
+
+  A **hard** divergence, not a caveat. Thresholds move, detectors get added, a
+  measurement's meaning changes, and the tool cannot know which of its own
+  releases were semantically neutral. Failing closed costs one re-run of the
+  baseline on the current version; failing open costs somebody a day chasing a fix
+  they already made — or believing in one they never made.
+
+  The refusal says so in its own words rather than the generic "re-run under
+  matching configuration", which is unhelpful when the dimension that moved is the
+  tool: there is no configuration to match, and the fix is to re-measure the
+  baseline with the version now installed. A record written before the version was
+  persisted carries none, and absence is not treated as a difference.
+
 ## [0.0.7] — 2026-08-27
 
 Polish, from a fifth round of outside integration that found nothing Critical or
@@ -564,7 +623,8 @@ Stated here rather than left to be discovered:
 - **Tested on Ruby 4.0 and Rails 8.1.** The gemspec floor of Ruby 3.1 / Rails 7.0
   reflects the APIs used, not a tested matrix.
 
-[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.7...HEAD
+[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.8...HEAD
+[0.0.8]: https://github.com/Matarim/loadwright/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/Matarim/loadwright/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/Matarim/loadwright/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/Matarim/loadwright/compare/v0.0.4...v0.0.5

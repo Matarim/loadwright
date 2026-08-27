@@ -134,6 +134,16 @@ module Loadwright
     setting :warn_on_empty_response_with_seeded_data, true, section: :response_analysis
     setting :page_size_parameters, %w[per_page limit page[size] pageSize].freeze, section: :response_analysis
     setting :page_size_sweep, [5, 25, 100].freeze, section: :response_analysis
+    # How many times one query fingerprint must repeat inside a single request before
+    # it is reported as an N+1 finding.
+    #
+    # Three, not two, because two identical queries in one request are produced just as
+    # readily by two unrelated call sites as by a loop, and a finding on every one of
+    # those buries the real ones. Two is still waste: a repeat BELOW this threshold is
+    # reported on the endpoint as an observation rather than as a finding, so an
+    # endpoint that issues the same query twice never looks identical to one that
+    # issues it once. Lower this to 2 to have those reported as findings.
+    setting :n_plus_one_duplicate_threshold, 3, section: :response_analysis
     setting :detect_overfetching, true, section: :response_analysis
     setting :max_response_bytes_warning, 1_048_576, section: :response_analysis
     setting :payload_growth_correlation_threshold, 0.8, section: :response_analysis

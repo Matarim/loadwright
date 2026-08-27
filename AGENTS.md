@@ -1252,6 +1252,70 @@ DIAG-20:
     workaround before this was fixed and it produces exactly one undifferentiated
     endpoint.
 
+DIAG-34:
+  symptom: >
+    "most of our endpoints are inconclusive" / "73 inconclusive out of 91, how do we
+    improve coverage"
+  cause: >
+    The number mixes two unlike things. Endpoints DECLINED by policy -- mutating verbs
+    held behind allow_mutating_requests -- were never requested at all, and endpoints
+    that were requested and could not be judged are a different problem entirely.
+  fix: |
+    0.0.8+ counts them separately: `not_measurable` and `declined` in the summary,
+    and :mutating_not_allowed as its own reason.
+    Work the `not_measurable` list, in this order, because each has a known remedy:
+      - unsuccessful_status .... read the endpoint's "Request sent" block first; a
+                                replayed identifier means the status may be ours
+      - path_params_unresolved . factory_map `param:`, or path_param_overrides
+      - empty_with_seeded_data . a factory trait matching the endpoint's scope
+      - no_example_available ... record a spec that exercises it, or document it
+      - page_size_rejected ..... set page_size_sweep to values it accepts
+      - incomplete_coverage .... read the `checked:` line; it names what did not run
+  do_not: >
+    Do not suggest enabling allow_mutating_requests to "improve coverage" without
+    saying plainly what it does: real writes against a real database, on every request
+    of every cell. It is a deliberate decision, not a coverage tweak.
+
+DIAG-35:
+  symptom: >
+    "an endpoint is healthy but I know it issues a duplicate query" / "why is a
+    repeated query not a finding"
+  cause: >
+    The pattern-match detector reports at n_plus_one_duplicate_threshold repeats
+    (default 3). Two identical queries in one request come as readily from two
+    unrelated call sites as from a loop, so two is not reported as a finding.
+  fix: >
+    0.0.8+ reports sub-threshold repeats on the endpoint as an observation, so they
+    are visible without being findings. Lower n_plus_one_duplicate_threshold to 2 to
+    have them reported as findings. The floor is 2; a threshold of 1 is refused.
+  say_this: >
+    A repeat of two is still waste worth fixing. It is not reported as a finding
+    because a report full of them buries the real ones, not because it is fine.
+
+DIAG-33:
+  symptom: >
+    "an endpoint that had an N+1 finding is in the clean list now and we changed
+    nothing" / "compare says resolved and we did not fix anything"
+  cause: |
+    Two possibilities, and they need different answers.
+      1. The two runs came from DIFFERENT VERSIONS of Loadwright. A detector or a
+         threshold changed, so the finding's absence says nothing about the app.
+         0.0.8+ refuses this comparison outright (exit 2).
+      2. The two runs asked the endpoint DIFFERENT QUESTIONS -- a re-recording moved
+         a query parameter off the template, and the endpoint stopped being asked the
+         expensive one. 0.0.5+ reports that delta as unattributable and names the
+         parameter; the endpoint's "Request sent" block shows it directly.
+  fix: >
+    For (1) re-run the earlier side with the version now installed and compare two
+    fresh runs. For (2) read both runs' request blocks, then pin the parameter with
+    path_param_overrides or narrow integration_spec_paths.
+  do_not: |
+    NEVER report a disappeared finding as fixed without checking both. A finding that
+    vanished because a detector was corrected, or because the endpoint stopped being
+    asked the expensive question, looks exactly like a fix and is not one.
+    Note that the answer can also be honest: a repeat count that fell from 3 to 2 is
+    below the reporting threshold and the finding is correctly gone. Say which.
+
 DIAG-31:
   symptom: >
     "a collection endpoint is inconclusive but most of its cells returned 200" /

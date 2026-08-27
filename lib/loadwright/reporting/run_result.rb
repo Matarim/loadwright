@@ -74,6 +74,16 @@ module Loadwright
       # is not a pass (INV-07).
       def clean = outcomes.select(&:countable_as_clean?)
 
+      # Never attempted, by configuration. Still inconclusive -- the three states are
+      # load-bearing -- but counted apart, because a reader improving coverage needs to
+      # know which part of the number is a config switch away and which part is a real
+      # measurement gap.
+      def declined = outcomes.select(&:declined?)
+
+      # Attempted and unanswered: the part of `inconclusive` that is actually about
+      # measurement.
+      def not_measurable = inconclusive.reject(&:declined?)
+
       def quarantined = outcomes.select(&:quarantined?)
       def externally_blocked = outcomes.select(&:externally_blocked?)
       def skipped = outcomes.select(&:skipped?)
@@ -86,6 +96,8 @@ module Loadwright
           healthy: healthy.length,
           has_findings: with_findings.length,
           inconclusive: inconclusive.length,
+          declined: declined.length,
+          not_measurable: not_measurable.length,
           quarantined: quarantined.length,
           externally_blocked: externally_blocked.length,
           skipped: skipped.length,

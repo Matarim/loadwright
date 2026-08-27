@@ -333,6 +333,7 @@ config.require_schema_valid_response = true
 config.warn_on_empty_response_with_seeded_data = true
 config.page_size_parameters = ["per_page", "limit", "page[size]", "pageSize"]
 config.page_size_sweep = [5, 25, 100]
+config.n_plus_one_duplicate_threshold = 3    # repeats below this are reported, not flagged
 config.detect_overfetching = true
 config.max_response_bytes_warning = 1_048_576
 config.payload_growth_correlation_threshold = 0.8

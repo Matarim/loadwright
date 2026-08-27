@@ -391,4 +391,54 @@ RSpec.describe Loadwright::Analysis::ResponseCorrelator do
       expect(audit[:queries_per_returned_record][:unavailable]).to include("no collector middleware")
     end
   end
+  # A REPEAT BELOW THE THRESHOLD USED TO PRODUCE SILENCE, so an endpoint issuing the
+  # same query twice per request sat in the clean list looking identical to one that
+  # issued it once. That silence is how three endpoints moved from a high-confidence
+  # finding to "healthy" across four rounds with nothing anywhere to explain it: the
+  # counts were being fixed, and the endpoints that fell under the threshold as a
+  # result simply stopped being mentioned.
+  describe "duplicate queries under the reporting threshold" do
+    let(:twice) { { "SELECT 1" => Array.new(2) { { fingerprint: "SELECT 1" } } } }
+
+    it "is still not a finding" do
+      expect(correlator.findings(observations: [], duplicates: twice)).to be_empty
+    end
+
+    it "is reported on the endpoint rather than dropped" do
+      summary = correlator.to_h([], twice)[:sub_threshold_duplicates]
+
+      expect(summary[:occurrences]).to eq(2)
+      expect(summary[:threshold]).to eq(3)
+      expect(summary[:note]).to include("under the reporting threshold")
+    end
+
+    it "says which knob turns it into a finding" do
+      expect(correlator.to_h([], twice)[:sub_threshold_duplicates][:note])
+        .to include("n_plus_one_duplicate_threshold")
+    end
+
+    it "says nothing for an endpoint with no repeats at all" do
+      expect(correlator.to_h([], {})).not_to have_key(:sub_threshold_duplicates)
+    end
+
+    it "says nothing once the repeat is a finding in its own right" do
+      thrice = { "SELECT 1" => Array.new(3) { { fingerprint: "SELECT 1" } } }
+
+      expect(correlator.to_h([], thrice)).not_to have_key(:sub_threshold_duplicates)
+    end
+
+    it "reports it as a finding when the threshold is lowered" do
+      config.n_plus_one_duplicate_threshold = 2
+
+      expect(correlator.findings(observations: [], duplicates: twice).map(&:kind))
+        .to include(:n_plus_one_pattern_match)
+    end
+
+    # A threshold of 1 would make a finding of every query an endpoint issues.
+    it "refuses a threshold below two" do
+      config.n_plus_one_duplicate_threshold = 1
+
+      expect(correlator.findings(observations: [], duplicates: twice)).to be_empty
+    end
+  end
 end

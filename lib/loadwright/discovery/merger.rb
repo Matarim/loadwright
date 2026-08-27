@@ -83,8 +83,11 @@ module Loadwright
       # Returns [reason_symbol, detail], or nil to keep the endpoint. Scope filtering
       # happens before this is called.
       def skip_reason(endpoint)
+        # ITS OWN REASON, not :no_example_available. "We declined to request this" and
+        # "we had nothing to send it" have different fixes and different owners, and
+        # sharing a symbol made most of a report's inconclusive count unreadable.
         if endpoint.mutating? && !@config.allow_mutating_requests
-          return [:no_example_available,
+          return [:mutating_not_allowed,
                   "mutating verb (#{endpoint.verb.to_s.upcase}) and allow_mutating_requests is false"]
         end
 

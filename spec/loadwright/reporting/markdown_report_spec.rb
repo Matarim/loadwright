@@ -135,4 +135,32 @@ RSpec.describe Loadwright::Reporting::MarkdownReport do
       expect(rendered_with([200, 200], [200, 200])).not_to include("4 x 200")
     end
   end
+  # DECLINED IS NOT UNMEASURABLE. In one real run 45 of 73 inconclusive endpoints were
+  # mutating verbs the user had switched off -- so the headline number said "73 could
+  # not be validly measured" when 45 of them were never attempted and are one config
+  # switch away. A reader trying to improve coverage could not tell the two apart.
+  describe "the inconclusive count when some endpoints were declined by policy" do
+    def summary_line(declined:, not_measurable:)
+      outcomes = Array.new(declined) do |n|
+        build_outcome(endpoint: build_endpoint(path: "/api/v1/widgets/#{n}", verb: :post),
+                      state: :inconclusive, reason: :mutating_not_allowed)
+      end
+      outcomes += Array.new(not_measurable) do |n|
+        build_outcome(endpoint: build_endpoint(path: "/api/v1/gadgets/#{n}"),
+                      state: :inconclusive, reason: :unsuccessful_status)
+      end
+
+      render(outcomes: outcomes, cells: [])
+    end
+
+    it "splits the number into what could not be measured and what was declined" do
+      output = summary_line(declined: 45, not_measurable: 28)
+
+      expect(output).to include("28 could not be measured").and include("45 declined by configuration")
+    end
+
+    it "says nothing extra when nothing was declined" do
+      expect(summary_line(declined: 0, not_measurable: 3)).not_to include("declined by configuration")
+    end
+  end
 end

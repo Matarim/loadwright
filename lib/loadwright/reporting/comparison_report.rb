@@ -108,8 +108,28 @@ module Loadwright
           "",
           table(%w[Dimension Earlier Later], rows),
           "",
-          "Re-run one side under matching configuration, then compare again."
+          remedy
         ].join("\n")
+      end
+
+      # A VERSION DIVERGENCE NEEDS A DIFFERENT SENTENCE. "Re-run under matching
+      # configuration" is unhelpful when the dimension that moved is the tool: there is
+      # no configuration to match, and the fix is to re-measure the baseline with the
+      # version now installed.
+      #
+      # Worth saying plainly what it protects against, because the reading it prevents
+      # is a pleasant one and people believe pleasant readings: a finding can disappear
+      # between releases because a detector was corrected, and comparing across that
+      # reports a fix nobody made.
+      def remedy
+        if @comparison.divergences.any? { |d| d.dimension.to_s == "loadwright_version" }
+          return "These runs were measured by different versions of Loadwright, so a finding present " \
+                 "in one and absent from the other may reflect a change to the detector rather than a " \
+                 "change to your application. Re-run the earlier side with the version you have now, " \
+                 "and compare the two fresh runs."
+        end
+
+        "Re-run one side under matching configuration, then compare again."
       end
 
       def verdict_line

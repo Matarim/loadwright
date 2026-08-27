@@ -153,4 +153,38 @@ RSpec.describe Loadwright::Discovery::Merger do
       expect(audit[:warnings].first).to include("could not be mapped")
     end
   end
+  # DECLINED BY POLICY IS NOT UNMEASURABLE. A mutating endpoint we chose not to request
+  # and an endpoint we had nothing to send are different situations with different
+  # fixes, and they shared a reason symbol -- so in one real run 45 of 73 inconclusive
+  # endpoints were the first kind and a reader could not tell that most of their
+  # coverage gap was one config switch away.
+  describe "an endpoint declined because it mutates" do
+    let(:outcome) do
+      config.allow_mutating_requests = false
+      post = Loadwright::Discovery::Endpoint.new(path: "/api/v1/widgets", verb: :post, source: :openapi,
+                                                 request_body: { "name" => "x" })
+
+      described_class.new(config: config).merge(openapi: [post]).skipped.first
+    end
+
+    it "has its own reason, not the one for an endpoint with nothing to send" do
+      expect(outcome.reason).to eq(:mutating_not_allowed)
+    end
+
+    it "counts as declined rather than as a measurement gap" do
+      expect(outcome).to be_declined
+      expect(outcome).to be_inconclusive
+    end
+
+    # An endpoint we genuinely could not build a request for keeps the other reason.
+    it "leaves no_example_available for the case it was named after" do
+      bare = Loadwright::Discovery::Endpoint.new(path: "/api/v1/widgets", verb: :post, source: :route)
+      config.allow_mutating_requests = true
+
+      skipped = described_class.new(config: config).merge(route: [bare]).skipped.first
+
+      expect(skipped.reason).to eq(:no_example_available)
+      expect(skipped).not_to be_declined
+    end
+  end
 end

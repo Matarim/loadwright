@@ -207,9 +207,42 @@ module Loadwright
 
       # Divergences that make a comparison meaningless rather than merely caveated.
       def hard_divergences(before, after)
-        divergences = config_divergences(before, after)
+        divergences = version_divergences(before, after)
+        divergences.concat(config_divergences(before, after))
         divergences.concat(page_size_divergences(before, after))
         divergences
+      end
+
+      # THE TOOL ITSELF IS A DIMENSION, and leaving it out let the worst reading in.
+      #
+      # `resolved_for` exists to stop a disappeared finding being reported as a fix
+      # when nothing was measured. It watches the endpoint's state and misses the other
+      # door entirely: the detector changing underneath two runs.
+      #
+      # This is not hypothetical. Between two releases the pattern-match repeat count
+      # went from a sum across cells to the per-request figure it had always claimed to
+      # be. An endpoint reporting "the same query ran 4 times" under the old counting
+      # had a true per-request repeat of 2 -- below the reporting threshold -- so it
+      # correctly stopped being a finding. Compare those two runs and the answer comes
+      # back "resolved: n_plus_one_pattern_match": your fix worked, on an application
+      # nobody had touched.
+      #
+      # A HARD divergence, not a caveat. Thresholds move, detectors are added, a
+      # measurement's meaning changes -- and the tool cannot know which of its own
+      # releases were semantically neutral. Failing closed costs one re-run of the
+      # baseline on the current version; failing open costs somebody a day chasing a
+      # fix they already made, or worse, believing one they never made.
+      def version_divergences(before, after)
+        mine = tool_version(before)
+        theirs = tool_version(after)
+        return [] if mine.nil? || theirs.nil? || mine == theirs
+
+        [Divergence.new(dimension: "loadwright_version", before: mine, after: theirs)]
+      end
+
+      def tool_version(record)
+        value = record.respond_to?(:data) ? record.data.dig("metadata", "loadwright_version") : nil
+        value&.to_s
       end
 
       def config_divergences(before, after)
