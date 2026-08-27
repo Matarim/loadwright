@@ -194,6 +194,58 @@ RSpec.describe Loadwright::Seeding::FactoryBotSeeder, :sample_app do
       expect([Post.count, Author.count, Comment.count]).to eq([0, 0, 0])
     end
 
+    # THE CROSS-TABLE ID COLLISION. The sweep used to skip an exclusion list built by
+    # flattening EVERY resource's ids into one array and then applying it to a SINGLE
+    # table. Ids are per-table sequences, so one resource's ids collide numerically
+    # with another's -- and the collisions were spared: rows this run created, above
+    # this table's own watermark, left behind because some other table happened to
+    # have a row with that number. That is how nine orphaned rows survived a cleanup
+    # whose log said it had deleted twenty-one.
+    #
+    # The collision is arranged explicitly rather than left to whatever the id
+    # sequences happen to be doing, because a regression spec that only reproduces on
+    # a freshly-reset database is a spec that stops reproducing.
+    it "deletes a row it created even when another table's tracked id has the same number" do
+      collision_id = [Post.maximum(:id).to_i, Author.maximum(:id).to_i].max + 1_000
+      config.factory_map = {
+        "post" => { factory: :post, count: 1, attributes: { id: collision_id } },
+        "author" => { factory: :author, count: 1 }
+      }
+
+      seeder.seed!(1)
+      # Stands in for a row a factory callback or an association created without
+      # create_list ever returning it: untracked, above the authors watermark, and
+      # carrying the id the POSTS resource is tracked by.
+      Author.create!(id: collision_id, name: "orphan", slug: "orphan-#{collision_id}",
+                     email: "orphan#{collision_id}@example.com")
+
+      seeder.cleanup!
+
+      expect(Author.where(id: collision_id)).to be_empty
+    end
+
+    # THE TALLY IS NOT THE EVIDENCE. Cleanup counted what its own DELETEs returned --
+    # what it decided to remove, not what was left -- so a log reporting twenty-one
+    # deletions sat above nine surviving rows and nothing said so. Silent litter
+    # accumulates run over run and is invisible until somebody counts by hand.
+    it "says so when rows it created are still there after it has finished" do
+      seeder.seed!(2)
+      allow_any_instance_of(ActiveRecord::Relation).to receive(:delete_all).and_return(0)
+
+      seeder.cleanup!
+
+      expect(seeder.to_h[:warnings].join(" ")).to include("still holding rows created during this run")
+      expect(stdout.string).to include("posts")
+    end
+
+    it "says nothing when cleanup actually cleaned up" do
+      seeder.seed!(2)
+
+      seeder.cleanup!
+
+      expect(seeder.to_h[:warnings].join(" ")).not_to include("still holding rows")
+    end
+
     # ROWS THE APP CREATED, not the factories. This is the one place the promise
     # "Loadwright leaves nothing behind" was not true: cleanup tracked what the
     # factories wrote and nothing else, so a few hundred POSTs left a few hundred

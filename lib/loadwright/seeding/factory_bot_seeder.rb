@@ -496,11 +496,8 @@ module Loadwright
         # the factories' associated rows -- same watermark, same id bound, same
         # never-a-TRUNCATE. They go LAST in insert order, so they unwind FIRST below:
         # a row a POST created may reference a seeded row, never the other way round.
-        tables = @inserted_tables + (request_written_tables - @inserted_tables)
+        tables = swept_tables
         return if tables.empty?
-
-        already = @created_ids.values.flatten
-        tracked_tables = @created_ids.keys.filter_map { |resource| model_for(resource)&.table_name }
 
         # Reverse first-insert order: children are inserted after their parents, so
         # undoing in reverse means no foreign key is ever holding a row we are deleting.
@@ -511,14 +508,71 @@ module Loadwright
           model = model_for_table(table)
           next if model.nil?
 
-          scope = model.where(model.arel_table[:id].gt(watermark))
-          scope = scope.where.not(id: already) if tracked_tables.include?(table) && already.any?
-
-          deleted = scope.delete_all
+          # NO EXCLUSION LIST. This used to skip `@created_ids.values.flatten` on any
+          # table it had tracked rows for -- every resource's ids flattened into one
+          # list and then applied to a SINGLE table. Ids are per-table sequences, so
+          # one resource's ids collide numerically with another's, and the collisions
+          # were spared: rows above this table's own watermark, created by this run,
+          # excluded from the sweep because some OTHER table had a row with that
+          # number. That is how nine orphaned rows survived a cleanup whose log said
+          # it had deleted twenty-one.
+          #
+          # The exclusion bought nothing even when it worked. delete_tracked_rows!
+          # has already run, so its rows are gone and `delete_all` returns what it
+          # actually deleted -- no double counting. And where tracked deletion FAILED
+          # (an unknown model class), excluding those ids is precisely wrong: the
+          # sweep is the second chance to remove them.
+          deleted = model.where(model.arel_table[:id].gt(watermark)).delete_all
           @stdout.puts "loadwright: deleted #{deleted} associated #{table} row(s)" if deleted.positive?
         rescue StandardError => e
           @warnings << "could not clean up associated rows in #{table}: #{e.class}: #{e.message}"
         end
+
+        verify_nothing_left_behind(tables)
+      end
+
+      # Every table this run inserted into, plus every table it tracked rows in.
+      #
+      # The tracked half matters because @inserted_tables comes from pattern-matching
+      # INSERT statements, and a statement it fails to match (a schema-qualified name,
+      # an adapter that logs differently) drops that table out of the sweep entirely.
+      # A table we hold ids for is one we know we wrote to, whatever the log looked
+      # like.
+      def swept_tables
+        tracked = @created_ids.keys.filter_map { |resource| model_for(resource)&.table_name }
+        (@inserted_tables + tracked + request_written_tables).uniq
+      end
+
+      # THE TALLY IS NOT THE EVIDENCE. Cleanup counts what its own DELETEs returned,
+      # which is a count of what it decided to remove -- not a count of what is left.
+      # Those two disagreed for a whole release and nothing said so, because nothing
+      # asked the database afterwards.
+      #
+      # So: ask. One COUNT per swept table, strictly above the same watermark, after
+      # the deletes. Read-only, id-bounded, and it cannot widen anything. Silent
+      # litter accumulates run over run and is invisible until somebody counts by
+      # hand; noisy litter gets fixed.
+      def verify_nothing_left_behind(tables)
+        left = tables.filter_map do |table|
+          watermark = @watermarks[table]
+          model = watermark && model_for_table(table)
+          next if model.nil?
+
+          remaining = model.where(model.arel_table[:id].gt(watermark)).count
+          next unless remaining.positive?
+
+          "#{remaining} in #{table}"
+        rescue StandardError
+          # Not being able to check is not itself a finding; the delete above already
+          # reported anything that went wrong with this table.
+          next
+        end
+        return if left.empty?
+
+        @warnings << "cleanup finished with #{left.length} table(s) still holding rows created during this " \
+                     "run: #{left.join(', ')}. They were created above the pre-run id watermark, so they are " \
+                     "this run's, and they are still there. Delete them by id, and please report this."
+        @stdout.puts "loadwright: #{@warnings.last}"
       end
 
       def delete_in_batches(model, ids)
