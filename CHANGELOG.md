@@ -5,6 +5,98 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] — 2026-08-27
+
+Six fixes from a third round of outside integration, and one correction to the
+0.0.3 changelog below.
+
+The shape of this round differs from the last two. Round 3's issues were "the fix
+landed but the last mile did not". These are the opposite: **the fixes worked,
+and the tool's own improvements exposed the next layer.** Naming the unmapped
+recordings revealed why they were unmapped. Taking our own advice to raise
+`scale_factors` revealed that N+1 counts scaled with configuration. Replaying
+recorded parameters revealed an endpoint that had been "healthy" for three rounds
+only because nobody had sent it the parameter that selects the expensive answer.
+
+### Fixed
+
+- **N+1 repeat counts are per-request again.** A finding said "the same query ran
+  N times in a single request" where N was a **sum across every cell**. The
+  per-cell code takes the worst single request and carries a comment explaining
+  why; the merge one level up concatenated. The number was therefore a property
+  of the reader's configuration: cells going 2 → 6 between two runs of an
+  unchanged application tripled every N+1 count exactly. Taking our own advice to
+  raise `scale_factors` punished the reader with severities three times worse for
+  no change in behaviour, corrupted run-over-run comparison, and made a fixed
+  repeat look like one that scales — arguing against the classifier shipped in
+  the same release. The invariant that catches it (no repeat count may exceed the
+  endpoint's queries per request) is now a spec.
+- **A doubled leading slash no longer costs the recording.** `//api/v1/thing` is
+  a protocol-relative URL, and `Rack::MockRequest.env_for` parses it as one — the
+  first segment becomes the authority and vanishes from `PATH_INFO`. The router
+  was then asked about a path missing its first segment, answered nil, and the
+  recording was dropped and counted. Twenty-two recordings lost in one real run
+  had this shape, all from a mounted Rack app whose mount point and sub-path each
+  contributed a slash. The router recognises both forms when asked directly;
+  nothing was wrong but our own request construction.
+- **An empty capture no longer overwrites a good recording.** It replaced the
+  file and then printed that nothing had been written to that path — so a reader
+  had no reason to check, and the next command refused with "0 endpoints" several
+  steps removed from the cause. Recording is the slowest step in the workflow.
+  Refusing the write is also what makes the existing message true.
+- **An identifier in a query string is treated as an identifier.** Path
+  parameters get a four-source resolution chain in which a recorded id ranks
+  last, because a spec's ids do not exist in the database being measured. The
+  same id in a query string was replayed as fact, so a spec placeholder went out
+  verbatim, matched nothing, and the endpoint answered 404 as though it were
+  broken. Identifier-shaped query parameters now resolve from a seeded row first;
+  ordinary filters are untouched. Where nothing can resolve one, the recorded
+  value still goes and the endpoint is marked, so a 404 says the request carried
+  an identifier we could not resolve rather than presenting it as the app's
+  answer.
+- **When the fixed/scaling classifier abstains, the advice abstains too.** On an
+  API of single-record detail endpoints there is no returned-record count to
+  read, so the classifier correctly declined on every finding — and every one
+  then carried confident preload advice, which was the wrong fix for all of them.
+  The unclassified suggestion now names both branches and says what to vary to
+  settle it. There is also one more axis to ask first: a query count identical at
+  seed scale 1 and seed scale 100 did not move while the data underneath it moved
+  a hundredfold. That gets its own value, `fixed_by_seed_scale`, rather than
+  being folded into `fixed` — a paginated collection is flat against seeded scale
+  by construction, and the suggestion names that assumption instead of burying it.
+
+### Added
+
+- **`record` says which database it is about to run your test suite against.**
+  It boots the app and then runs RSpec in the same process — it has to, since the
+  recorder is a module prepended to a class there. The consequence went unsaid:
+  the `ENV["RAILS_ENV"] ||= "test"` in a conventional `rails_helper` is a no-op
+  by then, so the suite runs against whatever database the CLI booted into,
+  normally development. A fully transactional suite rolls everything back and
+  nothing leaks — luck rather than containment. One that truncates, commits, or
+  uses `before(:all)` writes to development data, and one that truncates between
+  examples would empty it. Not a refusal: running those specs is what was asked
+  for. But it is the user's call only if they know they are making it.
+
+### Correction to 0.0.3
+
+The 0.0.3 entry below says the recording's environment tag "was wrong". **That
+was based on a premise that turned out to be false, and it is withdrawn here
+rather than quietly edited.** The claim was that `record` runs specs against the
+test database; it does not, for the reason above. The recording named the
+development database because the specs ran against the development database, in
+0.0.2 as well as 0.0.3.
+
+The 0.0.3 change is still the right design — sampling at capture time and
+recording the database name rather than the environment name answers the question
+directly instead of by proxy. It was not, however, fixing a bug that existed.
+
+The real problem in that area is different and is not solved by comparing names:
+recorded ids from a transactional suite are **ephemeral**, rolled back at the end
+of each example, so they exist in no database afterwards. Only checking whether a
+recorded value resolves to a row can catch that. It remains unfixed and is
+masked in practice by seeded values outranking recorded ones.
+
 ## [0.0.3] — 2026-08-27
 
 Seven fixes from a second round of outside integration. Two of them are the same
@@ -319,7 +411,8 @@ Stated here rather than left to be discovered:
 - **Tested on Ruby 4.0 and Rails 8.1.** The gemspec floor of Ruby 3.1 / Rails 7.0
   reflects the APIs used, not a tested matrix.
 
-[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/Matarim/loadwright/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/Matarim/loadwright/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/Matarim/loadwright/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/Matarim/loadwright/releases/tag/v0.0.1

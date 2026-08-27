@@ -1208,17 +1208,22 @@ DIAG-23:
     `record` runs specs against TEST; `run` measures DEVELOPMENT. Recorded ids are
     from the wrong database.
   fix: >
-    Nothing to do on 0.0.3+: a recording records the DATABASE it was made against,
-    sampled inside the spec that issued the request, and values from a different one
-    are dropped with a warning while the parameter stays declared. Resolve it with
-    path_param_overrides or by seeding the resource.
-  note: >
-    0.0.2 had this mechanism and wrote the wrong value into it. It sampled the
-    environment in the CLI process, which boots before the specs and does not follow
-    them to the test database -- so a recording made entirely of test ids was tagged
-    "development", the guard compared "development" to "development", and nothing was
-    dropped. If a user is on 0.0.2, do not rely on this guard; check whether the
-    recorded ids exist in the database being measured.
+    A recording records the DATABASE it was made against, sampled inside the spec
+    that issued the request, and values from a different one are dropped with a
+    warning while the parameter stays declared. Resolve it with path_param_overrides
+    or by seeding the resource.
+  the_premise_to_check_first: |
+    DO NOT ASSERT THAT `record` RUNS AGAINST THE TEST DATABASE. It usually does NOT.
+    `record` boots the app and then runs RSpec in the same process, so the
+    `ENV["RAILS_ENV"] ||= "test"` in a conventional rails_helper is already a no-op
+    and the specs run against whatever the CLI booted into -- normally development.
+    0.0.4 says which database that is, before the specs run (DIAG-26).
+    So the usual cause of "recorded ids do not exist" is NOT a cross-database
+    recording. It is that the ids were EPHEMERAL: a transactional suite rolls back
+    every row it created, so the recorded ids existed during the example and exist
+    nowhere afterwards -- in any database. A name comparison cannot catch that.
+    Check whether a sampled recorded value resolves to a row in the database being
+    measured. That is the only check that answers the question.
 
 DIAG-19:
   symptom: >
@@ -1246,6 +1251,42 @@ DIAG-20:
     Do not tell the user to set included_paths to the mount prefix. That was the
     workaround before this was fixed and it produces exactly one undifferentiated
     endpoint.
+
+DIAG-26:
+  symptom: >
+    "does loadwright record touch my database?" / "my specs wrote to development" /
+    a user asking what `record` is safe to point at
+  cause: >
+    `record` boots the app and runs the host's specs IN THIS PROCESS -- it has to, the
+    recorder is a module prepended to a class here. So the specs run against whatever
+    database the CLI booted into, normally development, and a conditional RAILS_ENV
+    assignment in rails_helper cannot change it.
+  say_this: |
+    A fully transactional suite rolls everything back and leaves nothing behind. One
+    that truncates, commits, or uses before(:all) WILL write to that database, and a
+    suite that truncates between examples would empty it.
+    0.0.4 prints the database name before the specs run. Tell the user to read that
+    line and to know their suite's cleaning strategy before running `record` against a
+    database whose contents they care about.
+  do_not: >
+    Do not describe side-effect containment as covering this. Containment covers mail,
+    jobs and outbound HTTP. This is the host's own suite doing what it was written to
+    do, in an environment it was not written for.
+
+DIAG-27:
+  symptom: >
+    "the N+1 counts tripled and we changed nothing" / "the report says a query ran
+    more times than the endpoint issued queries"
+  cause: >
+    Before 0.0.4 the repeat count on an n_plus_one_pattern_match finding was summed
+    across cells, so it scaled with scale_factors x page_size_sweep -- the reader's
+    configuration, not their endpoint.
+  fix: >
+    Upgrade. There is no config workaround, and dividing by the cell count by hand is
+    only approximately right.
+  do_not: >
+    Do not compare N+1 repeat counts from a pre-0.0.4 run against a 0.0.4+ one, and do
+    not read a pre-0.0.4 increase as a regression if the cell count changed.
 
 DIAG-24:
   symptom: >
@@ -1327,6 +1368,19 @@ the_one_to_get_right: >
   That is correct and is the most common wrong advice about N+1s: preloading still
   counts with a query unless the code stops calling .count. Do not "improve" it
   back to "add includes".
+when_it_abstains: >
+  `scaling: unknown` means neither the returned record count nor the seeded scale
+  varied enough to compare, and the suggestion then names BOTH branches rather than
+  choosing one. Relay it that way. Do not resolve the ambiguity for the user by
+  picking the preload -- on an API of single-record detail endpoints that guess was
+  wrong on every finding in a real run. Tell them to vary scale_factors or the
+  page-size parameter and re-run; that is what answers it.
+fixed_by_seed_scale: >
+  A weaker measurement, and it says so: the query count did not move across the seed
+  scale factors, but the returned record count could not be read. A PAGINATED
+  collection is flat against seeded scale by construction, so for a paginated
+  endpoint this could still be a per-record N+1 and the preload is right. For a
+  single-record endpoint it is a fixed repeat. Ask which it is before advising.
 fixed_vs_scaling_repeats: >
   A finding may carry `evidence.scaling: fixed`. That means the run MEASURED the
   query count staying flat while the number of records returned changed -- so the
