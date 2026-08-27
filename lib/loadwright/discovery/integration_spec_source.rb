@@ -117,17 +117,24 @@ module Loadwright
         requests = MountedPathTemplate.apply(@captured)
         report_inferred(requests)
 
+        # WHICH DATABASE THESE IDS CAME FROM. `record` runs specs against test;
+        # `run` measures development. That is the documented two-command workflow, so
+        # recorded ids are routinely ids that do not exist in the database being
+        # measured -- and every request 404s.
+        #
+        # SAMPLED AT CAPTURE TIME, NOT HERE. This method runs in the CLI process,
+        # which booted before the specs did and stays in whatever environment it was
+        # invoked with. The specs then connect to test -- and asking here answered
+        # "development" for a recording made entirely of test ids, so the guard below
+        # compared "development" to "development", passed, and dropped nothing. The
+        # mechanism was present and the value was wrong, which is worse than no
+        # mechanism at all: it reports all clear.
         payload = {
           "version" => FORMAT_VERSION,
           "recorded_at" => Time.now.utc.iso8601,
-          # WHICH DATABASE THESE IDS CAME FROM. `record` runs specs against test;
-          # `run` measures development. That is the documented two-command workflow,
-          # so recorded ids are routinely ids that do not exist in the database being
-          # measured -- and every request 404s.
-          "environment" => current_environment,
           "unrecognised_count" => @unrecognised.to_i,
           "requests" => requests
-        }
+        }.merge(@data_source || data_source)
         File.write(output_path, JSON.pretty_generate(payload))
         output_path
       end
@@ -156,16 +163,49 @@ module Loadwright
       # DECLARED, so it resolves from an override or a seeded record, or is honestly
       # reported unresolvable.
       def warn_about_environment_mismatch(payload, input_path)
-        recorded_env = payload["environment"].to_s
-        return if recorded_env.empty? || recorded_env == "unknown"
-        return if recorded_env == current_environment
+        difference = source_difference(payload)
+        return if difference.nil?
 
-        @warnings << "#{input_path} was recorded in #{recorded_env} and this run targets " \
-                     "#{current_environment}, so its recorded ids almost certainly do not exist here. " \
-                     "They are ignored; path parameters resolve from path_param_overrides or from " \
+        @warnings << "#{input_path} #{difference}, so its recorded ids almost certainly do not exist " \
+                     "here. They are ignored; path parameters resolve from path_param_overrides or from " \
                      "seeded records instead."
         @stdout.puts "loadwright: #{@warnings.last}"
         @ignore_recorded_values = true
+      end
+
+      # THE DATABASE NAME IS ASKED FIRST, and the environment name is the fallback.
+      #
+      # The environment name is a PROXY for the question that actually matters -- did
+      # these ids come from the database this run is about to measure -- and it is a
+      # proxy that goes wrong in exactly the workflow the docs recommend. `record`
+      # boots the app in one environment and then runs specs that connect to another;
+      # `Rails.env` never moves, while the connection does. Comparing what the two
+      # processes were CONNECTED TO answers the real question directly.
+      #
+      # Returns a phrase describing the difference, or nil when there is none to
+      # describe. nil also covers "cannot tell": an older recording carries neither
+      # field, and inventing a mismatch from a missing value would drop ids that are
+      # very probably fine.
+      def source_difference(payload)
+        recorded_db = payload["database"].to_s
+        current_db = current_database.to_s
+        unless recorded_db.empty? || current_db.empty?
+          return nil if recorded_db == current_db
+
+          return "was recorded against the #{recorded_db} database and this run measures #{current_db}"
+        end
+
+        recorded_env = payload["environment"].to_s
+        return nil if recorded_env.empty? || recorded_env == "unknown"
+        return nil if recorded_env == current_environment
+
+        "was recorded in #{recorded_env} and this run targets #{current_environment}"
+      end
+
+      # Sampled where the request was actually issued. Kept as one hash so a recording
+      # carries a single coherent answer rather than two fields written at two moments.
+      def data_source
+        { "environment" => current_environment, "database" => current_database }.compact
       end
 
       def current_environment
@@ -174,6 +214,18 @@ module Loadwright
         ENV["RAILS_ENV"] || ENV["RACK_ENV"] || "unknown"
       rescue StandardError
         "unknown"
+      end
+
+      # The name of the database the CURRENT connection is pointed at. Nil rather than
+      # a guess when there is no connection to ask -- an absent answer falls back to
+      # the environment name, while a wrong one would silently discard good ids.
+      def current_database
+        return nil unless defined?(::ActiveRecord::Base)
+
+        name = ::ActiveRecord::Base.connection_db_config.database.to_s
+        name.empty? ? nil : name
+      rescue StandardError
+        nil
       end
 
       def report_inferred(requests)
@@ -202,6 +254,11 @@ module Loadwright
           @unrecognised_samples << "#{verb.to_s.upcase} #{path}" if @unrecognised_samples.length < 10
           return
         end
+
+        # The first request is where the specs' own connection is observable. Later
+        # ones cannot change the answer without changing which database the ids came
+        # from, which is a state no recording can represent honestly anyway.
+        @data_source ||= data_source
 
         @captured << {
           "verb" => verb.to_s.downcase,
