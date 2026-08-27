@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.0.2] — 2026-08-27
 
 ### Added
 
@@ -233,5 +233,6 @@ Stated here rather than left to be discovered:
 - **Tested on Ruby 4.0 and Rails 8.1.** The gemspec floor of Ruby 3.1 / Rails 7.0
   reflects the APIs used, not a tested matrix.
 
-[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/Matarim/loadwright/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/Matarim/loadwright/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/Matarim/loadwright/releases/tag/v0.0.1
