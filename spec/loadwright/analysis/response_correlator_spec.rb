@@ -216,6 +216,48 @@ RSpec.describe Loadwright::Analysis::ResponseCorrelator do
       expect(correlator.findings(observations: [], duplicates: duplicates)).to be_empty
     end
 
+    # ONE SIGNATURE, TWO DEFECTS. A request that finds the same already-loaded row
+    # four times looks exactly like a per-record N+1 inside a single request, and
+    # `includes` fixes only one of them. What separates them is whether the repeat
+    # count moved when the endpoint returned more records -- which is data the run
+    # already has, across cells.
+    describe "a repeat that did not grow with the records returned" do
+      let(:duplicates) do
+        sql = 'SELECT "warehouses".* FROM "warehouses" WHERE "warehouses"."id" = ?'
+        { sql => Array.new(4) { { fingerprint: sql } } }
+      end
+
+      it "says so, and stops advising a preload" do
+        flat = [observation(records: 5, queries: 12), observation(records: 50, queries: 12)]
+
+        finding = correlator.findings(observations: flat, duplicates: duplicates).first
+
+        expect(finding.evidence[:scaling]).to eq(:fixed)
+        expect(finding.detail).to include("fixed number of repeats per request")
+        expect(finding.suggestion).to include("Pass the loaded object down")
+      end
+
+      it "advises the preload where the count did grow" do
+        scaling = [observation(records: 5, queries: 12), observation(records: 50, queries: 60)]
+
+        finding = correlator.findings(observations: scaling, duplicates: duplicates).first
+
+        expect(finding.evidence[:scaling]).to eq(:scaling)
+        expect(finding.suggestion).to include("includes(:warehouse)")
+      end
+
+      # Flatness that was never measured is not flatness: one cell, or cells that all
+      # returned the same number of records, answers nothing.
+      it "claims nothing either way when the records never varied" do
+        same = [observation(records: 5, queries: 12), observation(records: 5, queries: 12)]
+
+        finding = correlator.findings(observations: same, duplicates: duplicates).first
+
+        expect(finding.evidence).not_to have_key(:scaling)
+        expect(finding.suggestion).to include("includes(:warehouse)")
+      end
+    end
+
     it "reports both signals when both fire, rather than collapsing them" do
       duplicates = { "SELECT x" => Array.new(10) { { fingerprint: "SELECT x" } } }
       observations = [observation(records: 5, queries: 6), observation(records: 50, queries: 51)]

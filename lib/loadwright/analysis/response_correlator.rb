@@ -29,6 +29,12 @@ module Loadwright
       # for authorisation or a count.
       HEALTHY_RATIO = 3.0
 
+      # Appended to a pattern-match finding whose repeat count did not move while the
+      # returned record count did. Two different defects wear the same signature, and
+      # the fix for one does nothing for the other.
+      FIXED_REPEAT_DETAIL = " — and the query count did not grow with the number of records returned, " \
+                            "so this is a fixed number of repeats per request rather than one per record"
+
       # Slope of queries against returned records. At 1.0 the endpoint issues one
       # query per record, which is the textbook N+1 signature. Well below that is
       # batching; the threshold sits low enough to catch a partial N+1 (an N+1 on one
@@ -209,14 +215,17 @@ module Loadwright
         # technique Bullet and Prosopite use.
         worst = duplicates.max_by { |_, occurrences| occurrences.length }
         if worst && worst.last.length >= 3
+          scaling = repeat_scaling(observations)
           results << Finding.new(
             kind: :n_plus_one_pattern_match,
             confidence: :high,
-            detail: "the same query ran #{worst.last.length} times in a single request: #{worst.first}",
+            detail: "the same query ran #{worst.last.length} times in a single request: #{worst.first}" \
+                    "#{FIXED_REPEAT_DETAIL if scaling == :fixed}",
             evidence: { fingerprint: worst.first, occurrences: worst.last.length,
+                        scaling: scaling == :unknown ? nil : scaling,
                         call_site: worst.last.first[:call_site],
                         resolver: worst.last.first[:field_path] }.compact,
-            suggestion: FixSuggestion.for(worst.first)
+            suggestion: FixSuggestion.for(worst.first, repeats: worst.last.length, scaling: scaling)
           )
         end
 
@@ -243,6 +252,25 @@ module Loadwright
         # See response-analysis.md, "Outcome state is derived from coverage".
 
         results
+      end
+
+      # :fixed / :scaling / :unknown — what the run OBSERVED about how the repeat
+      # behaves, never what it assumes.
+      #
+      # A per-record N+1 issues more queries as the endpoint returns more records. A
+      # request that finds the same already-loaded row four times issues the same four
+      # either way. The two are indistinguishable from a single request's fingerprints
+      # and trivially distinguishable across cells, which is data this run already has.
+      #
+      # :unknown wherever the comparison is not available -- fewer than two cells, or
+      # every cell returning the same number of records. Flatness that was never
+      # measured is not flatness.
+      def repeat_scaling(observations)
+        usable = Array(observations).reject { |o| o.records.nil? || o.queries.nil? }
+        return :unknown if usable.length < 2
+        return :unknown if usable.map(&:records).uniq.length < 2
+
+        usable.map(&:queries).uniq.length == 1 ? :fixed : :scaling
       end
 
       def pagination_findings(observations, max_bytes)

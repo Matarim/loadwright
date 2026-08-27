@@ -81,4 +81,52 @@ RSpec.describe Loadwright::Analysis::FixSuggestion do
       end
     end
   end
+  # A TABLE ENDING IN "ses". The hand-rolled rules stripped the trailing "es" and
+  # produced a non-word, so following the suggestion verbatim raised
+  # ActiveRecord::AssociationNotFoundError -- on three of five findings in one real
+  # run. The advice underneath was right; a symbol that cannot be typed made a reader
+  # discount the rest of it.
+  describe "singularising a table name" do
+    it "does not invent a non-word out of a plural ending in 'ses'" do
+      suggestion = described_class.for('SELECT "warehouses".* FROM "warehouses" WHERE "warehouses"."id" = ?')
+
+      expect(suggestion).to include("includes(:warehouse)")
+    end
+
+    it "still handles the ordinary plurals" do
+      expect(described_class.for('SELECT "categories".* FROM "categories" WHERE "categories"."id" = ?'))
+        .to include("includes(:category)")
+    end
+  end
+
+  # THE SAME ROW N TIMES IS NOT N ROWS ONE AT A TIME. `includes` fixes the second and
+  # does nothing for the first, where the row is already in memory and is simply being
+  # found again.
+  describe "a repeat the run measured as flat" do
+    let(:sql) { 'SELECT "warehouses".* FROM "warehouses" WHERE "warehouses"."id" = ?' }
+
+    it "says the record is already loaded rather than telling you to preload it" do
+      suggestion = described_class.for(sql, repeats: 4, scaling: :fixed)
+
+      expect(suggestion).to include("Pass the loaded object down").and include("4 times")
+      expect(suggestion).not_to include("includes(")
+    end
+
+    it "gives the preloading advice when the repeat was measured to scale" do
+      expect(described_class.for(sql, repeats: 4, scaling: :scaling)).to include("includes(:warehouse)")
+    end
+
+    # Flatness that was never measured is not flatness.
+    it "gives the preloading advice when nothing was measured either way" do
+      expect(described_class.for(sql, repeats: 4)).to include("includes(:warehouse)")
+    end
+
+    # A repeated COUNT is a counter-cache question whether or not it scales, and
+    # `includes` is the wrong advice for it in both directions.
+    it "leaves a repeated COUNT to the counter-cache advice" do
+      count_sql = 'SELECT COUNT(*) FROM "warehouses" WHERE "warehouses"."depot_id" = ?'
+
+      expect(described_class.for(count_sql, repeats: 4, scaling: :fixed)).to include("counter cache")
+    end
+  end
 end
