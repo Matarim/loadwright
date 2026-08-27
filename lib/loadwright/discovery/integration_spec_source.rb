@@ -385,6 +385,7 @@ module Loadwright
           query_params: (richest["query"] || {}).map { |name, value| { name: name, example: value } },
           request_body: presence(richest["body"]),
           recorded_path_values: recorded_values,
+          recorded_headers: richest["headers"] || {},
           expected_statuses: group.filter_map { |r| r["status"] }.uniq,
           description: [richest["controller"], richest["action"]].compact.join("#").then { |s| presence(s) }
         )

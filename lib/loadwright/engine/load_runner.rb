@@ -521,7 +521,7 @@ module Loadwright
       end
 
       def build_request(endpoint, resolution, page_size)
-        query = {}
+        query = recorded_query_for(endpoint)
         # The page-size parameter name is whatever the app accepts; the first
         # configured candidate is used, and an endpoint that ignores it shows up as
         # "unable to vary result size" rather than as flat.
@@ -531,10 +531,48 @@ module Loadwright
           verb: endpoint.verb,
           path: resolution&.path || endpoint.path,
           query: query,
-          headers: @identities&.headers_for_next || {},
+          # The identity's headers go LAST and win. A recorded Authorization header is
+          # redacted to a placeholder on the way into the recording anyway, and even a
+          # real one belongs to whoever ran the specs, not to this run.
+          headers: recorded_headers_for(endpoint).merge(@identities&.headers_for_next || {}),
           body: endpoint.body_for(page_size),
           endpoint_key: endpoint.to_s
         )
+      end
+
+      # WHAT A PASSING SPEC ACTUALLY SENT. Discovery collects the query parameters of
+      # the richest recorded request and the run then sent none of them, so an endpoint
+      # with a required parameter answered 400 on every request and was marked
+      # inconclusive -- coverage lost to the reconstruction, not to the app, with the
+      # information needed to build a valid request sitting in a file we wrote.
+      #
+      # A recorded PAGE SIZE is dropped, whichever sweep is running. The seed-scale
+      # sweep deliberately sends no page-size parameter, so the endpoint is measured
+      # the way clients call it; the page-size sweep sets its own. Replaying a recorded
+      # per_page would pin the axis the sweep exists to vary, and the result would read
+      # as a flat, healthy line.
+      def recorded_query_for(endpoint)
+        return {} unless @config.replay_recorded_query_params
+
+        page_size_names = Array(@config.page_size_parameters).map(&:to_s)
+        Array(endpoint.query_params).each_with_object({}) do |param, out|
+          name = param[:name].to_s
+          next if name.empty? || page_size_names.include?(name)
+          next if param[:example].nil?
+
+          out[name] = param[:example]
+        end
+      end
+
+      # By name, not wholesale: a recording holds the whole content-negotiation and
+      # custom-header set, and replaying a Host or a request id would be wrong.
+      def recorded_headers_for(endpoint)
+        wanted = Array(@config.replay_recorded_headers).map { |name| name.to_s.downcase }
+        return {} if wanted.empty?
+
+        Hash(endpoint.recorded_headers).each_with_object({}) do |(name, value), out|
+          out[name.to_s] = value if wanted.include?(name.to_s.downcase) && !value.nil?
+        end
       end
 
       def absorb(cell, endpoint, outcome, concurrency, seeded)

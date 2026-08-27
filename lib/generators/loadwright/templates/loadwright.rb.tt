@@ -55,11 +55,20 @@ if defined?(Loadwright)
 
     # Extra hostname/DATABASE_URL heuristics checked even inside an allowed
     # environment. See references/production-safety.md for the full flow.
-    config.production_hostname_patterns = [
-      /\.rds\.amazonaws\.com\z/,
-      /^prod-/,
-      /\.internal\z/,
-    ]
+    #
+    # LEFT COMMENTED OUT ON PURPOSE, and this is the one where it matters most.
+    # Assigning it REPLACES the shipped list, so an initializer generated today keeps
+    # today's heuristics for ever -- and a later release that learns to recognise a
+    # production host yours matches never reaches you. A frozen SAFETY list is the
+    # worst thing in this file to freeze. Uncomment only to ADD a pattern of your own,
+    # and copy the current defaults forward when you do.
+    #
+    # Shipped defaults: /\.rds\.amazonaws\.com\z/, /^prod-/, /\.internal\z/
+    # config.production_hostname_patterns = [
+    #   /\.rds\.amazonaws\.com\z/,
+    #   /^prod-/,
+    #   /\.internal\z/,
+    # ]
 
     # Must be true, AND the confirmation phrase must be typed, AND
     # --i-understand-the-risk must be passed, for a run to proceed outside
@@ -141,7 +150,16 @@ if defined?(Loadwright)
     # Query-count slope is measured against RETURNED record count, not seeded
     # count — a paginated endpoint hides its N+1 from seed-based slope
     # entirely. These params are swept to vary result size.
-    config.page_size_parameters = ["per_page", "limit", "page[size]", "pageSize"]
+    #
+    # page_size_parameters is LEFT COMMENTED OUT for the same reason as
+    # production_hostname_patterns above: it is a list this gem keeps widening as it
+    # learns the parameter names more frameworks use, and assigning a copy of today's
+    # freezes it. An endpoint whose page-size parameter is not in the list cannot have
+    # its result size varied, and the N+1 slope reports "unable to vary result size"
+    # rather than a finding. Uncomment to ADD your app's own name to the list.
+    #
+    # Shipped defaults: per_page, limit, page[size], pageSize
+    # config.page_size_parameters = ["per_page", "limit", "page[size]", "pageSize"]
     config.page_size_sweep = [5, 25, 100]
 
     # Over-fetch hints: tables/columns queried but absent from the response.
@@ -294,6 +312,21 @@ if defined?(Loadwright)
     config.path_param_overrides = {
       # "/api/v1/posts/{slug}" => { slug: -> { Post.first&.slug } },
     }
+
+    # WHAT YOUR OWN SPECS ALREADY SENT. `loadwright record` captures a request your
+    # passing spec made -- headers and query parameters included -- and the run
+    # rebuilds a request from it. Replaying what was recorded is what stops an
+    # endpoint that requires an Accept header answering 406 on every request, or one
+    # with a required query parameter answering 400, and being marked inconclusive for
+    # a gap in the reconstruction rather than anything about your app.
+    #
+    # Headers are replayed BY NAME, so a recorded Host or request id is not resent.
+    # Your identity's auth header always wins over a recorded one, and the page-size
+    # sweep's parameter always wins over a recorded page size.
+    #
+    # Both left commented out: the defaults are lists this gem will keep improving.
+    # config.replay_recorded_headers = ["Accept", "Content-Type"]
+    # config.replay_recorded_query_params = true
 
     # =========================================================================
     # AUTH

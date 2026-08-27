@@ -762,4 +762,53 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect { JSON.generate(serialised) }.not_to raise_error
     end
   end
+  # WHAT A PASSING SPEC ACTUALLY SENT. Discovery collects the recorded query
+  # parameters and headers, and the run used to send neither -- so an endpoint whose
+  # spec sends an Accept header answered 406 on every request, and one with a required
+  # query parameter answered 400. Both were correctly marked inconclusive, and both
+  # were coverage lost to the reconstruction rather than to anything about the app,
+  # with everything needed to build a valid request sitting in a file we wrote.
+  describe "rebuilding a request from what was recorded" do
+    def request_for(endpoint, page_size: nil)
+      runner.send(:build_request, endpoint, nil, page_size)
+    end
+
+    let(:recorded) do
+      endpoint(
+        query_params: [{ name: "view", example: "summary" }],
+        recorded_headers: { "Accept" => "application/vnd.api+json", "Host" => "example.test" }
+      )
+    end
+
+    it "sends the query parameters the recording holds" do
+      expect(request_for(recorded).query).to include("view" => "summary")
+    end
+
+    it "sends a recorded header that is on the replay list" do
+      expect(request_for(recorded).headers).to include("Accept" => "application/vnd.api+json")
+    end
+
+    # By name, not wholesale: a recording holds the whole relevant header set, and
+    # replaying somebody's Host would be wrong.
+    it "does not send a recorded header that is not on the list" do
+      expect(request_for(recorded).headers).not_to have_key("Host")
+    end
+
+    # Replaying a recorded per_page would pin the axis the page-size sweep exists to
+    # vary, and the flat line that produced would read as healthy.
+    it "drops a recorded page-size parameter rather than pinning the sweep" do
+      pinned = endpoint(query_params: [{ name: "per_page", example: "25" }])
+
+      expect(request_for(pinned).query).to be_empty
+      expect(request_for(pinned, page_size: 100).query).to eq("per_page" => 100)
+    end
+
+    it "sends nothing recorded when the replay is switched off" do
+      config.replay_recorded_query_params = false
+      config.replay_recorded_headers = []
+
+      expect(request_for(recorded).query).to be_empty
+      expect(request_for(recorded).headers).to be_empty
+    end
+  end
 end

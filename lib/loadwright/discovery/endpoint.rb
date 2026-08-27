@@ -17,13 +17,13 @@ module Loadwright
 
       attr_reader :path, :verb, :sources, :operation_id, :path_params, :query_params,
                   :request_body, :request_schema, :response_schemas, :recorded_path_values,
-                  :expected_statuses, :description, :graphql_operation, :graphql_operation_type,
-                  :graphql_page_size_variable
+                  :recorded_headers, :expected_statuses, :description, :graphql_operation,
+                  :graphql_operation_type, :graphql_page_size_variable
 
       def initialize(path:, verb:, source: nil, sources: nil, operation_id: nil,
                      path_params: nil, query_params: [], request_body: nil,
                      request_schema: nil, response_schemas: {}, recorded_path_values: {},
-                     expected_statuses: [], description: nil, graphql_operation: nil,
+                     recorded_headers: {}, expected_statuses: [], description: nil, graphql_operation: nil,
                      graphql_operation_type: :query, graphql_page_size_variable: nil)
         @path = path
         @verb = verb.to_s.downcase.to_sym
@@ -51,6 +51,10 @@ module Loadwright
         @request_schema = request_schema
         @response_schemas = response_schemas.freeze
         @recorded_path_values = recorded_path_values.freeze
+        # What a real, passing request to this endpoint sent. Replayed selectively --
+        # see config.replay_recorded_headers -- because the point is content
+        # negotiation, not resending somebody's Host header.
+        @recorded_headers = recorded_headers.freeze
         @expected_statuses = expected_statuses.freeze
         @description = description
         freeze
@@ -185,6 +189,7 @@ module Loadwright
           request_schema: documented.request_schema || recorded.request_schema,
           response_schemas: documented.response_schemas.merge(recorded.response_schemas) { |_, a, b| a || b },
           recorded_path_values: deep_merge_recorded(other),
+          recorded_headers: documented.recorded_headers.merge(recorded.recorded_headers),
           expected_statuses: (expected_statuses | other.expected_statuses),
           description: description || other.description
         )

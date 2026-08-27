@@ -365,13 +365,24 @@ config.max_health_check_retries = 3
 
 See [Discovery modes](#discovery-modes).
 
+`replay_recorded_headers` and `replay_recorded_query_params` govern how much of a
+recorded request is rebuilt. `loadwright record` captures a request one of your own
+passing specs made, and the two most common ways an endpoint comes back inconclusive
+for a reason that is not about your app are a missing `Accept` header (HTTP 406) and
+a missing required query parameter (HTTP 400) — both of which the recording already
+holds. Headers are replayed **by name**, so a recorded `Host` or request id is not
+resent; your identity's auth header wins over a recorded one, and the page-size
+sweep's parameter wins over a recorded page size.
+
 ```ruby
 config.openapi_spec_paths = []               # defaults to swagger/v1/swagger.yaml if present
 config.integration_spec_paths = []           # defaults to spec/requests if present
 config.route_discovery = true                # gap-filling only
 config.excluded_paths = [%r{^/rails/}, %r{^/admin/}, %r{^/health}]
 config.included_paths = nil                  # nil = everything not excluded
-config.path_param_overrides = {}             # e.g. { "/api/v1/orders/{id}" => { "id" => 42 } }
+config.path_param_overrides = {}             # e.g. { "/api/v1/widgets/{id}" => { "id" => 42 } }
+config.replay_recorded_headers = %w[Accept Content-Type]  # replayed by name from the recording
+config.replay_recorded_query_params = true   # send the query params your own spec sent
 config.graphql_path = nil                    # e.g. "/graphql"; see GraphQL below
 config.graphql_operations = []               # inline operations
 config.graphql_document_paths = []           # globs of .graphql files

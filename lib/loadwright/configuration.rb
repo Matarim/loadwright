@@ -154,6 +154,21 @@ module Loadwright
     setting :included_paths, nil, section: :discovery
     setting :path_param_overrides, {}.freeze, section: :discovery
 
+    # WHAT THE RECORDING ALREADY KNOWS. `record` captures a request the app's own
+    # passing spec made, headers and query parameters included -- and the request the
+    # run reconstructs from it used to carry neither. An endpoint whose spec sends an
+    # Accept header answered 406 on every request; one with a required query parameter
+    # answered 400. Both were correctly marked inconclusive, and both were coverage
+    # lost to the reconstruction rather than to anything about the app.
+    #
+    # Headers are replayed by name rather than wholesale: a recording holds the whole
+    # relevant header set, and replaying Host or a request id would be wrong. An
+    # identity's auth header always wins over a recorded one, and the page-size sweep's
+    # parameter always wins over a recorded page size -- otherwise a recorded per_page
+    # would silently pin the sweep that exists to vary it.
+    setting :replay_recorded_headers, %w[Accept Content-Type].freeze, section: :discovery
+    setting :replay_recorded_query_params, true, section: :discovery
+
     # GRAPHQL. Every operation is a POST to one path, so there are no endpoints to
     # discover -- the unit of work is the named operation, and Loadwright needs to be
     # told where they are. Setting graphql_path turns this on.
