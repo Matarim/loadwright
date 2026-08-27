@@ -35,6 +35,10 @@ module Loadwright
       FORMAT_VERSION = 1
       DEFAULT_FILENAME = "recorded-requests.json"
 
+      # Enough to see the shape of what was missed without turning a warning into a
+      # log dump. The count is always exact; this bounds only the examples.
+      UNRECOGNISED_SAMPLE_LIMIT = 10
+
       # Prepended into the integration session. `#process` is the single funnel every
       # one of get/post/put/patch/delete/head goes through, so one hook captures all
       # of them — and hooking the funnel rather than each verb means a Rails version
@@ -133,6 +137,10 @@ module Loadwright
           "version" => FORMAT_VERSION,
           "recorded_at" => Time.now.utc.iso8601,
           "unrecognised_count" => @unrecognised.to_i,
+          # WHICH ones, not just how many. A count alone tells a reader that coverage
+          # was lost and nothing about where, and those endpoints are the one class of
+          # "could not measure" that gets no row of its own in the report.
+          "unrecognised_samples" => Array(@unrecognised_samples),
           "requests" => requests
         }.merge(@data_source || data_source)
         File.write(output_path, JSON.pretty_generate(payload))
@@ -251,7 +259,12 @@ module Loadwright
         unless recognition
           @unrecognised = @unrecognised.to_i + 1
           @unrecognised_samples ||= []
-          @unrecognised_samples << "#{verb.to_s.upcase} #{path}" if @unrecognised_samples.length < 10
+          # Redacted like every other path that goes into the file: this one ends up
+          # in the report, where an unmapped request is only useful if you can see
+          # which request it was.
+          if @unrecognised_samples.length < UNRECOGNISED_SAMPLE_LIMIT
+            @unrecognised_samples << "#{verb.to_s.upcase} #{@redactor.path(path)}"
+          end
           return
         end
 
@@ -328,8 +341,19 @@ module Loadwright
         warn_about_environment_mismatch(payload, input_path)
 
         if payload["unrecognised_count"].to_i.positive?
-          @warnings << "#{payload['unrecognised_count']} recorded request(s) could not be mapped to a " \
-                       "route template and were skipped; those endpoints are not covered by this run"
+          count = payload["unrecognised_count"].to_i
+          samples = Array(payload["unrecognised_samples"])
+          listed =
+            if samples.empty?
+              ""
+            elsif samples.length < count
+              ". The first #{samples.length}: #{samples.join(', ')}"
+            else
+              ": #{samples.join(', ')}"
+            end
+
+          @warnings << "#{count} recorded request(s) could not be mapped to a route template and were " \
+                       "skipped; those endpoints are not covered by this run#{listed}"
         end
 
         Array(payload["requests"])

@@ -129,6 +129,29 @@ RSpec.describe Loadwright::Discovery::IntegrationSpecSource do
 
       expect(source.warnings.join).to include("could not be mapped to a route template")
     end
+
+    # WHICH ones, not just how many. An unmapped recording is the one "could not
+    # measure" case that gets no row of its own in the report -- it is not in the
+    # findings, the healthy list or the inconclusive list -- so a bare count leaves a
+    # reader knowing coverage was lost and nothing about where.
+    it "names the requests it could not map, so the warning is actionable" do
+      record { session.get "/not/a/route/at/all" }
+
+      source.endpoints(input_path: @output)
+
+      expect(source.warnings.join).to include("GET /not/a/route/at/all")
+    end
+
+    it "reads an older recording that carries only the count" do
+      record { session.get "/not/a/route/at/all" }
+      payload = JSON.parse(File.read(@output))
+      payload.delete("unrecognised_samples")
+      File.write(@output, JSON.generate(payload))
+
+      source.endpoints(input_path: @output)
+
+      expect(source.warnings.join).to include("1 recorded request(s) could not be mapped")
+    end
   end
 
   describe "what it captures" do
