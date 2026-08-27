@@ -287,4 +287,58 @@ RSpec.describe Loadwright::Analysis::ResponseValidator do
       expect(verdict.body_bytes).to be > 0
     end
   end
+  # THE CONFIDENTLY WRONG ALL-CLEAR, PRODUCED BY THE TOOL THAT EXISTS TO PREVENT IT.
+  #
+  # `expected_statuses` holds neither declarations nor successes. From a RECORDING it
+  # is every status the specs were observed producing -- and a suite makes requests it
+  # expects to fail, so a spec asserting a rejection against a bogus id teaches us
+  # that 404 is expected here. That endpoint then answered 404 to all of its requests
+  # and was reported HEALTHY with coverage complete, while a sibling with identical
+  # cell data was correctly inconclusive.
+  #
+  # From an OPENAPI DOCUMENT it is every declared response key, and every document
+  # declares its 401, 404 and 422. Same bug, wider blast radius, unhit so far only
+  # because the integration that found this has OpenAPI discovery turned off.
+  describe "a status a source happened to expect" do
+    def verdict_for(status, expected_statuses)
+      subject_endpoint = endpoint(expected_statuses: expected_statuses)
+      validator.validate(endpoint: subject_endpoint,
+                         response: response(status: status, body: "{}", endpoint_for: subject_endpoint))
+    end
+
+    it "does not let a recorded 404 make a 404 healthy" do
+      expect(verdict_for(404, [404])).not_to be_valid
+    end
+
+    it "does not let a documented 422 make a 422 healthy" do
+      expect(verdict_for(422, [200, 422])).not_to be_valid
+    end
+
+    it "does not let a documented 401 make a 401 healthy" do
+      expect(verdict_for(401, [200, 401, 404])).not_to be_valid
+    end
+
+    it "does not let a 500 through however it was expected" do
+      expect(verdict_for(500, [500])).not_to be_valid
+    end
+
+    # A redirect is a real answer to a real request, and honouring a declared one was
+    # the original and correct intent of this check.
+    it "still honours a 3xx a source saw" do
+      expect(verdict_for(302, [302])).to be_valid
+    end
+
+    it "still rejects a 3xx nothing expected" do
+      expect(verdict_for(302, [200])).not_to be_valid
+    end
+
+    # Says why the endpoint exists at all, rather than blaming the app for it.
+    it "names the rejection spec as the likely reason the endpoint was discovered" do
+      expect(verdict_for(404, [404]).detail).to include("asserting a rejection")
+    end
+
+    it "does not blame a rejection spec for a status nothing recorded" do
+      expect(verdict_for(404, [200]).detail).not_to include("asserting a rejection")
+    end
+  end
 end

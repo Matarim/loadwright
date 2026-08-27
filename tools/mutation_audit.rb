@@ -369,6 +369,32 @@ MUTATIONS = [
       "verdict=\#{d.verdict.inspect}"
     PROOF
   ),
+  # THE ALL-CLEAR THIS TOOL EXISTS TO PREVENT, produced by the tool. An endpoint that
+  # answered 404 to every one of its requests was reported HEALTHY, because a spec
+  # asserting a rejection had recorded 404 as a status this endpoint "expects". The
+  # suite was green throughout. This mutation is the guard.
+  Mutation.new(
+    name: "validity gate: a 4xx counts as success when a source expected it",
+    file: "lib/loadwright/analysis/response_validator.rb",
+    from: "        return true unless (300..399).cover?(response.status)\n",
+    to: "",
+    spec: "spec/loadwright/analysis/response_validator_spec.rb",
+    proof: <<~PROOF
+      config = Loadwright::Configuration.new
+      endpoint = Loadwright::Discovery::Endpoint.new(
+        path: "/api/v1/widgets/{id}", verb: :get, source: :integration_spec,
+        expected_statuses: [404]
+      )
+      request = Loadwright::Execution::Request.new(verb: :get, path: "/api/v1/widgets/1")
+      response = Loadwright::Execution::RawResponse.new(
+        request: request, status: 404,
+        headers: { "content-type" => "application/json" }, body: "{}"
+      )
+      verdict = Loadwright::Analysis::ResponseValidator.new(config: config)
+                                                       .validate(endpoint: endpoint, response: response)
+      "404_is_valid=\#{verdict.valid?}"
+    PROOF
+  ),
   Mutation.new(
     name: "coverage: advisory class allowed to escalate",
     file: "lib/loadwright/coverage.rb",

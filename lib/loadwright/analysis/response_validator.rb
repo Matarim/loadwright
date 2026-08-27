@@ -231,13 +231,36 @@ module Loadwright
           "however fast it answered."
       end
 
+      # A 4xx OR 5xx IS AN ERROR PATH. ALWAYS. Nothing an endpoint was previously
+      # observed or documented doing can turn one into the endpoint doing its work.
+      #
+      # This used to consult `expected_statuses` for any non-2xx, and the comment
+      # justified it as honouring "a declared non-2xx success (a 3xx redirect the doc
+      # expects)". The list it consulted holds neither declarations nor successes:
+      #
+      #   * from a RECORDING it is every status the specs were observed producing --
+      #     and a suite makes requests it expects to fail. A spec asserting a rejection
+      #     against a bogus id teaches us that 404 is expected here. That endpoint then
+      #     answered 404 to every one of its requests and was reported HEALTHY, with
+      #     coverage complete, while a sibling with byte-identical cell data was
+      #     correctly inconclusive. That is the confidently-wrong all-clear this whole
+      #     tool argues against, produced by the tool, inconsistently, inside one run.
+      #
+      #   * from an OPENAPI DOCUMENT it is every declared response key -- and every
+      #     document declares its 401, 404 and 422. Nobody has hit that yet only
+      #     because the integration that found this has OpenAPI discovery disabled. It
+      #     is the same bug with a much wider blast radius.
+      #
+      # So the check is about the status itself now. A 3xx still passes when a source
+      # saw it, because a redirect is a real answer to a real request -- that was the
+      # original and correct intent. 4xx and 5xx never do, whoever expected them.
       def failed_status?(endpoint, response)
         return false unless @config.require_successful_response
 
         return true if response.errored?
         return false if response.success?
+        return true unless (300..399).cover?(response.status)
 
-        # A declared non-2xx success (a 3xx redirect the doc expects) is honoured.
         !Array(endpoint&.expected_statuses).include?(response.status)
       end
 
@@ -247,6 +270,18 @@ module Loadwright
         detail = "returned HTTP #{response.status}"
         detail += " (expected #{endpoint.success_status})" if endpoint
         detail += ". An error path was measured, not the endpoint."
+
+        # WHY THIS ENDPOINT EXISTS AT ALL, when the answer is "a spec asserting a
+        # rejection". Discovery records the requests a suite makes, and a suite makes
+        # requests it expects to fail. Naming that is the difference between "your
+        # endpoint is broken" and "this was never an endpoint with a success path".
+        if endpoint && Array(endpoint.expected_statuses).include?(response.status) &&
+           !(200..399).cover?(response.status)
+          detail += " A recording for this endpoint observed #{response.status} too, so the spec it " \
+                    "was discovered from was probably asserting a rejection rather than exercising a " \
+                    "success path. Exclude that spec from integration_spec_paths, or give the endpoint " \
+                    "a resolvable value in path_param_overrides."
+        end
 
         if [401, 403].include?(response.status)
           # TWO causes, named in order of likelihood, because naming only the first
