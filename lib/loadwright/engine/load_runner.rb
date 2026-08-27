@@ -1041,8 +1041,24 @@ module Loadwright
         page_size_cells = cells.select { |cell| cell.sweep == :page_size && !cell.skipped? }
         seed_scale_cells = cells.select { |cell| cell.sweep == :seed_scale && !cell.skipped? }
 
+        # THE WORST SINGLE REQUEST, ACROSS CELLS -- the same rule absorb applies within
+        # one cell, and it has to hold here too. This concatenated, so a finding said
+        # "the same query ran 12 times in a single request" about an endpoint whose own
+        # cells table reported 8 queries per request in total. A request issuing 8
+        # queries cannot issue one of them 12 times; the report contradicted itself on
+        # the same page.
+        #
+        # Worse than wrong: the number scaled with scale_factors x page_size_sweep, so
+        # it was a property of the reader's CONFIGURATION, not of their endpoint.
+        # Following the advice to raise scale_factors tripled every N+1 severity in the
+        # report with no change to the app, corrupted run-over-run comparison, and made
+        # a fixed repeat look like one that scales -- arguing against the very
+        # classification the fixed/scaling split exists to make.
         duplicates = cells.each_with_object({}) do |cell, out|
-          Array(cell.duplicates).each { |fingerprint, occurrences| (out[fingerprint] ||= []).concat(occurrences) }
+          Array(cell.duplicates).each do |fingerprint, occurrences|
+            existing = out[fingerprint]
+            out[fingerprint] = occurrences if existing.nil? || occurrences.length > existing.length
+          end
         end
 
         findings = correlator.findings(

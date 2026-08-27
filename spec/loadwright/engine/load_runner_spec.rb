@@ -851,4 +851,44 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(request_for(recorded).headers).to be_empty
     end
   end
+  # THE WORST SINGLE REQUEST, ACROSS CELLS. `absorb` gets this right within one cell
+  # and the merge across cells concatenated, so the reported repeat count was a sum
+  # over every cell -- a property of the reader's CONFIGURATION rather than of their
+  # endpoint. Raising scale_factors, which the tool itself recommends, tripled every
+  # N+1 severity in the report with no change to the application.
+  describe "how many times a query ran in a single request" do
+    def finding_for(scale_factors)
+      config.scale_factors = scale_factors
+      config.requests_per_endpoint_per_level = 2
+      sql = 'SELECT "warehouses".* FROM "warehouses" WHERE "warehouses"."id" = ?'
+      # Four occurrences in EVERY request of EVERY cell. However many cells there are,
+      # the answer to "how many times in a single request" is four.
+      metrics = { queries: Array.new(4) { { fingerprint: sql } }, query_count: 8 }
+      # A non-empty body, so the validity gate does not stop the endpoint short of a
+      # performance verdict -- the seeded-data-but-empty-collection rule would fire
+      # at the larger scale factors and there would be no finding to inspect.
+      responder = ->(_request) { { status: 200, body: JSON.generate([{ "id" => 1 }]) } }
+
+      context = build_context(metrics: metrics, responder: responder)
+      result = runner(context: context).run(endpoints: [endpoint])
+      result.outcomes.first.findings.find { |f| f.kind == :n_plus_one_pattern_match }
+    end
+
+    it "reports the per-request count, not a sum across cells" do
+      expect(finding_for([1, 10]).evidence[:occurrences]).to eq(4)
+    end
+
+    it "does not change when more cells are configured" do
+      expect(finding_for([1, 10, 100]).evidence[:occurrences]).to eq(finding_for([1, 10]).evidence[:occurrences])
+    end
+
+    # THE INVARIANT, and it is the cheap regression test this bug deserved. A request
+    # that issues eight queries cannot issue one of them twelve times. The report used
+    # to state both, on the same page.
+    it "never claims a query repeated more often than the endpoint issued queries" do
+      finding = finding_for([1, 10, 100])
+
+      expect(finding.evidence[:occurrences]).to be <= 8
+    end
+  end
 end
