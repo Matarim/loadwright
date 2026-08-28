@@ -54,6 +54,7 @@ module Loadwright
         @config = config
         @stdout = stdout
         @warnings = []
+        @base_path_conflicts = []
       end
 
       # Returns an Array of Endpoint, or raises DiscoveryError. Never returns a
@@ -88,7 +89,19 @@ module Loadwright
 
         raw = load_raw(path)
         validate!(path, raw)
-        build_endpoints(raw)
+        built = build_endpoints(raw)
+        warn_about_base_path_conflicts(path)
+        built
+      end
+
+      def warn_about_base_path_conflicts(document_path)
+        @base_path_conflicts.each do |paths|
+          @warnings << "#{document_path} declares servers with different base paths " \
+                       "(#{paths.map(&:inspect).join(', ')}); #{paths.first.inspect} was applied to its " \
+                       "operations. Split the document per deployment, or set included_paths so the " \
+                       "operations under the other prefixes are excluded rather than requested."
+        end
+        @base_path_conflicts = []
       end
 
       def load_raw(path)
@@ -216,23 +229,85 @@ module Loadwright
             next unless HTTP_VERBS.include?(verb.to_s.downcase)
             next unless operation.is_a?(Hash)
 
-            build_endpoint(raw, template, verb, operation, shared_params)
+            build_endpoint(raw, template, verb, operation, shared_params, path_item)
           end
         end
       end
 
-      def build_endpoint(raw, template, verb, operation, shared_params)
+      # THE PATH IN AN OPENAPI DOCUMENT IS RELATIVE TO `servers`, AND WE IGNORED IT.
+      #
+      # OpenAPI 3 says the URL a client calls is `servers[].url` joined to the path.
+      # An API mounted under a prefix may express that prefix in EITHER place -- in
+      # `servers.url` with paths relative to it (the idiomatic form), or inlined into
+      # every path with a bare host in `servers`. Both are legal, and until 0.0.10
+      # only the second one worked.
+      #
+      # The cost was invisible and total. Every operation in an idiomatic document
+      # landed under a path the application does not serve, matched no discovered
+      # endpoint, was dropped by the user's own `included_paths`, and was silently
+      # replaced by the same endpoint discovered from a recording -- which carries no
+      # schema. So `require_schema_valid_response` was inert for the whole API, and
+      # every endpoint reported "no response schema is declared" as though that were a
+      # fact about the API rather than about our join. Confirmed against a real API
+      # described by four documents that split evenly across the two forms: 22 of 22
+      # matched from the inlined pair, 0 of 22 from the idiomatic pair.
+      #
+      # Precedence is the specification's: operation, then path item, then root.
+      def base_path_for(raw, path_item, operation)
+        servers = [operation["servers"], path_item["servers"], raw["servers"]].find do |candidate|
+          candidate.is_a?(Array) && !candidate.empty?
+        end
+        return "" if servers.nil?
+
+        paths = servers.filter_map { |server| server_path(server) }.uniq
+        return "" if paths.empty?
+
+        # AMBIGUOUS RATHER THAN WRONG. Servers that disagree on base path describe more
+        # than one deployment, and picking one silently would put every operation under
+        # a prefix half of them do not use. The first is used and the disagreement is
+        # reported, because inventing an endpoint per server would fabricate paths the
+        # app does not serve and produce a 404 storm.
+        @base_path_conflicts |= [paths] if paths.length > 1
+
+        paths.first
+      end
+
+      # `servers.url` may be a full URL, a bare host, or a relative path, and it may
+      # be templated with `variables`. Only the PATH component matters here -- the host
+      # is the target's, not ours to choose -- and a template with no default is
+      # unusable rather than guessable.
+      def server_path(server)
+        return nil unless server.is_a?(Hash)
+
+        url = substitute_variables(server["url"].to_s, server["variables"])
+        return nil if url.nil? || url.include?("{")
+
+        path = url.sub(%r{\A[a-zA-Z][a-zA-Z0-9+.-]*://[^/]*}, "").sub(%r{/+\z}, "")
+        path.empty? || path == "/" ? "" : path
+      end
+
+      def substitute_variables(url, variables)
+        return url unless variables.is_a?(Hash)
+
+        variables.reduce(url) do |acc, (name, spec)|
+          default = spec.is_a?(Hash) ? spec["default"] : nil
+          default.nil? ? acc : acc.gsub("{#{name}}", default.to_s)
+        end
+      end
+
+      def build_endpoint(raw, template, verb, operation, shared_params, path_item = {})
         parameters = shared_params + Array(operation["parameters"])
         pointer = "#/paths/#{escape(template)}/#{verb}"
+        full_path = "#{base_path_for(raw, path_item, operation)}#{template}"
 
         Endpoint.new(
-          path: template,
+          path: full_path,
           verb: verb,
           source: :openapi,
           operation_id: operation["operationId"],
           description: operation["summary"] || operation["description"],
           path_params: parameters.select { |p| p["in"] == "path" }.map { |p| p["name"] } |
-                       template.scan(PATH_PARAM).flatten,
+                       full_path.scan(PATH_PARAM).flatten,
           query_params: query_params(parameters),
           request_body: request_example(operation),
           request_schema: request_schema(raw, pointer, operation),

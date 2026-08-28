@@ -39,10 +39,16 @@ module Loadwright
 
         # Order matters only for which source's data seeds the key; Endpoint#merge
         # resolves precedence per field regardless of arrival order.
+        # KEYED STRUCTURALLY, not on the raw path. A document writing
+        # `/parents/{parent_guid}` where the route says `/parents/{parent_id}` is
+        # describing one endpoint, and keying on the literal template made it two --
+        # so the document's schema landed on a row nothing measured, and the measured
+        # row reported that no schema was declared for it. Endpoint#merge decides
+        # which spelling is requested; the app's own always wins.
         [openapi, integration_spec, route, graphql].each do |group|
           group.each do |endpoint|
-            existing = merged[endpoint.key]
-            merged[endpoint.key] = existing ? existing.merge(endpoint) : endpoint
+            existing = merged[endpoint.structural_key]
+            merged[endpoint.structural_key] = existing ? existing.merge(endpoint) : endpoint
           end
         end
 

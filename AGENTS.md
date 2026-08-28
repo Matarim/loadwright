@@ -806,6 +806,24 @@ COMP-01b:
     Do not present a run carrying this note as a clean comparison. It is a
     regression report with a caveat, not a pass.
 
+AUTH-01:
+  rule: One application may need more than one credential scheme, and until 0.0.10 it could not have one.
+  detail: >
+    A mounted second API commonly authenticates differently from the primary one.
+    With a single auth_strategy that mount is unauthenticated on every request, and
+    the report shows a block of endpoints failing identically -- attributed to the
+    application, because nothing says otherwise.
+  config: |
+    config.auth_overrides = [
+      { paths: [%r{^/internal/partner/}], strategy: :bearer_token,
+        token_provider: -> { PartnerToken.mint(5) } }
+    ]
+    config.auth_header_name = "Auth-Token"   # the :header strategy's header
+  do_not: >
+    Do not tell a user their second mount is broken before checking whether it is
+    authenticated. A whole mount failing identically is the signature of this, not of
+    a broken API.
+
 COMP-01c:
   rule: >
     `compare` measures a noise floor from history when no baseline stores one.
@@ -1309,6 +1327,64 @@ DIAG-34:
     Do not suggest enabling allow_mutating_requests to "improve coverage" without
     saying plainly what it does: real writes against a real database, on every request
     of every cell. It is a deliberate decision, not a coverage tweak.
+
+DIAG-38:
+  symptom: >
+    "every endpoint says no response schema is declared, but our OpenAPI documents
+    declare one" / "require_schema_valid_response is on and validates nothing"
+  cause: >
+    Before 0.0.10 the join ignored the document's `servers` base path. An API mounted
+    under a prefix may declare that prefix in servers.url with relative paths -- the
+    IDIOMATIC form -- and every operation then landed under a path the app does not
+    serve, matched nothing, and was replaced by the same endpoint from a recording,
+    which carries no schema.
+  fix: >
+    Upgrade to 0.0.10+. Do NOT work around it by inlining the mount into the
+    document's paths: that doubles the prefix for every consumer that honours
+    `servers`, corrupting a published contract to satisfy a local tool.
+  read_this_first: >
+    0.0.10+ distinguishes "no OpenAPI operation matched this endpoint" from "the
+    matched operation declares no 2xx response schema". The first is about the join,
+    the second is about the document. Only the second is the user's to fix.
+
+DIAG-39:
+  symptom: >
+    "these endpoints all 500" / "a whole mount fails and seeding does not help"
+  cause: |
+    Check the QUERY COUNT before proposing anything. A 5xx with ZERO queries never
+    reached the data layer, and 0.0.10+ says so on the endpoint.
+  fix: |
+    Zero queries -- seeding is NOT the remedy and no factory can help. Read, in order:
+      - the exception class and application frame the report now prints (:in_process)
+      - whether the report attributes it to `block_outbound_http`. If it does, the
+        cause is OUR containment refusing an outbound call, not their endpoint.
+        Add the host to outbound_http_allowlist only if calling it during a load run
+        is genuinely what they want; otherwise this endpoint cannot be measured here
+        and that is the honest answer.
+      - auth. A whole mount failing identically is the signature of a second
+        credential scheme; set config.auth_overrides for that path prefix.
+    Non-zero queries -- then it did reach the data layer and seeding may be relevant.
+  do_not: >
+    Never recommend a factory, trait or scale-factor change for a zero-query 5xx. It
+    cannot help, and a remedy the data rules out survives for rounds if nobody objects.
+
+DIAG-40:
+  symptom: >
+    "the report says the query ran 12 times but I reproduce 21 in a console" /
+    "I cannot reproduce the N+1 count"
+  cause: >
+    Two things, and 0.0.10+ prints both. A request-level query cache absorbs repeats
+    that a console reproduction does not have, so the executed count and the logical
+    count differ. And an endpoint's cost often depends on a PARAMETER: the default
+    parameterisation may have none of the repeats at all.
+  fix: >
+    Read the finding's own sentence -- it now says "N executed and M served from the
+    request query cache" -- and the endpoint's "Request sent" block, which names every
+    parameter VALUE. Reproduce with those values, inside a request, before concluding
+    the count is wrong.
+  say_this: >
+    Both numbers are true and the remedy is the same: stop asking for a row already in
+    hand. A repeat served from the cache still means the code asked.
 
 DIAG-36:
   symptom: >

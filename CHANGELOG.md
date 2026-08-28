@@ -5,6 +5,109 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.10] — 2026-08-28
+
+### Fixed
+
+- **An OpenAPI document's `servers` base path was ignored when matching operations to
+  endpoints.** OpenAPI 3 says the URL a client calls is `servers[].url` joined to the
+  path, and an API mounted under a prefix may express that prefix in either place —
+  in `servers.url` with paths relative to it (the idiomatic form), or inlined into
+  every path with a bare host. Both are legal. Only the second one worked.
+
+  The cost was invisible and total. Every operation in an idiomatic document landed
+  under a path the application does not serve, matched no discovered endpoint, was
+  dropped by the user's own `included_paths`, and was silently replaced by the same
+  endpoint discovered from a recording — which carries no schema. So
+  `require_schema_valid_response` was **inert for the whole API**, and every endpoint
+  reported "no response schema is declared" as though that were a fact about the API
+  rather than about our join. Confirmed against a real API described by four
+  documents that split evenly across the two forms: 22 of 22 matched from the inlined
+  pair, 0 of 22 from the idiomatic pair.
+
+  Servers are resolved with the specification's precedence (operation, path item,
+  root), server variables are substituted from their defaults, and servers that
+  disagree on a base path warn rather than being chosen between silently.
+
+- **A document and a route spelling one parameter differently were treated as two
+  endpoints.** `/widgets/{widget_guid}` and `/widgets/{widget_id}` are one route, and
+  keying the merge on the literal template put the document's schema on a row nothing
+  measured while the measured row reported that no schema was declared for it. The
+  merge is now keyed on segment structure; the application's own spelling is what gets
+  requested, because a route is what the app serves and a document is a description
+  that may have drifted.
+
+- **"No document operation matched this endpoint" and "the matched operation declares
+  no response schema" shared one sentence.** Two different facts, and only the second
+  is about the user's API. Sharing a sentence is how the join defect above was
+  reported for a whole API as a property of that API, pointing readers at documents
+  that declared a schema for 50 of their 61 operations.
+
+### Added
+
+- **A 5xx that issued zero queries is named as one.** A request that issued no
+  queries never reached the data layer, so no factory, trait, `param:` or scale factor
+  can change its outcome. The number that proves it has been printed in the cell table
+  since the first run — and an integration still spent four rounds recommending a
+  factory fix for fifteen endpoints whose own rows read zero queries, because nothing
+  in the report ever objected to a remedy its own data ruled out. This is the cheapest
+  kind of check the tool can make: it uses a number already measured, and it rules out
+  a whole class of wrong remedy.
+
+- **The exception behind a rendered 500, and whether *we* caused it.** Rails rescues
+  most exceptions and renders an error page, so a 500 arrives as an ordinary status
+  with a large HTML body and nothing saying what raised. Under `:in_process` we are in
+  the same process and already have it: the class and the first application backtrace
+  frame are reported. Never the message — that routinely carries record ids, tokens
+  and parameter values.
+
+  And the half only the tool can see: when the failure was caused by our own
+  `block_outbound_http` containment, it says so and names the host that was refused.
+  A containment false positive is indistinguishable from a broken endpoint from
+  outside, because the block is ours. One integration attributed fourteen such
+  endpoints to their factories for three rounds.
+
+- **Per-mount authentication.** `auth_overrides` gives a mounted second API — an admin
+  surface, a partner surface, a callback surface — its own credential, strategy and
+  header name, matched by path with the first match winning. With one `auth_strategy`
+  that mount was unauthenticated on every request, which surfaces as a block of
+  endpoints failing identically for a reason the report attributes to the application.
+  `auth_header_name` also makes the `:header` strategy's header configurable; it was
+  hardcoded to `X-Api-Key`, one convention among many. 105 config keys.
+
+- **Each endpoint says which source discovered it.** The run line counts operations
+  per source and never said which source produced a given endpoint, so a reader
+  inferring provenance from it can be wrong about every endpoint at once — and was,
+  publicly, for a whole round. The line now separates what each source **parsed** from
+  what it **contributed** to the endpoints actually exercised, which are different
+  numbers and only the second is what a reader means.
+
+- **The query that returned no rows, with its filter columns.** "The seeded records
+  did not match this endpoint's scope" is true and leaves the reader to find the scope
+  themselves. Rails carries the row count on every query notification and nothing read
+  it; an endpoint that 404s or comes back empty now names the table and columns that
+  excluded the data, which is what points at the missing factory trait.
+
+- **A finding says what was actually sent, values included.** Provenance answered "is
+  this 404 ours or theirs" and not "what did you ask it" — and the second decides what
+  a finding *means*: an endpoint taking a `view` parameter can issue 3 queries at its
+  default and 147 at another value. A repeat count with no mention of the value is a
+  property of one parameterisation reported as a property of the endpoint. It cost one
+  integration a full code trace to establish that our number was right.
+
+- **Repeat counts separate what executed from what the query cache served.** A request
+  asking for the same row 21 times may execute 12 and have 9 served from the
+  request-level cache; a reader reproducing it in a console — no request wrapper, so no
+  cache — sees 21 and concludes the tool is wrong. Both numbers are now stated. The run
+  also warns when `disable_query_cache_during_run` is true and cached queries arrive
+  anyway, which means Rails' own QueryCache middleware re-enabled it per request after
+  our disable.
+
+- **The noise floor prints its value and where it came from.** The prose said "this
+  machine's measured noise floor" and printed no number anywhere, so a reader could not
+  tell what bar was applied, whether it was measured or stored, or whether the
+  measuring path ran at all — and was left inferring it from which deltas survived.
+
 ## [0.0.9] — 2026-08-28
 
 ### Fixed

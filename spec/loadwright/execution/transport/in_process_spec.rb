@@ -120,4 +120,104 @@ RSpec.describe Loadwright::Execution::Transport::InProcess do
       expect(by_path).to eq("/slow" => 201, "/fast" => 200)
     end
   end
+
+  # RAILS RESCUES MOST EXCEPTIONS AND RENDERS AN ERROR PAGE, so a 500 arrives as an
+  # ordinary status with a large HTML body and nothing saying what raised. We are in
+  # the same process and already have it. Reproducing it by hand is exactly the work a
+  # reader should not have to do: in one real integration fifteen endpoints failed
+  # identically for three rounds and the cause was found only by tracing their source.
+  describe "the exception behind a rendered 500" do
+    def raising_app(exception)
+      lambda do |env|
+        env["action_dispatch.exception"] = exception
+        [500, { "content-type" => "text/html" }, ["<html>error page</html>"]]
+      end
+    end
+
+    def boom(klass = RuntimeError, cause: nil)
+      error = klass.new("a message that must not be reported")
+      error.set_backtrace(["/gems/oauth2_lib/client.rb:75:in `fetch'",
+                           "/app/controllers/widgets_controller.rb:12:in `show'"])
+      if cause
+        begin
+          raise cause
+        rescue StandardError
+          begin
+            raise error
+          rescue StandardError => e
+            return e
+          end
+        end
+      end
+      error
+    end
+
+    def issue_against(app)
+      transport = described_class.new(config: config, app: app)
+      transport.issue(Loadwright::Execution::Request.new(verb: :get, path: "/widgets"))
+    end
+
+    it "names the exception class" do
+      response = issue_against(raising_app(boom))
+
+      expect(response.app_exception[:class]).to eq("RuntimeError")
+    end
+
+    # THE MESSAGE IS NEVER REPORTED. It routinely carries record ids, tokens and
+    # parameter values; the class and the frame identify the failure and neither is
+    # data.
+    it "never carries the exception message" do
+      response = issue_against(raising_app(boom))
+
+      expect(response.app_exception.values.join).not_to include("must not be reported")
+    end
+
+    # A backtrace whose top frame is inside a gem names the library, not the decision
+    # that called it.
+    it "picks the first frame outside the gems" do
+      response = issue_against(raising_app(boom))
+
+      expect(response.app_exception[:frame]).to include("widgets_controller.rb:12")
+    end
+
+    it "says nothing for a request that did not raise" do
+      expect(issue_against(app).app_exception).to be_nil
+    end
+
+    # ONLY WE CAN SEE THIS ONE. When our own outbound-HTTP containment broke the
+    # request, the application looks broken and is not, and the user cannot tell --
+    # the block is ours and invisible to them. Walks `cause`, because the interesting
+    # case is precisely the one where the app rescued our error and raised its own.
+    context "when our own containment caused it" do
+      before do
+        stub_const("WebMock::NetConnectNotAllowedError", Class.new(StandardError))
+      end
+
+      it "says so, and names the host that was refused" do
+        blocked = WebMock::NetConnectNotAllowedError.new(
+          "Real HTTP connections are disabled. Unregistered request: GET https://keys.example.test/jwks?x=1"
+        )
+        response = issue_against(raising_app(boom(RuntimeError, cause: blocked)))
+
+        expect(response.app_exception[:containment]).to include("block_outbound_http")
+        expect(response.app_exception[:containment]).to include("keys.example.test")
+      end
+
+      # The URI's query string is the caller's data; the host is the actionable part.
+      it "reports the host without the query string" do
+        blocked = WebMock::NetConnectNotAllowedError.new(
+          "Unregistered request: GET https://keys.example.test/jwks?token=secret"
+        )
+        response = issue_against(raising_app(boom(RuntimeError, cause: blocked)))
+
+        expect(response.app_exception[:containment]).not_to include("secret")
+      end
+
+      it "attributes nothing when the cause is the application's own" do
+        response = issue_against(raising_app(boom(RuntimeError, cause: ArgumentError.new("theirs"))))
+
+        expect(response.app_exception).not_to have_key(:containment)
+      end
+    end
+  end
 end

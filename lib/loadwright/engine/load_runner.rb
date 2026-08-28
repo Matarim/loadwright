@@ -48,9 +48,21 @@ module Loadwright
       # One cell of the matrix. Records the concurrency it ACTUALLY ran at, which may
       # be lower than requested after a guard step-down — a report must never present
       # a stepped-down result as though it ran at the requested level.
-      NO_SCHEMA_NOTE = "not validated: no response schema is declared for this operation in the " \
-                       "discovery source. An OpenAPI document is what supplies one; a recording " \
-                       "cannot."
+      # TWO DIFFERENT FACTS, AND ONLY ONE OF THEM IS ABOUT THE USER'S API.
+      #
+      # "No document operation matched this endpoint" is about our join. "The matched
+      # operation declares no response schema" is about their document. Sharing one
+      # sentence is how a join defect -- the server base path being ignored -- was
+      # reported for a whole API as a property of the API, with the reader pointed at
+      # documents that declared a schema for 50 of their 61 operations.
+      NO_DOCUMENT_MATCH_NOTE = "not validated: no OpenAPI operation matched this endpoint, so there was " \
+                               "no schema to check against. It was discovered from %<sources>s. If you " \
+                               "expected a document to describe it, check that the document's path -- " \
+                               "including any `servers` base path -- resolves to this template."
+
+      NO_SCHEMA_NOTE = "not validated: an OpenAPI operation matched this endpoint but declares no 2xx " \
+                       "response schema, so there is nothing to validate against. Declare one and the " \
+                       "check starts running."
 
       Cell = Struct.new(
         :endpoint_key, :sweep, :scale_factor, :page_size, :requested_concurrency,
@@ -64,6 +76,11 @@ module Loadwright
         # names a throttled run, and keeping the rest would put arbitrary header values
         # into a persisted record for no signal.
         :rate_limit_headers,
+        # The exception the application rescued and rendered, per distinct class.
+        # :in_process only -- we are in the same process there and already have it.
+        :app_exceptions,
+        # Fingerprints of SELECTs that matched no rows, one exemplar each.
+        :zero_row_queries,
         keyword_init: true
       ) do
         def stepped_down? = !actual_concurrency.nil? && actual_concurrency != requested_concurrency
@@ -570,13 +587,26 @@ module Loadwright
       # asked different questions.
       def request_shape_for(key) = @request_shapes[key]
 
+      # THE VALUES, NOT ONLY WHERE THEY CAME FROM.
+      #
+      # Provenance alone answers "is this 404 ours or theirs" and does not answer "what
+      # did you actually ask it". Those are different questions and the second one
+      # decides what a finding MEANS: an endpoint taking a `view` parameter issues 3
+      # queries at its default and 147 at another value, so a repeat count with no
+      # mention of the value is a property of one parameterisation reported as a
+      # property of the endpoint. One integration spent a full code trace establishing
+      # that, having first concluded the tool was wrong.
+      #
+      # The values go through the redactor on the way into a persisted record, which is
+      # where the app's own filter_parameters are honoured.
       def note_request_shape(endpoint, request, sources)
         key = endpoint.to_s
         return if @request_shapes.key?(key)
 
+        query = Hash(request.query)
         @request_shapes[key] = {
           path: request.path,
-          query: sources,
+          query: sources.to_h { |name, source| [name, { source: source, value: query[name] }] },
           headers: request.headers.keys.reject { |name| name.to_s.downcase == "authorization" }.sort
         }
       end
@@ -599,7 +629,11 @@ module Loadwright
           # The identity's headers go LAST and win. A recorded Authorization header is
           # redacted to a placeholder on the way into the recording anyway, and even a
           # real one belongs to whoever ran the specs, not to this run.
-          headers: recorded_headers_for(endpoint).merge(@identities&.headers_for_next || {}),
+          # The PATH goes in, so a second mount authenticated differently gets its own
+          # credential. Without it one auth_strategy covered an application that has
+          # two, and the mount it did not cover failed on every request.
+          headers: recorded_headers_for(endpoint)
+                     .merge(@identities&.headers_for_next(path: resolution&.path || endpoint.path) || {}),
           body: endpoint.body_for(page_size),
           endpoint_key: endpoint.to_s
         )
@@ -702,6 +736,28 @@ module Loadwright
         # endpoint has no duplicate fingerprints, so it looked as though no tables had
         # been queried at all, and the over-fetch class came back UNCOVERED — turning
         # the healthiest endpoints inconclusive.
+        # THE SETTING PROMISES SOMETHING WE CANNOT ALWAYS DELIVER. Rails' own
+        # QueryCache middleware enables the cache per request, after our setup-time
+        # disable, so a cached query arriving here means the disable did not hold --
+        # and every N+1 count in the run is then a count of what EXECUTED rather than
+        # of what the code asked for. Undercounting is exactly what the setting exists
+        # to prevent, so it is reported rather than left to be discovered.
+        @query_cache_observed ||= metrics.queries.any? { |query| query[:cached] }
+
+        # THE QUERY THAT FOUND NOTHING. An endpoint that 404s or returns [] against a
+        # seeded database did so because some query matched no rows, and until now the
+        # report said only that scope had excluded the data -- without saying which
+        # scope, which is the half a reader can act on. Kept as one exemplar
+        # fingerprint, not per request: a hundred requests failing the same way is one
+        # fact.
+        cell.zero_row_queries ||= []
+        metrics.queries.each do |query|
+          if query[:row_count]&.zero? && select?(query[:fingerprint]) &&
+             !cell.zero_row_queries.include?(query[:fingerprint])
+            cell.zero_row_queries << query[:fingerprint]
+          end
+        end
+
         metrics.queries.each do |query|
           table = table_in(query[:fingerprint])
           cell.tables << table if table && !cell.tables.include?(table)
@@ -715,6 +771,8 @@ module Loadwright
 
           remember_slow_query(endpoint.to_s, query)
         end
+
+        note_app_exception(cell, response)
 
         verdict = validator.validate(
           endpoint: endpoint, response: response, seeded_count: seeded_count_for(endpoint, seeded)
@@ -808,7 +866,8 @@ module Loadwright
           endpoint: endpoint, reason: :endpoint_erroring,
           detail: "#{erroring_status_phrase(endpoint)}. An error path was measured, not the endpoint. " \
                   "It failed on nearly every request, so it was quarantined and the rest of the run " \
-                  "continued without it.",
+                  "continued without it." \
+                  "#{pre_data_layer_note(@cells.select { |cell| cell.endpoint_key == endpoint.to_s })}",
           capability_epoch: @context.capability_epoch
         )
       end
@@ -872,7 +931,7 @@ module Loadwright
           guard: @guard,
           seeder: @seeder,
           identities: @identities,
-          warnings: @warnings,
+          warnings: @warnings + query_cache_warnings,
           aborted_reason: aborted_reason,
           explain: @explain,
           latency: @latency,
@@ -1011,7 +1070,7 @@ module Loadwright
         # Recorded for EVERY exercised endpoint, whatever the outcome -- including the
         # inconclusive ones below, which is where a reader most wants to know whether
         # the schema was consulted.
-        @schema_validation[key] = schema_validation_for(verdicts)
+        @schema_validation[key] = schema_validation_for(verdicts, endpoint)
 
         # The validity gate comes first, always. No performance verdict is attached to
         # a response that did not prove it did the work.
@@ -1027,7 +1086,8 @@ module Loadwright
 
           diagnosed = traffic_reason_for(key)
           return inconclusive(endpoint, diagnosed || invalid.reason,
-                              "#{invalid.detail}#{replayed_identifier_note(key, cells)}")
+                              "#{invalid.detail}#{replayed_identifier_note(key, cells)}" \
+                              "#{pre_data_layer_note(cells)}#{zero_row_query_note(cells)}")
         end
 
         shapes = cells.map(&:shape)
@@ -1143,9 +1203,9 @@ module Loadwright
       # Verdict#schema_errors is the ground truth and is deliberately tri-state:
       # nil (no schema for this operation), [] (checked, clean), non-empty (checked,
       # violations). The same distinction Measurement makes, for the same reason.
-      def schema_validation_for(verdicts)
+      def schema_validation_for(verdicts, endpoint)
         errors = verdicts.map(&:schema_errors)
-        return { state: :no_schema, note: NO_SCHEMA_NOTE } if errors.all?(&:nil?)
+        return unmatched_or_undeclared(endpoint) if errors.all?(&:nil?)
 
         violations = errors.compact.reject(&:empty?)
         return { state: :validated, note: "validated against the declared response schema" } if violations.empty?
@@ -1155,6 +1215,13 @@ module Loadwright
         # second field puts response-derived strings through the redactor twice for no
         # extra signal.
         { state: :violations, checked: errors.compact.length, note: violation_note }
+      end
+
+      def unmatched_or_undeclared(endpoint)
+        return { state: :no_schema, note: NO_SCHEMA_NOTE } if endpoint.from?(:openapi)
+
+        { state: :no_document_match,
+          note: format(NO_DOCUMENT_MATCH_NOTE, sources: endpoint.sources.join(", ")) }
       end
 
       def violation_note
@@ -1363,6 +1430,94 @@ module Loadwright
 
       def all_successful?(cell)
         Array(cell.statuses).compact.all? { |status| (200..299).cover?(status) }
+      end
+
+      # Kept by CLASS, not appended per request. A hundred requests failing the same
+      # way is one fact, and a list of a hundred identical entries is not more
+      # information than one.
+      def note_app_exception(cell, response)
+        details = response.respond_to?(:app_exception) ? response.app_exception : nil
+        return if details.nil?
+
+        cell.app_exceptions ||= {}
+        cell.app_exceptions[details[:class]] ||= details
+      end
+
+      # WHY THIS ENDPOINT CANNOT BE A SEEDING PROBLEM, SAID MECHANICALLY.
+      #
+      # A request that issued zero queries never reached the data layer, so no factory,
+      # trait, `param:` or scale factor can change its outcome. The number that proves
+      # it has been printed in the cell table since the first run -- and an integration
+      # still spent four rounds recommending a factory fix for fifteen endpoints whose
+      # own rows said zero queries, because nothing in the report ever objected.
+      #
+      # This is the cheapest kind of check the tool can do: it uses a number already
+      # measured, and it rules out a whole class of wrong remedy.
+      def pre_data_layer_note(cells)
+        measured = cells.reject(&:skipped?)
+        statuses = measured.flat_map { |cell| Array(cell.statuses) }.compact
+        return "" if statuses.empty? || statuses.any? { |status| status < 500 }
+
+        queries = measured.flat_map { |cell| Array(cell.query_counts) }.compact
+        return "" if queries.empty? || queries.any?(&:positive?)
+
+        " Every request issued ZERO queries, so it failed before reaching the data layer: " \
+          "no factory, trait or scale factor can change this endpoint's outcome, and seeding is not " \
+          "the remedy.#{app_exception_note(measured)}"
+      end
+
+      def app_exception_note(cells)
+        exceptions = cells.flat_map { |cell| Hash(cell.app_exceptions).values }.uniq { |e| e[:class] }
+        return "" if exceptions.empty?
+
+        described = exceptions.first(3).map do |exception|
+          # THE CONTAINMENT ATTRIBUTION IS THE HALF ONLY WE CAN MAKE. When our own
+          # outbound-HTTP block is what broke the request, the app looks broken and is
+          # not, and the user cannot tell -- the block is ours and invisible to them.
+          [exception[:class], exception[:frame], exception[:containment]].compact.join(" @ ")
+        end
+
+        " Raised: #{described.join('; ')}."
+      end
+
+      def query_cache_warnings
+        return [] unless @query_cache_observed && @config.disable_query_cache_during_run
+
+        ["disable_query_cache_during_run is true, but query-cache hits were still recorded -- Rails' own " \
+         "QueryCache middleware re-enables the cache per request, after our disable. Repeat counts in " \
+         "this run therefore separate what EXECUTED from what was served from the cache; the total is " \
+         "how many times the code asked, which is the number a cold reproduction will show."]
+      end
+
+      def select?(fingerprint) = fingerprint.to_s.match?(/\A\s*SELECT\b/i)
+
+      # WHICH SCOPE EXCLUDED THE DATA, not merely that one did.
+      #
+      # "The seeded records did not match this endpoint's scope" is true and leaves the
+      # reader to find the scope themselves. The filter columns of the query that
+      # returned nothing are the actionable half, and they name the factory trait or
+      # attribute that would fix it.
+      def zero_row_query_note(cells)
+        fingerprints = cells.reject(&:skipped?).flat_map { |cell| Array(cell.zero_row_queries) }.uniq
+        return "" if fingerprints.empty?
+
+        described = fingerprints.first(2).map do |fingerprint|
+          table = table_in(fingerprint) || "a table"
+          columns = filter_columns(fingerprint)
+          columns.empty? ? table : "#{table} filtered on #{columns.join(', ')}"
+        end
+
+        " No rows came back from: #{described.join('; ')}. That is the scope that excluded the seeded " \
+          "data -- a factory trait setting those columns is usually the fix."
+      end
+
+      # From the normalised fingerprint, which keeps column names and drops values.
+      def filter_columns(fingerprint)
+        fingerprint.to_s.scan(/[`"']?([A-Za-z_][A-Za-z0-9_]*)[`"']?\s*(?:=|IN|IS|>|<|LIKE)/i)
+                   .flatten
+                   .reject { |name| %w[AND OR NOT WHERE SELECT FROM JOIN ON LIMIT OFFSET].include?(name.upcase) }
+                   .uniq
+                   .first(4)
       end
 
       def quarantine_detail(key)

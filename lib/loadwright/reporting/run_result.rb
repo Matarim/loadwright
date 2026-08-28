@@ -229,6 +229,12 @@ module Loadwright
           findings: outcome.findings.map { |finding| finding.respond_to?(:to_h) ? finding.to_h : finding },
           correlation: correlations[key],
           request: request_shapes[key],
+          # WHICH SOURCE FOUND THIS ENDPOINT. The run line counts operations per
+          # source and never says which source produced a given endpoint, so a reader
+          # inferring provenance from it can be wrong about every endpoint at once --
+          # and was, publicly, for a whole round. The request block is the model: it
+          # turned "the endpoint 404'd" into an attributable fact.
+          sources: outcome.endpoint.respond_to?(:sources) ? Array(outcome.endpoint.sources) : nil,
           schema: schema_validation[key],
           # SUCCEEDED HERE, FAILED THERE. One verdict on the header while four of six
           # cells answered 200 makes a reader open the cell table to find out what

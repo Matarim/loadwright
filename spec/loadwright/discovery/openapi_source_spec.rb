@@ -7,6 +7,114 @@ RSpec.describe Loadwright::Discovery::OpenapiSource do
 
   subject(:source) { described_class.new(config: config, stdout: StringIO.new) }
 
+  # THE PATH IN AN OPENAPI DOCUMENT IS RELATIVE TO `servers`.
+  #
+  # An API mounted under a prefix may express it in either place -- in servers.url
+  # with relative paths (the idiomatic form) or inlined into every path with a bare
+  # host. Both are legal, and until 0.0.10 only the second worked, silently: every
+  # operation in an idiomatic document landed under a path the app does not serve,
+  # matched nothing, and was replaced by the same endpoint from a recording, which
+  # carries no schema. So require_schema_valid_response was inert for the whole API
+  # while every endpoint reported "no schema declared" as a fact about the API.
+  describe "the server base path" do
+    def write(body)
+      dir = Dir.mktmpdir("openapi-servers-")
+      path = File.join(dir, "swagger.yaml")
+      File.write(path, body)
+      config.openapi_spec_paths = [path]
+      path
+    end
+
+    def doc(servers)
+      <<~YAML
+        openapi: "3.0.0"
+        info: { title: t, version: "1" }
+        #{servers}
+        paths:
+          /widgets/{id}:
+            get:
+              responses:
+                "200": { description: ok }
+      YAML
+    end
+
+    it "joins a relative server path onto every operation" do
+      write(doc(%(servers:\n  - url: /internal/api)))
+
+      expect(source.endpoints.map(&:to_s)).to eq(["GET /internal/api/widgets/{id}"])
+    end
+
+    it "takes only the path from a full server URL, never the host" do
+      write(doc(%(servers:\n  - url: https://example.test/internal/api)))
+
+      expect(source.endpoints.map(&:to_s)).to eq(["GET /internal/api/widgets/{id}"])
+    end
+
+    # The form that already worked, and must keep working: prefix inlined, bare host.
+    it "adds nothing when the server declares no path" do
+      write(doc(%(servers:\n  - url: https://example.test)))
+
+      expect(source.endpoints.map(&:to_s)).to eq(["GET /widgets/{id}"])
+    end
+
+    it "adds nothing when there are no servers at all" do
+      write(doc(""))
+
+      expect(source.endpoints.map(&:to_s)).to eq(["GET /widgets/{id}"])
+    end
+
+    it "substitutes a server variable's default" do
+      write(doc(%(servers:\n  - url: "/{stage}/api"\n    variables:\n      stage: { default: internal })))
+
+      expect(source.endpoints.map(&:to_s)).to eq(["GET /internal/api/widgets/{id}"])
+    end
+
+    # A template with no default is unusable rather than guessable, and guessing would
+    # put every operation under a prefix nobody serves.
+    it "applies nothing for a template it cannot resolve" do
+      write(doc(%(servers:\n  - url: "/{stage}/api")))
+
+      expect(source.endpoints.map(&:to_s)).to eq(["GET /widgets/{id}"])
+    end
+
+    it "trims a trailing slash rather than doubling it" do
+      write(doc(%(servers:\n  - url: /internal/api/)))
+
+      expect(source.endpoints.map(&:to_s)).to eq(["GET /internal/api/widgets/{id}"])
+    end
+
+    # Two deployments, not two endpoints. Fabricating one per server would request
+    # paths the app does not serve; picking one silently would put every operation
+    # under a prefix half of them do not use. So: first wins, and say so.
+    it "warns rather than choosing silently when servers disagree" do
+      write(doc(%(servers:\n  - url: /internal/api\n  - url: /public/api)))
+
+      endpoints = source.endpoints
+
+      expect(endpoints.map(&:to_s)).to eq(["GET /internal/api/widgets/{id}"])
+      expect(source.warnings.join).to include("different base paths", "/internal/api", "/public/api")
+    end
+
+    # Precedence is the specification's: operation over path item over root.
+    it "lets an operation override the document's servers" do
+      write(<<~YAML)
+        openapi: "3.0.0"
+        info: { title: t, version: "1" }
+        servers:
+          - url: /internal/api
+        paths:
+          /widgets/{id}:
+            get:
+              servers:
+                - url: /special
+              responses:
+                "200": { description: ok }
+      YAML
+
+      expect(source.endpoints.map(&:to_s)).to eq(["GET /special/widgets/{id}"])
+    end
+  end
+
   describe "#endpoints" do
     before { config.openapi_spec_paths = [fixture("blog.yaml")] }
 

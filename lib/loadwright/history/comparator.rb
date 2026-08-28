@@ -135,7 +135,8 @@ module Loadwright
 
       Result = Struct.new(:comparable, :divergences, :warnings, :new_findings, :resolved_findings,
                           :changed_findings, :deltas, :transitions, :endpoints_added,
-                          :endpoints_removed, :excluded_signals, :noise_floor, keyword_init: true) do
+                          :endpoints_removed, :excluded_signals, :noise_floor, :noise_floor_source,
+                          keyword_init: true) do
         def comparable? = comparable == true
 
         def regressions = deltas.select(&:regression?)
@@ -212,7 +213,8 @@ module Loadwright
             endpoints_added: endpoints_added,
             endpoints_removed: endpoints_removed,
             excluded_signals: excluded_signals,
-            noise_floor: noise_floor
+            noise_floor: noise_floor,
+            noise_floor_source: noise_floor_source
           }.compact
         end
       end
@@ -222,7 +224,7 @@ module Loadwright
         @statistics = statistics || Analysis::Statistics.new(config: config)
       end
 
-      def compare(before, after, noise_floor: nil)
+      def compare(before, after, noise_floor: nil, noise_floor_source: nil)
         divergences = hard_divergences(before, after)
         return refused(divergences) if divergences.any?
 
@@ -241,7 +243,8 @@ module Loadwright
           endpoints_added: after.endpoint_keys - before.endpoint_keys,
           endpoints_removed: before.endpoint_keys - after.endpoint_keys,
           excluded_signals: excluded,
-          noise_floor: noise_floor
+          noise_floor: noise_floor,
+          noise_floor_source: noise_floor_source
         )
       end
 

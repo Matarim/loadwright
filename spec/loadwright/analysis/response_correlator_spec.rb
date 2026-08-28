@@ -481,6 +481,28 @@ RSpec.describe Loadwright::Analysis::ResponseCorrelator do
       expect(finding.evidence).not_to have_key(:queries_in_request)
     end
 
+    # THE NUMBER A DEVELOPER REPRODUCES COLD IS NOT THE NUMBER WE REPORT, and the gap
+    # between them is the query cache. A request asking for the same row 21 times may
+    # execute 12 and have 9 served from the request cache; a reader reproducing it in
+    # a console -- no request wrapper, so no cache -- sees 21 and concludes the tool is
+    # wrong. It cost one integration a full code trace to establish both were right.
+    it "separates what executed from what the query cache served" do
+      mixed = { "SELECT 1" => (Array.new(3) { { fingerprint: "SELECT 1" } } +
+                               Array.new(2) { { fingerprint: "SELECT 1", cached: true } }) }
+      finding = correlator.findings(observations: [], duplicates: mixed).first
+
+      expect(finding.detail).to include("ran 5 times in a single request")
+      expect(finding.detail).to include("3 executed and 2 served from the request query cache")
+      expect(finding.evidence[:executed]).to eq(3)
+      expect(finding.evidence[:query_cache_hits]).to eq(2)
+    end
+
+    it "says nothing about a cache that served nothing" do
+      finding = correlator.findings(observations: [], duplicates: duplicates).first
+
+      expect(finding.detail).not_to include("query cache")
+    end
+
     it "gives a sub-threshold observation the same denominator" do
       twice = { "SELECT 1" => Array.new(2) { { fingerprint: "SELECT 1" } } }
       ctx = { "SELECT 1" => { occurrences: twice["SELECT 1"], cell: "page_size scale=1", queries: 19.0 } }

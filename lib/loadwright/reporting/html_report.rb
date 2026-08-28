@@ -315,6 +315,7 @@ module Loadwright
             #{inconclusive_explanation(endpoint)}
             #{findings_list(endpoint)}
             #{coverage_note(endpoint)}
+            #{sources_note(endpoint)}
             #{schema_note(endpoint)}
             #{sub_threshold_note(endpoint)}
             #{request_block(endpoint)}
@@ -409,8 +410,9 @@ module Loadwright
         query = Hash(shape[:query])
         return "" if query.empty?
 
-        rows = query.map do |name, source|
-          "<li><code>#{h(name)}</code> — #{h(VALUE_SOURCES.fetch(source.to_s, source.to_s))}</li>"
+        rows = query.map do |name, entry|
+          "<li><code>#{h(name)}</code> = <code>#{h(request_value(entry))}</code> — " \
+            "#{h(value_source(entry))}</li>"
         end
 
         "<details class=\"request\"><summary>Request sent: <code>#{h(shape[:path])}</code></summary>" \
@@ -423,6 +425,7 @@ module Loadwright
       # what it claims must not be silent about whether it ran.
       SCHEMA_LABELS = {
         "validated" => "Response schema: checked, no violations.",
+        "no_document_match" => "Response schema: not checked.",
         "no_schema" => "Response schema: not checked.",
         "violations" => "Response schema: violations found."
       }.freeze
@@ -431,15 +434,42 @@ module Loadwright
       # schema answer has to fit on it.
       SCHEMA_CLAUSES = {
         "validated" => " — response schema: checked",
-        "no_schema" => " — response schema: not checked (none declared)",
+        "no_document_match" => " — response schema: not checked (no document operation matched)",
+        "no_schema" => " — response schema: not checked (matched, none declared)",
         "violations" => " — response schema: violations found"
       }.freeze
+
+      def sources_clause(endpoint)
+        sources = Array(endpoint[:sources])
+        return "" if sources.empty?
+
+        " — from #{sources.join(', ')}"
+      end
 
       def schema_clause(endpoint)
         state = endpoint.dig(:schema, :state)
         return "" if state.nil?
 
         SCHEMA_CLAUSES.fetch(state.to_s, "")
+      end
+
+      # Tolerates both shapes: a persisted run written before values were recorded
+      # carries a bare provenance symbol.
+      def value_source(entry)
+        source = entry.is_a?(Hash) ? entry[:source] : entry
+
+        VALUE_SOURCES.fetch(source.to_s, source.to_s)
+      end
+
+      def request_value(entry)
+        entry.is_a?(Hash) ? entry[:value].inspect : "?"
+      end
+
+      def sources_note(endpoint)
+        sources = Array(endpoint[:sources])
+        return "" if sources.empty?
+
+        "<p class=\"note coverage\">Discovered from: #{h(sources.join(', '))}.</p>"
       end
 
       def schema_note(endpoint)
@@ -608,7 +638,7 @@ module Loadwright
 
         items = clean.map do |endpoint|
           "<li>#{h(endpoint[:endpoint])}<span class=\"note\">#{h(endpoint.dig(:coverage, :description))}" \
-            "#{h(schema_clause(endpoint))}</span></li>"
+            "#{h(schema_clause(endpoint))}#{h(sources_clause(endpoint))}</span></li>"
         end
 
         <<~HTML

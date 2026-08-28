@@ -408,11 +408,31 @@ coming back all-inconclusive.
 
 ```ruby
 config.auth_strategy = :bearer_token
+config.auth_header_name = "X-Api-Key"        # only used by the :header strategy
 config.auth_token_provider = nil             # a callable returning a token
 config.auth_login = nil                      # or log in for one; see below
+config.auth_overrides = []                   # per-mount credentials; see below
 config.test_identity_pool_size = 5           # single-identity traffic lies about caching
 config.default_headers = { "Accept" => "application/json" }
 ```
+
+#### More than one credential scheme in one app
+
+A mounted second API — an admin surface, a partner surface, a callback surface — often
+authenticates differently from the primary one. With a single `auth_strategy` that
+mount is unauthenticated on **every** request, and what you see is a block of
+endpoints failing identically for a reason the report attributes to your application.
+
+```ruby
+config.auth_overrides = [
+  { paths: [%r{^/internal/partner/}],
+    strategy: :bearer_token,
+    token_provider: -> { PartnerToken.mint(5) } }
+]
+```
+
+First match wins, in declaration order. Anything not matched uses the run-level
+settings above, and each override rotates its own identities independently.
 
 The provider is called with **no arguments**. It may return a single token, or a
 collection — and a collection is much better, because traffic from a single identity
@@ -793,6 +813,20 @@ config.factory_map = {
 The key is the resource name as it appears in the path; the value names the factory
 and any trait. At each scale factor, Loadwright creates that many records in
 batches, tracks every id it created, and deletes exactly those ids afterwards.
+
+**More than one trait**: use `traits:` with an array. `trait:` and `traits:` are the
+same key and both accept one or many.
+
+```ruby
+"post" => { factory: :post, traits: [:with_comments, :published] }
+```
+
+**When an endpoint routes on something the seeder does not create**, `param:` names
+the column whose value goes into the path:
+
+```ruby
+"widget" => { factory: :widget, param: "widget_guid" }
+```
 
 **Your factories need `sequence` for unique columns.** If a factory produces a
 duplicate value on a uniquely-indexed column, Loadwright reports the collision and

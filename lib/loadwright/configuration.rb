@@ -228,6 +228,32 @@ module Loadwright
     setting :auth_strategy, :bearer_token, section: :auth
     setting :auth_token_provider, nil, section: :auth
 
+    # The header name for the :header strategy. It used to be hardcoded to
+    # "X-Api-Key", which is one convention among many -- an application whose gateway
+    # reads a differently-named header could not be authenticated at all, and every
+    # endpoint behind it came back 401 or 500 with no way to say why.
+    setting :auth_header_name, "X-Api-Key", section: :auth
+
+    # ONE APPLICATION, MORE THAN ONE CREDENTIAL SCHEME.
+    #
+    # A Rails app that mounts a second API -- an admin surface, a partner surface, a
+    # callback surface -- routinely authenticates it differently from the first. With a
+    # single auth_strategy the second mount is unauthenticated on every request, and
+    # what a reader sees is a block of endpoints failing identically for a reason the
+    # report attributes to their application. Observed for real: fourteen endpoints
+    # quarantined across four rounds, diagnosed as a seeding problem, and actually an
+    # auth mismatch on a second mount.
+    #
+    # Each entry overrides the run-level settings for the paths it matches. The first
+    # match wins; anything not matched uses the run-level configuration.
+    #
+    #   config.auth_overrides = [
+    #     { paths: [%r{^/internal/partner/}],
+    #       strategy: :bearer_token,
+    #       token_provider: -> { PartnerToken.mint(5) } }
+    #   ]
+    setting :auth_overrides, [].freeze, section: :auth
+
     # Log in the way your clients do, instead of minting a token in this file.
     # Loadwright issues this request once per credential, before the run, through the
     # same transport the run uses. The requests are setup: never measured, never
@@ -481,6 +507,20 @@ module Loadwright
       # surfaced mid-run, after seeding, instead of before anything started.
       unless AUTH_STRATEGIES.include?(resolved[:auth_strategy])
         errors << "auth_strategy must be one of #{AUTH_STRATEGIES.join(', ')}"
+      end
+
+      Array(resolved[:auth_overrides]).each_with_index do |override, index|
+        unless override.is_a?(Hash)
+          errors << "auth_overrides[#{index}] must be a Hash of { paths:, strategy:, token_provider: }"
+          next
+        end
+
+        errors << "auth_overrides[#{index}] needs at least one path pattern" if Array(override[:paths]).empty?
+
+        strategy = override[:strategy]
+        next if strategy.nil? || AUTH_STRATEGIES.include?(strategy.to_sym)
+
+        errors << "auth_overrides[#{index}] strategy must be one of #{AUTH_STRATEGIES.join(', ')}"
       end
 
       # Refused rather than resolved by precedence. Both set means two different

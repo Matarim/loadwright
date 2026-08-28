@@ -9,7 +9,8 @@ RSpec.describe Loadwright::Reporting::ComparisonReport do
     Loadwright::History::Comparator::Result.new(
       **{ comparable: true, divergences: [], warnings: [], new_findings: [], resolved_findings: [],
           changed_findings: [], deltas: [], transitions: [], endpoints_added: [],
-          endpoints_removed: [], excluded_signals: [] }.merge(rest)
+          endpoints_removed: [], excluded_signals: [], noise_floor: nil,
+          noise_floor_source: nil }.merge(rest)
     )
   end
 
@@ -133,6 +134,53 @@ RSpec.describe Loadwright::Reporting::ComparisonReport do
 
     it "leads the whole document with the verdict" do
       expect(report.render(full)).to include("**REGRESSED**")
+    end
+  end
+
+  # THE BAR, AS A NUMBER. The prose said "this machine's measured noise floor" and
+  # printed no value anywhere -- not in the document, not on either stream -- so a
+  # reader could not tell what bar was applied or where it came from, and was left
+  # inferring it from which deltas happened to survive.
+  describe "the noise floor a latency delta had to clear" do
+    it "prints the value and says it came from the baseline" do
+      text = report.render(comparison(noise_floor: 0.183, noise_floor_source: :baseline))
+
+      expect(text).to include("18.3%")
+      expect(text).to include("read from the designated baseline")
+    end
+
+    it "distinguishes a floor measured from history" do
+      text = report.render(comparison(noise_floor: 0.816, noise_floor_source: :measured))
+
+      expect(text).to include("81.6%")
+      expect(text).to include("measured from another run on this commit")
+    end
+
+    # The bar is the HIGHER of the two, and a reader comparing a percentage against
+    # the wrong one draws the wrong conclusion.
+    it "names the configured threshold alongside it" do
+      text = report.render(comparison(noise_floor: 0.183, noise_floor_source: :baseline))
+
+      expect(text).to include("configured threshold of #{config.regression_threshold_pct}%")
+    end
+
+    # Saying nothing here is what left the reader guessing. An unmeasured floor is a
+    # fact about the comparison, and it comes with the thing to do about it.
+    it "says plainly when there is no measured floor, and what to do" do
+      text = report.render(comparison(noise_floor: nil, noise_floor_source: :unmeasured))
+
+      expect(text).to include("regression_threshold_pct alone")
+      expect(text).to include("baseline set")
+    end
+
+    # Not hung on the Within-noise section, which does not render when nothing landed
+    # there. The bar is what makes every latency verdict readable, including on a
+    # comparison that has none.
+    it "prints it even when nothing landed within noise" do
+      text = report.render(comparison(noise_floor: 0.2, noise_floor_source: :measured,
+                                      deltas: [delta(verdict: :regression)]))
+
+      expect(text).to include("20.0%")
     end
   end
 

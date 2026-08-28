@@ -41,6 +41,10 @@ module Loadwright
         [
           heading(before, after),
           verdict_line,
+          # ALWAYS, not only when there are within-noise rows to hang it on. The bar a
+          # latency delta had to clear is what makes every latency verdict in this
+          # document readable, including on a comparison that has none.
+          "_#{noise_floor_sentence}_",
           warnings_block,
           section("New findings", new_finding_rows, empty: "None. Nothing broke that was not already broken."),
           section("Regressions", regression_rows, empty: "None.", note: @comparison.machine_noise_note),
@@ -143,6 +147,33 @@ module Loadwright
           @comparison.machine_noise_signature?
 
         "**REGRESSED** — see below."
+      end
+
+      # THE BAR, AS A NUMBER, AND WHERE IT CAME FROM.
+      #
+      # The prose said "this machine's measured noise floor" and printed no value
+      # anywhere -- not in the document, not on either stream -- so a reader could not
+      # tell what bar was applied, whether it was measured from history or read from a
+      # stored baseline, or whether the measuring path had run at all. They were left
+      # inferring it from which deltas survived, which is the guessing this section
+      # exists to end.
+      NOISE_FLOOR_SOURCES = {
+        "baseline" => "read from the designated baseline",
+        "measured" => "measured from another run on this commit",
+        "unmeasured" => "no noise floor could be measured, so the bar is regression_threshold_pct alone " \
+                        "-- a guess about this machine. Run the suite again on this commit and " \
+                        "`baseline set` to measure one"
+      }.freeze
+
+      def noise_floor_sentence
+        floor = @comparison.noise_floor
+        source = NOISE_FLOOR_SOURCES.fetch(@comparison.noise_floor_source.to_s, nil)
+
+        return "Noise floor: #{source || NOISE_FLOOR_SOURCES.fetch('unmeasured')}." if floor.nil?
+
+        "Noise floor: #{(floor.to_f * 100).round(1)}%#{source ? " (#{source})" : ''}, " \
+          "against a configured threshold of #{@config.regression_threshold_pct}%. " \
+          "The higher of the two is the bar."
       end
 
       def warnings_block

@@ -158,8 +158,15 @@ module Loadwright
           fingerprint: self.class.fingerprint(payload[:sql]),
           duration_ms: event.duration,
           name: payload[:name],
-          cached: !!payload[:cached]
-        }
+          cached: !!payload[:cached],
+          # HOW MANY ROWS CAME BACK. Rails carries it on the notification; nothing read
+          # it. A query that returned zero rows is what turns a seeded database into an
+          # empty response or a 404, and naming that query with its filter columns is
+          # the difference between "scope excluded the data" and a fix someone can make.
+          # nil on an adapter or Rails version that does not report it -- absent, never
+          # zero, because zero is the interesting value here.
+          row_count: payload[:row_count]
+        }.compact
         entry[:call_site] = call_site if @capture_call_sites
         # nil outside GraphQL, and outside a traced schema.
         field_path = CurrentField.path

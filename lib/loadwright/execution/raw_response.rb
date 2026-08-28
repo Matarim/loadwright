@@ -11,9 +11,10 @@ module Loadwright
     # Keeping the judgement out of here is what stops "did it 200?" and "did it do
     # the work?" collapsing into one boolean.
     class RawResponse
-      attr_reader :request, :status, :headers, :body, :latency_ms, :error, :transport
+      attr_reader :request, :status, :headers, :body, :latency_ms, :error, :transport, :app_exception
 
-      def initialize(request:, status: nil, headers: {}, body: nil, latency_ms: nil, error: nil, transport: nil)
+      def initialize(request:, status: nil, headers: {}, body: nil, latency_ms: nil, error: nil, transport: nil,
+                     app_exception: nil)
         @request = request
         @status = status
         @headers = normalize_headers(headers)
@@ -21,6 +22,14 @@ module Loadwright
         @latency_ms = latency_ms
         @error = error
         @transport = transport
+        # THE EXCEPTION THE APPLICATION RESCUED AND RENDERED AS A 500.
+        #
+        # Distinct from `error`, which is an exception that escaped the request
+        # entirely. Rails catches most and renders an error page, so a 500 arrives
+        # here looking like an ordinary status with a 30KB HTML body -- and the reader
+        # is left to reproduce it themselves to find out what raised. We are in the
+        # same process; we already have it. Available under :in_process only.
+        @app_exception = app_exception
         freeze
       end
 
@@ -51,6 +60,7 @@ module Loadwright
           body_bytes: body_bytes,
           content_type: content_type,
           error: error && "#{error.class}: #{error.message}",
+          app_exception: app_exception,
           transport: transport
         }
       end

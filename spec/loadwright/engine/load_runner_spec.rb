@@ -443,16 +443,33 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(result.schema_validation[documented.to_s][:state]).to eq(:validated)
     end
 
+    # TWO DIFFERENT FACTS, AND ONLY ONE IS ABOUT THE USER'S API. Sharing one sentence
+    # is how a join defect -- the server base path being ignored -- got reported for a
+    # whole API as "none declared", pointing the reader at documents that declared a
+    # schema for 50 of their 61 operations.
+    it "says a matched operation declares no schema, when a document did match" do
+      documented = endpoint(response_schemas: {})
+      result = runner(context: build_context(responder: responder, metrics: { query_count: 2 }))
+               .run(endpoints: [documented])
+
+      disclosure = result.schema_validation[documented.to_s]
+      expect(disclosure[:state]).to eq(:no_schema)
+      expect(disclosure[:note]).to include("declares no 2xx response schema")
+    end
+
     # The common case on an app discovering from recordings, and the one that looked
     # identical to a pass. A recording cannot supply a response schema; only a
     # document can.
-    it "says an endpoint with no declared schema was not checked, and why" do
+    it "says no document operation matched, when none did, and names the sources" do
+      recorded = Loadwright::Discovery::Endpoint.new(path: "/api/v1/posts", verb: :get,
+                                                     source: :integration_spec)
       result = runner(context: build_context(responder: responder, metrics: { query_count: 2 }))
-               .run(endpoints: [endpoint])
+               .run(endpoints: [recorded])
 
-      disclosure = result.schema_validation[endpoint.to_s]
-      expect(disclosure[:state]).to eq(:no_schema)
-      expect(disclosure[:note]).to include("no response schema is declared")
+      disclosure = result.schema_validation[recorded.to_s]
+      expect(disclosure[:state]).to eq(:no_document_match)
+      expect(disclosure[:note]).to include("no OpenAPI operation matched")
+      expect(disclosure[:note]).to include("integration_spec")
     end
 
     # Recorded for EVERY exercised endpoint, not only the ones that came back clean.
@@ -464,6 +481,143 @@ RSpec.describe Loadwright::Engine::LoadRunner do
 
       expect(result.outcomes.first).to be_inconclusive
       expect(result.schema_validation[endpoint.to_s]).not_to be_nil
+    end
+  end
+
+  # A REQUEST THAT ISSUED ZERO QUERIES NEVER REACHED THE DATA LAYER.
+  #
+  # So no factory, trait, `param:` or scale factor can change its outcome. The number
+  # that proves it has been in the cell table since the first run -- and an
+  # integration still spent four rounds recommending a factory fix for fifteen
+  # endpoints whose own rows read zero queries, because nothing in the report ever
+  # objected to a remedy its own data ruled out.
+  describe "a 5xx that never reached the database" do
+    before do
+      config.scale_factors = [10]
+      config.page_size_sweep = [5]
+      config.concurrency_levels = [1]
+      config.requests_per_endpoint_per_level = 20
+      config.warmup_requests = 0
+    end
+
+    def run_with(responder, metrics: { query_count: 0 })
+      runner(context: build_context(responder: responder, metrics: metrics)).run(endpoints: [endpoint])
+    end
+
+    it "says seeding cannot be the remedy" do
+      outcome = run_with(->(_) { { status: 500, body: "boom" } }).outcomes.first
+
+      expect(outcome).to be_inconclusive
+      expect(outcome.detail).to include("ZERO queries")
+      expect(outcome.detail).to include("seeding is not the remedy")
+    end
+
+    # The claim is about reaching the data layer, so one query is enough to withdraw
+    # it. Saying "seeding cannot help" about an endpoint that did query would be the
+    # same species of confident wrongness one direction over.
+    it "says nothing of the sort when the endpoint did query" do
+      outcome = run_with(->(_) { { status: 500, body: "boom" } }, metrics: { query_count: 3 }).outcomes.first
+
+      expect(outcome.detail.to_s).not_to include("ZERO queries")
+    end
+
+    # A 404 with no queries is an ordinary routing or scope answer, not a failure
+    # ahead of the data layer worth this sentence.
+    it "is reserved for 5xx, not for any non-2xx" do
+      outcome = run_with(->(_) { { status: 404, body: "{}" } }).outcomes.first
+
+      expect(outcome.detail.to_s).not_to include("ZERO queries")
+    end
+  end
+
+  # PROVENANCE ALONE ANSWERS "IS THIS 404 OURS OR THEIRS". It does not answer "what
+  # did you actually ask it", and the second question decides what a finding MEANS: an
+  # endpoint taking a `view` parameter can issue 3 queries at its default and 147 at
+  # another value, so a repeat count with no mention of the value is a property of one
+  # parameterisation reported as a property of the endpoint.
+  describe "the values a request actually sent" do
+    before do
+      config.scale_factors = [10]
+      config.page_size_sweep = [25]
+      config.concurrency_levels = [1]
+      config.requests_per_endpoint_per_level = 20
+      config.warmup_requests = 0
+      config.replay_recorded_query_params = true
+    end
+
+    let(:with_view) { endpoint(query_params: [{ name: "view", example: "detailed" }]) }
+
+    it "records each parameter's value alongside where it came from" do
+      result = runner(context: build_context(responder: ->(_) { { status: 200, body: "[]" } }))
+               .run(endpoints: [with_view])
+
+      sent = result.request_shapes[with_view.to_s][:query]["view"]
+      expect(sent[:value]).to eq("detailed")
+      expect(sent[:source]).to eq(:recorded)
+    end
+
+    # The shape recorded is the SEED-SCALE one, which by design sends no page size --
+    # the page-size sweep varies exactly that one parameter and the cell table names
+    # every value it used, so the two together describe every request made.
+    it "shows the shape the endpoint is measured as clients call it" do
+      result = runner(context: build_context(responder: ->(_) { { status: 200, body: "[]" } }))
+               .run(endpoints: [with_view])
+
+      expect(result.request_shapes[with_view.to_s][:query])
+        .not_to have_key(config.page_size_parameters.first)
+    end
+  end
+
+  # "THE SEEDED RECORDS DID NOT MATCH THIS ENDPOINT'S SCOPE" is true and leaves the
+  # reader to find the scope themselves. The filter columns of the query that returned
+  # nothing are the actionable half, and Rails has been carrying the row count on the
+  # notification all along -- nothing read it.
+  describe "an endpoint whose query found no rows" do
+    before do
+      config.scale_factors = [10]
+      config.page_size_sweep = [5]
+      config.concurrency_levels = [1]
+      config.requests_per_endpoint_per_level = 20
+      config.warmup_requests = 0
+    end
+
+    let(:empty_lookup) do
+      { query_count: 2,
+        queries: [{ fingerprint: "SELECT * FROM widgets WHERE widgets.status = ? AND widgets.owner_id = ?",
+                    row_count: 0 },
+                  { fingerprint: "SELECT * FROM accounts WHERE accounts.id = ?", row_count: 1 }] }
+    end
+
+    it "names the table and the columns that excluded the data" do
+      outcome = runner(context: build_context(responder: ->(_) { { status: 404, body: "{}" } },
+                                              metrics: empty_lookup))
+                .run(endpoints: [endpoint]).outcomes.first
+
+      expect(outcome.detail).to include("widgets filtered on")
+      expect(outcome.detail).to include("status")
+      expect(outcome.detail).to include("factory trait")
+    end
+
+    # A query that DID find rows is not the one that excluded the data, and naming it
+    # would send someone to change a scope that is working.
+    it "names only the queries that returned nothing" do
+      outcome = runner(context: build_context(responder: ->(_) { { status: 404, body: "{}" } },
+                                              metrics: empty_lookup))
+                .run(endpoints: [endpoint]).outcomes.first
+
+      expect(outcome.detail).not_to include("accounts")
+    end
+
+    # ABSENT, NEVER ZERO. An adapter or Rails version that does not report row counts
+    # must not be read as "every query found nothing".
+    it "says nothing when the row count was never reported" do
+      metrics = { query_count: 2,
+                  queries: [{ fingerprint: "SELECT * FROM widgets WHERE widgets.status = ?" }] }
+      outcome = runner(context: build_context(responder: ->(_) { { status: 404, body: "{}" } },
+                                              metrics: metrics))
+                .run(endpoints: [endpoint]).outcomes.first
+
+      expect(outcome.detail.to_s).not_to include("No rows came back")
     end
   end
 

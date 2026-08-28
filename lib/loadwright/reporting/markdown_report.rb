@@ -205,6 +205,7 @@ module Loadwright
         coverage = endpoint.dig(:coverage, :description)
         parts << "\n_#{coverage}_" unless coverage.to_s.empty?
 
+        parts << sources_block(endpoint)
         parts << schema_block(endpoint)
         parts << sub_threshold_block(endpoint)
         parts << request_block(endpoint)
@@ -265,7 +266,8 @@ module Loadwright
 
         (["## Clean endpoints (#{clean.length})", ""] +
           clean.map do |endpoint|
-            "- `#{endpoint[:endpoint]}` — #{endpoint.dig(:coverage, :description)}#{schema_clause(endpoint)}"
+            "- `#{endpoint[:endpoint]}` — #{endpoint.dig(:coverage, :description)}" \
+              "#{schema_clause(endpoint)}#{sources_clause(endpoint)}"
           end)
           .join("\n")
       end
@@ -357,6 +359,7 @@ module Loadwright
       # what it claims must not be silent about whether it ran.
       SCHEMA_LABELS = {
         "validated" => "Response schema: checked, no violations.",
+        "no_document_match" => "Response schema: not checked.",
         "no_schema" => "Response schema: not checked.",
         "violations" => "Response schema: violations found."
       }.freeze
@@ -367,15 +370,43 @@ module Loadwright
       # tell whether the sixth ran.
       SCHEMA_CLAUSES = {
         "validated" => " — response schema: checked",
-        "no_schema" => " — response schema: not checked (none declared)",
+        "no_document_match" => " — response schema: not checked (no document operation matched)",
+        "no_schema" => " — response schema: not checked (matched, none declared)",
         "violations" => " — response schema: violations found"
       }.freeze
+
+      def sources_clause(endpoint)
+        sources = Array(endpoint[:sources])
+        return "" if sources.empty?
+
+        " — from #{sources.join(', ')}"
+      end
 
       def schema_clause(endpoint)
         state = endpoint.dig(:schema, :state)
         return "" if state.nil?
 
         SCHEMA_CLAUSES.fetch(state.to_s, "")
+      end
+
+      # Tolerates both shapes: a persisted run written before values were recorded
+      # carries a bare provenance symbol, and rendering that as a missing value would
+      # make an older report look like one that sent nothing.
+      def value_source(entry)
+        source = entry.is_a?(Hash) ? entry[:source] : entry
+
+        VALUE_SOURCES.fetch(source.to_s, source.to_s)
+      end
+
+      def request_value(entry)
+        entry.is_a?(Hash) ? entry[:value].inspect : "?"
+      end
+
+      def sources_block(endpoint)
+        sources = Array(endpoint[:sources])
+        return nil if sources.empty?
+
+        "\n_Discovered from: #{sources.join(', ')}._"
       end
 
       def schema_block(endpoint)
@@ -402,8 +433,8 @@ module Loadwright
         query = Hash(shape[:query])
         return nil if query.empty?
 
-        rows = query.map do |name, source|
-          "  - `#{name}` — #{VALUE_SOURCES.fetch(source.to_s, source)}"
+        rows = query.map do |name, entry|
+          "  - `#{name}` = `#{request_value(entry)}` — #{value_source(entry)}"
         end
 
         (["", "**Request sent:** `#{shape[:path]}`"] + rows).join("\n")

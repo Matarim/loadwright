@@ -286,10 +286,13 @@ module Loadwright
             kind: :n_plus_one_pattern_match,
             confidence: :high,
             detail: "the same query ran #{worst.last.length} times in a single request" \
-                    "#{denominator_detail(context)}: #{worst.first}" \
+                    "#{denominator_detail(context)}: #{worst.first}." \
+                    "#{cache_detail(worst.last)}" \
                     "#{FIXED_REPEAT_DETAIL if scaling == :fixed}" \
                     "#{SEEDED_FIXED_REPEAT_DETAIL if scaling == :fixed_by_seed_scale}",
             evidence: { fingerprint: worst.first, occurrences: worst.last.length,
+                        executed: worst.last.count { |query| !query[:cached] },
+                        query_cache_hits: worst.last.count { |query| query[:cached] },
                         queries_in_request: context[:queries], cell: context[:cell],
                         scaling: scaling == :unknown ? nil : scaling,
                         call_site: worst.last.first[:call_site],
@@ -334,6 +337,28 @@ module Loadwright
         return "" if context[:queries].nil?
 
         " (of #{context[:queries].round} queries in that request, #{context[:cell]})"
+      end
+
+      # THE NUMBER A DEVELOPER REPRODUCES COLD IS NOT THE NUMBER WE REPORT, and the
+      # gap between them is the query cache.
+      #
+      # A request that asks for the same row 21 times may execute 12 of them and have
+      # 9 served from the request-level query cache. Both are true and they answer
+      # different questions: 12 is what the database paid for, 21 is how many times
+      # the code asked. A reader who reproduces the finding in a console -- where there
+      # is no request wrapper and so no query cache -- sees the larger number and
+      # concludes the tool is wrong. It cost one integration a full code trace to
+      # establish that both of our numbers were right.
+      #
+      # The remedy is the same either way: stop asking for a row already in hand.
+      def cache_detail(occurrences)
+        cached = Array(occurrences).count { |query| query[:cached] }
+        return "" if cached.zero?
+
+        executed = Array(occurrences).length - cached
+
+        " #{executed} executed and #{cached} served from the request query cache, so a cold " \
+          "reproduction outside a request will show all #{Array(occurrences).length}."
       end
 
       # :fixed / :scaling / :unknown — what the run OBSERVED about how the repeat

@@ -161,13 +161,24 @@ module Loadwright
       # anything was excluded or is unexercisable, and an earlier version printed
       # "discovered 8 endpoint(s) (9 from route)" -- two different numbers for two
       # different things, presented as though one explained the other.
+      #
+      # PARSED IS NOT CONTRIBUTED, and the old line said only the first while sitting
+      # under a subject that was endpoints to exercise. A reader concluded the
+      # documents were feeding the matrix, published that conclusion, and had to
+      # retract it -- the 61 operations parsed had contributed nothing measurable,
+      # because none of them matched a discovered endpoint. Both numbers, both
+      # labelled.
       def discovery_line(result)
-        sources = result.by_source.reject { |_, count| count.zero? }
-                        .map { |name, count| "#{name} #{count}" }.join(", ")
         parts = ["loadwright: #{result.endpoints.length} endpoint(s) to exercise"]
         parts << "#{result.skipped.length} discovered but not exercisable" if result.skipped.any?
-        parts << "sources: #{sources}" unless sources.empty?
+        parts << "parsed: #{count_list(result.by_source)}" if result.by_source.any? { |_, c| c.positive? }
+        contributing = result.endpoints.flat_map(&:sources).tally
+        parts << "contributing: #{count_list(contributing)}" if contributing.any?
         parts.join(" — ")
+      end
+
+      def count_list(counts)
+        counts.reject { |_, count| count.zero? }.map { |name, count| "#{name} #{count}" }.join(", ")
       end
 
       # -------------------------------------------------------------------- the run
@@ -231,6 +242,9 @@ module Loadwright
         {
           endpoint_count: discovery.endpoints.length,
           by_source: discovery.by_source.reject { |_, count| count.zero? },
+          # What each source contributed to the endpoints actually exercised, which is
+          # a different number from what it parsed and is the one a reader means.
+          contributing: discovery.endpoints.flat_map(&:sources).tally,
           skipped: discovery.skipped.map { |o| { endpoint: o.endpoint.to_s, reason: o.reason } },
           only: @options[:only]
         }.compact

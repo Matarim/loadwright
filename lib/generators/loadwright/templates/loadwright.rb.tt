@@ -355,10 +355,13 @@ if defined?(Loadwright)
     # How the token below is attached to each request:
     #   :bearer_token  Authorization: Bearer <token>   (JWT, Doorkeeper, most APIs)
     #   :session       Cookie: <token>                 (Devise and friends)
-    #   :header        X-Api-Key: <token>              (API-key APIs)
+    #   :header        <auth_header_name>: <token>     (API-key APIs)
     # For a fully public API, leave auth_token_provider nil below and no auth
     # header is sent; this setting is then unused.
     config.auth_strategy = :bearer_token
+
+    # The header name the :header strategy sends. Only consulted for that strategy.
+    config.auth_header_name = "X-Api-Key"
 
     # Replace with your app's own token logic. May return a single token or a
     # collection; a collection rotates identities across requests, which
@@ -376,6 +379,18 @@ if defined?(Loadwright)
     #   credentials: [{ email: "dev@example.com", password: "password" }],
     #   extract: { json: "token" }   # or { header: "Set-Cookie" } for session auth
     # }
+
+    # ONE APPLICATION, MORE THAN ONE CREDENTIAL SCHEME. A mounted second API -- an
+    # admin surface, a partner surface, a callback surface -- often authenticates
+    # differently from the primary one. Without an override it is unauthenticated on
+    # every request, and the report shows a block of endpoints failing identically for
+    # a reason that looks like your application's. First match wins; anything not
+    # matched uses the settings above.
+    # config.auth_overrides = [
+    #   { paths: [%r{^/internal/partner/}],
+    #     strategy: :bearer_token,
+    #     token_provider: -> { PartnerToken.mint(5) } }
+    # ]
 
     # Seed and rotate across this many identities when the provider doesn't
     # supply its own collection.

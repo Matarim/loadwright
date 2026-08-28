@@ -57,21 +57,32 @@ RSpec.describe Loadwright::Reporting::MarkdownReport do
     # The distinction that matters. "Not checked" and "checked and fine" are the two
     # things a reader is trying to tell apart, and silence looked like both.
     it "says a clean endpoint's response was not checked, rather than saying nothing" do
-      text = render_with({ state: :no_schema, note: "no response schema is declared for this operation" })
+      text = render_with({ state: :no_schema, note: "the matched operation declares no 2xx schema" })
 
-      expect(text).to include("response schema: not checked (none declared)")
+      expect(text).to include("response schema: not checked (matched, none declared)")
+    end
+
+    # The distinction the disclosure exists to make. "No document matched this" is
+    # about our join; "the matched operation declares nothing" is about their
+    # document. One sentence for both is how a join defect got reported as a fact
+    # about someone's API.
+    it "distinguishes an unmatched endpoint from a matched one that declares nothing" do
+      text = render_with({ state: :no_document_match, note: "no OpenAPI operation matched this endpoint" })
+
+      expect(text).to include("no document operation matched")
+      expect(text).not_to include("matched, none declared")
     end
 
     it "gives a measured endpoint the full sentence, with the reason" do
       text = render(
         outcomes: [build_outcome(endpoint: build_endpoint(path: "/widgets/1"), state: :has_findings,
                                  findings: [build_finding])],
-        schema_validation: { "GET /widgets/1" => { state: :no_schema,
-                                                   note: "no response schema is declared for this operation" } }
+        schema_validation: { "GET /widgets/1" => { state: :no_document_match,
+                                                   note: "no OpenAPI operation matched this endpoint" } }
       )
 
       expect(text).to include("Response schema: not checked")
-      expect(text).to include("no response schema is declared")
+      expect(text).to include("no OpenAPI operation matched")
     end
 
     it "says when the response did not match" do

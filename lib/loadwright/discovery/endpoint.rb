@@ -81,6 +81,21 @@ module Loadwright
 
       def key = [path, verb, graphql_operation].compact
 
+      # THE KEY A DOCUMENT AND A ROUTE CAN ACTUALLY AGREE ON.
+      #
+      # A document writes `/parents/{parent_guid}` where the app's route says
+      # `/parents/{parent_id}`. Same endpoint, same segments, one route -- and keyed by
+      # the raw path they are two, so the document's schema never reaches the endpoint
+      # that was measured. Parameter NAMES are documentation; the segment structure is
+      # the route.
+      #
+      # Safe because a path template's parameter name cannot distinguish two routes:
+      # within one source, two templates differing only in parameter spelling ARE the
+      # same route. Across sources, they are the same route described twice.
+      def structural_key = [self.class.structural_path(path), verb, graphql_operation].compact
+
+      def self.structural_path(path) = path.to_s.gsub(/\{[^}]*\}/, "{}")
+
       def graphql? = !graphql_operation.nil?
 
       # REST varies page size with a query parameter, which any endpoint will accept
@@ -173,17 +188,25 @@ module Loadwright
       # wins on request shape (proven-valid, and often richer than a doc that has
       # drifted); OpenAPI wins on schemas, which recording cannot produce.
       def merge(other)
-        raise ArgumentError, "cannot merge #{other.key.inspect} into #{key.inspect}" unless other.key == key
+        unless other.structural_key == structural_key
+          raise ArgumentError, "cannot merge #{other.key.inspect} into #{key.inspect}"
+        end
 
         recorded = other.from?(:integration_spec) ? other : self
         documented = other.from?(:openapi) ? other : self
+        winner = authoritative_path_source(other)
 
         self.class.new(
-          path: path,
+          path: winner.path,
           verb: verb,
           sources: (sources | other.sources),
           operation_id: operation_id || other.operation_id,
-          path_params: (path_params | other.path_params),
+          # WHEN THE SPELLINGS DIFFER, ONLY THE WINNING TEMPLATE'S NAMES SURVIVE.
+          # Unioning them would leave the endpoint claiming a parameter its own path
+          # does not contain, which resolution then tries and fails to fill -- turning
+          # a successful join into an unresolved-parameter skip. Identical paths keep
+          # the union unchanged, which is every case but this one.
+          path_params: winner.path == other.path && winner.path == path ? (path_params | other.path_params) : winner.path_params,
           query_params: recorded.query_params.empty? ? documented.query_params : recorded.query_params,
           request_body: recorded.request_body || documented.request_body,
           request_schema: documented.request_schema || recorded.request_schema,
@@ -210,6 +233,22 @@ module Loadwright
       end
 
       private
+
+      # WHOSE SPELLING OF THE TEMPLATE GETS REQUESTED. The application's own, always:
+      # a route is what the app serves, a recording is a path it actually answered, and
+      # a document is a description that may have drifted. Requesting the document's
+      # spelling of a parameter is harmless in itself -- the name inside the braces is
+      # never sent -- but it makes the report name a template the app does not have.
+      PATH_AUTHORITY = %i[route integration_spec openapi graphql].freeze
+
+      def authoritative_path_source(other)
+        return self if path == other.path
+
+        mine = PATH_AUTHORITY.index { |source| from?(source) } || PATH_AUTHORITY.length
+        theirs = PATH_AUTHORITY.index { |source| other.from?(source) } || PATH_AUTHORITY.length
+
+        theirs < mine ? other : self
+      end
 
       def deep_merge_recorded(other)
         (recorded_path_values.keys | other.recorded_path_values.keys).to_h do |param|

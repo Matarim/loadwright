@@ -28,6 +28,10 @@ module Loadwright
         @stdout = stdout
         @warnings = []
         @cursor = 0
+        # One cursor per override, so a second mount's identities rotate
+        # independently rather than sharing the primary pool's position.
+        @override_cursors = Hash.new(0)
+        @override_tokens = {}
         @mutex = Mutex.new
       end
 
@@ -40,10 +44,18 @@ module Loadwright
         # Idempotent: the runner resolves at run start, and a caller that resolved
         # first must not cause the provider -- which may be issuing JWTs or hitting a
         # login endpoint -- to run twice.
-        return self if @tokens
+        return self if @resolved
 
+        @resolved = true
         tokens = resolve_tokens(transport)
-        return self if tokens.nil?
+        # OVERRIDES RESOLVE EVEN WITH NO RUN-LEVEL PROVIDER. An app whose primary API
+        # is public and whose second mount is not is a perfectly ordinary shape, and
+        # returning early here would leave that mount unauthenticated -- the exact
+        # failure per-mount auth exists to fix.
+        if tokens.nil?
+          resolve_overrides!
+          return self
+        end
 
         if tokens.empty?
           raise SeedingError,
@@ -61,7 +73,34 @@ module Loadwright
         end
 
         @tokens = tokens.freeze
+        resolve_overrides!
         self
+      end
+
+      # ONE APPLICATION, MORE THAN ONE CREDENTIAL SCHEME. A Rails app that mounts a
+      # second API routinely authenticates it differently, and with a single strategy
+      # that mount is unauthenticated on every request -- reported as a block of
+      # endpoints failing identically, for a reason the report attributes to the
+      # application. Observed for real: fourteen endpoints quarantined across four
+      # rounds and diagnosed as a seeding problem.
+      #
+      # A provider that produces nothing is an ERROR here for the same reason it is at
+      # the run level: every request to those paths would be unauthenticated, and a
+      # report full of 401s says nothing about the endpoints.
+      def resolve_overrides!
+        Array(@config.auth_overrides).each_with_index do |override, index|
+          provider = override[:token_provider]
+          next if provider.nil?
+
+          tokens = Array(call_provider(provider)).compact.map(&:to_s).reject(&:empty?)
+          if tokens.empty?
+            raise SeedingError,
+                  "auth_overrides[#{index}] token_provider returned no usable token. Every request to " \
+                  "#{Array(override[:paths]).map(&:inspect).join(', ')} would be unauthenticated."
+          end
+
+          @override_tokens[index] = tokens.freeze
+        end
       end
 
       private
@@ -113,17 +152,58 @@ module Loadwright
 
       # The headers a request should carry for the next identity. Empty when no
       # provider is configured, which is correct for a genuinely public API.
-      def headers_for_next
+      #
+      # `path` selects a per-mount override where one matches. It is optional so that
+      # a caller with no path in hand still gets the run-level credential rather than
+      # nothing -- an argument error here would turn an auth question into a crash.
+      def headers_for_next(path: nil)
+        index = override_index_for(path)
+        return headers_for_override(index) unless index.nil?
+
         identity = next_identity
         return {} if identity.nil?
 
-        case @config.auth_strategy
-        when :bearer_token then { "Authorization" => "Bearer #{identity.token}" }
-        when :session then { "Cookie" => identity.token }
-        when :header then { "X-Api-Key" => identity.token }
+        headers_for(@config.auth_strategy, identity.token, @config.auth_header_name)
+      end
+
+      # First match wins, in declaration order, so overlapping patterns resolve the way
+      # the file reads rather than by some internal ordering.
+      def override_index_for(path)
+        return nil if path.nil?
+
+        Array(@config.auth_overrides).each_with_index do |override, index|
+          next unless @override_tokens.key?(index)
+
+          matched = Array(override[:paths]).any? do |pattern|
+            pattern.is_a?(Regexp) ? path.to_s.match?(pattern) : path.to_s.include?(pattern.to_s)
+          end
+          return index if matched
+        end
+        nil
+      end
+
+      def headers_for_override(index)
+        override = Array(@config.auth_overrides)[index]
+        tokens = @override_tokens.fetch(index)
+
+        token = @mutex.synchronize do
+          cursor = @override_cursors[index]
+          @override_cursors[index] = cursor + 1
+          tokens[cursor % tokens.length]
+        end
+
+        headers_for(override[:strategy] || @config.auth_strategy, token,
+                    override[:header_name] || @config.auth_header_name)
+      end
+
+      def headers_for(strategy, token, header_name)
+        case strategy&.to_sym
+        when :bearer_token then { "Authorization" => "Bearer #{token}" }
+        when :session then { "Cookie" => token }
+        when :header then { header_name.to_s => token }
         else
           raise ConfigurationError,
-                "unknown auth_strategy #{@config.auth_strategy.inspect}; " \
+                "unknown auth_strategy #{strategy.inspect}; " \
                 "expected one of #{Configuration::AUTH_STRATEGIES.join(', ')}"
         end
       end
@@ -132,6 +212,10 @@ module Loadwright
         {
           strategy: @config.auth_strategy,
           identities: size,
+          overrides: @override_tokens.keys.map do |index|
+            { paths: Array(Array(@config.auth_overrides)[index][:paths]).map(&:to_s),
+              identities: @override_tokens[index].length }
+          end,
           configured: !@config.auth_token_provider.nil?,
           warnings: @warnings
         }

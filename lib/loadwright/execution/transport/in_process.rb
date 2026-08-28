@@ -80,8 +80,71 @@ module Loadwright
             headers: response.headers,
             body: response.body,
             latency_ms: monotonic_ms - started_ms,
+            app_exception: app_exception_from(session),
             transport: name
           )
+        end
+
+        # WE ARE IN THE SAME PROCESS AND WE ALREADY HAVE IT.
+        #
+        # Rails rescues most exceptions and renders an error page, so a 500 reaches us
+        # as an ordinary status with a large HTML body and no way to tell what raised.
+        # Reproducing that by hand is exactly the work a reader should not have to do:
+        # in one real integration, fifteen endpoints failed identically for three
+        # rounds and the cause was found only by tracing the application's source.
+        #
+        # CLASS AND ONE FRAME, NEVER THE MESSAGE. An exception message routinely
+        # carries record ids, tokens and parameter values; the class and the frame that
+        # raised are what identify the failure and neither is data.
+        def app_exception_from(session)
+          exception = session.request.env["action_dispatch.exception"]
+          return nil unless exception.is_a?(Exception)
+
+          {
+            class: exception.class.name,
+            frame: application_frame(exception),
+            containment: containment_cause(exception)
+          }.compact
+        rescue StandardError
+          # Diagnostics must never become the reason a measured request fails.
+          nil
+        end
+
+        # The first frame outside the gems, which is the line in THEIR code that a
+        # reader can open. A backtrace whose top frame is inside a gem names the
+        # library, not the decision that called it.
+        def application_frame(exception)
+          frames = Array(exception.backtrace)
+          frames.find { |frame| !frame.include?("/gems/") && !frame.start_with?(RbConfig::CONFIG["libdir"].to_s) } ||
+            frames.first
+        end
+
+        # ONLY WE CAN SEE THIS ONE. When our own outbound-HTTP containment is what
+        # broke the request, the application looks broken and is not -- and the user
+        # has no way to tell the difference, because the block is ours. Observed for
+        # real: a JWKS fetch refused by containment, rescued and re-raised by the app
+        # as its own error class, reported as fourteen broken endpoints and
+        # misattributed to seeding for three rounds.
+        #
+        # Walks `cause`, because the interesting case is precisely the one where the
+        # app rescued our error and raised its own.
+        def containment_cause(exception)
+          seen = 0
+          current = exception
+          while current && seen < 10
+            return "blocked by config.block_outbound_http: #{blocked_host(current)}" if
+              current.class.name.to_s.include?("WebMock::NetConnectNotAllowedError")
+
+            current = current.cause
+            seen += 1
+          end
+          nil
+        end
+
+        # The host only. WebMock's message carries the full URI including any query
+        # string, and a query string is the caller's data.
+        def blocked_host(error)
+          error.message.to_s[%r{https?://([^/\s"']+)}, 1] || "an external host"
         end
 
         def application

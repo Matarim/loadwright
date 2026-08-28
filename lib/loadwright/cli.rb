@@ -230,8 +230,9 @@ module Loadwright
       before, after = resolve_comparison(argv)
       return 1 if before.nil?
 
-      floor = comparison_noise_floor(before, after)
-      result = History::Comparator.new(config: configuration).compare(before, after, noise_floor: floor)
+      floor, source = comparison_noise_floor(before, after)
+      result = History::Comparator.new(config: configuration)
+                                  .compare(before, after, noise_floor: floor, noise_floor_source: source)
 
       print_comparison(before, after, result)
 
@@ -256,20 +257,25 @@ module Loadwright
     # is the max spread across the pair, so using it on that same pair defines every
     # one of its own deltas to be noise. It comes from a third run on the same commit
     # and configuration, which is the same non-circular rule `baseline set` follows.
+    # Returns [floor, source]. The SOURCE travels with the number because "18%" alone
+    # does not tell a reader whether the bar was one they established or one the tool
+    # inferred, and those carry different amounts of trust.
     def comparison_noise_floor(before, after)
       stored = store.baseline&.fetch("noise_floor", nil)
-      return stored if stored
+      return [stored, :baseline] if stored
 
       # A non-nil sha is REQUIRED here, unlike in `baseline set`. There, the user named
       # the run and is told what was measured. Here it is automatic and silent, and
       # `nil == nil` would match every run in a repository without git -- borrowing a
       # floor from an unrelated run and raising the bar a real regression has to clear.
-      return nil if before.git_sha.nil?
+      return [nil, :unmeasured] if before.git_sha.nil?
 
       floor = measure_noise_floor(before, exclude: [after.run_id])
+      return [nil, :unmeasured] if floor.nil?
+
       @stdout.puts "loadwright: no baseline noise floor is set; measured " \
-                   "#{(floor * 100).round(1)}% from another run on this commit." if floor
-      floor
+                   "#{(floor * 100).round(1)}% from another run on this commit."
+      [floor, :measured]
     end
 
     def resolve_comparison(argv)

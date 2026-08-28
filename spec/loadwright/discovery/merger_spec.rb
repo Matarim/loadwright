@@ -187,4 +187,67 @@ RSpec.describe Loadwright::Discovery::Merger do
       expect(skipped).not_to be_declined
     end
   end
+
+  # A DOCUMENT AND A ROUTE SPELL THE SAME PARAMETER DIFFERENTLY, AND THAT IS NOT TWO
+  # ENDPOINTS. Keying on the literal template made it two: the document's schema
+  # landed on a row nothing measured, and the measured row reported that no schema was
+  # declared for it. Parameter names are documentation; segment structure is the route.
+  describe "a template whose parameter is spelled differently by each source" do
+    def documented(path) = Loadwright::Discovery::Endpoint.new(path: path, verb: :get, source: :openapi)
+
+    def routed(path)
+      Loadwright::Discovery::Endpoint.new(path: path, verb: :get, source: :route)
+    end
+
+    it "merges them into one endpoint" do
+      result = described_class.new(config: config).merge(
+        openapi: [documented("/api/v1/widgets/{widget_guid}")],
+        route: [routed("/api/v1/widgets/{widget_id}")]
+      )
+
+      expect(result.endpoints.length).to eq(1)
+      expect(result.endpoints.first.sources).to contain_exactly(:openapi, :route)
+    end
+
+    # The application's own spelling is what gets requested. A document is a
+    # description that may have drifted; a route is what the app serves.
+    it "requests the application's spelling, not the document's" do
+      result = described_class.new(config: config).merge(
+        openapi: [documented("/api/v1/widgets/{widget_guid}")],
+        route: [routed("/api/v1/widgets/{widget_id}")]
+      )
+
+      expect(result.endpoints.first.path).to eq("/api/v1/widgets/{widget_id}")
+    end
+
+    # Unioning the two spellings would leave the endpoint claiming a parameter its own
+    # path does not contain -- which resolution then tries and fails to fill, turning a
+    # successful join into an unresolved-parameter skip.
+    it "keeps only the winning template's parameter names" do
+      result = described_class.new(config: config).merge(
+        openapi: [documented("/api/v1/widgets/{widget_guid}")],
+        route: [routed("/api/v1/widgets/{widget_id}")]
+      )
+
+      expect(result.endpoints.first.path_params).to eq([:widget_id])
+    end
+
+    it "still keeps genuinely different paths apart" do
+      result = described_class.new(config: config).merge(
+        route: [routed("/api/v1/widgets/{id}"), routed("/api/v1/gadgets/{id}")]
+      )
+
+      expect(result.endpoints.length).to eq(2)
+    end
+
+    # Two segments differ, not one name: structurally different, and merging them
+    # would be the silent endpoint-collapsing bug in the other direction.
+    it "does not merge paths with a different number of segments" do
+      result = described_class.new(config: config).merge(
+        route: [routed("/api/v1/widgets/{id}"), routed("/api/v1/widgets/{id}/parts")]
+      )
+
+      expect(result.endpoints.length).to eq(2)
+    end
+  end
 end
