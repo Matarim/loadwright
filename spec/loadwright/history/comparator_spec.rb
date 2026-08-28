@@ -668,4 +668,70 @@ RSpec.describe Loadwright::History::Comparator do
       expect(comparator.compare(older, after)).to be_comparable
     end
   end
+
+  # THE SIGNATURE OF A BUSIER MACHINE, NAMED RATHER THAN LEFT TO THE READER.
+  #
+  # A real run against a private API produced ~30 p50 "regressions" that were all in
+  # the same direction, spread across unrelated endpoints including one that touches no
+  # database, with zero query-count movement -- and the verdict word was REGRESSED. The
+  # evidence to tell that apart from a code change was all present and nothing
+  # assembled it into a sentence.
+  #
+  # This never changes the verdict or the exit code. A heuristic that silently
+  # downgraded a regression would be the same class of error one direction over.
+  describe "regressions that look like the machine rather than the code" do
+    def latency_pair(keys, before_ms:, after_ms:)
+      [record(endpoints: keys.map { |key| endpoint(key) },
+              cells: keys.map { |key| cell(key, latency: before_ms) }),
+       record(endpoints: keys.map { |key| endpoint(key) },
+              cells: keys.map { |key| cell(key, latency: after_ms) })]
+    end
+
+    it "names the shape when every regression is latency, one-directional, and widespread" do
+      before, after = latency_pair(%w[GET\ /a GET\ /b GET\ /c], before_ms: 100.0, after_ms: 180.0)
+      result = comparator.compare(before, after)
+
+      expect(result.regressions).not_to be_empty
+      expect(result).to be_machine_noise_signature
+      expect(result.machine_noise_note).to include("busier machine")
+    end
+
+    # The distinguishing evidence. A query count that moved is near-deterministic, and
+    # its presence is exactly what makes a slowdown worth believing.
+    it "says nothing of the sort when a query count moved too" do
+      before = record(endpoints: %w[GET\ /a GET\ /b GET\ /c].map { |k| endpoint(k) },
+                      cells: %w[GET\ /a GET\ /b GET\ /c].map { |k| cell(k, latency: 100.0, queries: 3) })
+      after = record(endpoints: %w[GET\ /a GET\ /b GET\ /c].map { |k| endpoint(k) },
+                     cells: %w[GET\ /a GET\ /b GET\ /c].map { |k| cell(k, latency: 180.0, queries: 9) })
+
+      result = comparator.compare(before, after)
+
+      expect(result).not_to be_machine_noise_signature
+      expect(result.machine_noise_note).to be_nil
+    end
+
+    # One endpoint slowing down is a plausible code change. The signal is BREADTH:
+    # unrelated endpoints moving together is what the code cannot explain.
+    it "says nothing of the sort for a slowdown confined to one endpoint" do
+      before, after = latency_pair(["GET /a"], before_ms: 100.0, after_ms: 180.0)
+
+      expect(comparator.compare(before, after)).not_to be_machine_noise_signature
+    end
+
+    it "says nothing of the sort when a new finding appeared" do
+      keys = %w[GET\ /a GET\ /b GET\ /c]
+      before = record(endpoints: keys.map { |k| endpoint(k) },
+                      cells: keys.map { |k| cell(k, latency: 100.0) })
+      after = record(endpoints: keys.map { |k| endpoint(k, state: "has_findings", findings: [:n_plus_one_slope]) },
+                     cells: keys.map { |k| cell(k, latency: 180.0) })
+
+      expect(comparator.compare(before, after)).not_to be_machine_noise_signature
+    end
+
+    it "reports no signature at all when there are no regressions" do
+      before, after = latency_pair(%w[GET\ /a GET\ /b GET\ /c], before_ms: 100.0, after_ms: 100.0)
+
+      expect(comparator.compare(before, after)).not_to be_machine_noise_signature
+    end
+  end
 end

@@ -315,6 +315,7 @@ module Loadwright
             #{inconclusive_explanation(endpoint)}
             #{findings_list(endpoint)}
             #{coverage_note(endpoint)}
+            #{schema_note(endpoint)}
             #{sub_threshold_note(endpoint)}
             #{request_block(endpoint)}
             #{time_breakdown(endpoint)}
@@ -394,8 +395,10 @@ module Loadwright
         summary = endpoint.dig(:correlation, :sub_threshold_duplicates)
         return "" if summary.nil?
 
+        denominator = summary[:queries_in_request] ? " of #{h(summary[:queries_in_request].round)}" : ""
+
         "<p class=\"note coverage\">Repeated queries seen, below the finding threshold: the most " \
-          "repeated ran #{h(summary[:occurrences])}&times; in one request " \
+          "repeated ran #{h(summary[:occurrences])}&times; in one request#{denominator} " \
           "(threshold #{h(summary[:threshold])}).</p>"
       end
 
@@ -412,6 +415,40 @@ module Loadwright
 
         "<details class=\"request\"><summary>Request sent: <code>#{h(shape[:path])}</code></summary>" \
           "<ul>#{rows.join}</ul></details>"
+      end
+
+      # SCHEMA VALIDITY IS NOT IN THE COVERAGE LINE, so it gets its own. It belongs to
+      # the validity gate rather than to a finding class, and a setting whose whole
+      # purpose is to stop an endpoint being called healthy on a response that is not
+      # what it claims must not be silent about whether it ran.
+      SCHEMA_LABELS = {
+        "validated" => "Response schema: checked, no violations.",
+        "no_schema" => "Response schema: not checked.",
+        "violations" => "Response schema: violations found."
+      }.freeze
+
+      # A CLEAN ENDPOINT GETS ONE LINE, and it is the line a reader trusts most, so the
+      # schema answer has to fit on it.
+      SCHEMA_CLAUSES = {
+        "validated" => " — response schema: checked",
+        "no_schema" => " — response schema: not checked (none declared)",
+        "violations" => " — response schema: violations found"
+      }.freeze
+
+      def schema_clause(endpoint)
+        state = endpoint.dig(:schema, :state)
+        return "" if state.nil?
+
+        SCHEMA_CLAUSES.fetch(state.to_s, "")
+      end
+
+      def schema_note(endpoint)
+        schema = endpoint[:schema]
+        return "" if schema.nil?
+
+        label = SCHEMA_LABELS.fetch(schema[:state].to_s, "Response schema:")
+
+        "<p class=\"note coverage\">#{h(label)} #{h(schema[:note])}</p>"
       end
 
       def coverage_note(endpoint)
@@ -570,7 +607,8 @@ module Loadwright
         return "" if clean.empty?
 
         items = clean.map do |endpoint|
-          "<li>#{h(endpoint[:endpoint])}<span class=\"note\">#{h(endpoint.dig(:coverage, :description))}</span></li>"
+          "<li>#{h(endpoint[:endpoint])}<span class=\"note\">#{h(endpoint.dig(:coverage, :description))}" \
+            "#{h(schema_clause(endpoint))}</span></li>"
         end
 
         <<~HTML

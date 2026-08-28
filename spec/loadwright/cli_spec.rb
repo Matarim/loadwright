@@ -236,6 +236,64 @@ RSpec.describe Loadwright::CLI do
         expect(run_cli("compare", "--baseline")).to eq(0)
       end
 
+      # THE FLOOR WAS ONLY EVER AVAILABLE TO PEOPLE WHO HAD SET A BASELINE.
+      #
+      # `baseline set` measures this machine's run-to-run spread; `compare` read it
+      # from the stored baseline and from nowhere else. So a plain
+      # `compare <a> <b>` on a machine with plenty of history fell back to
+      # regression_threshold_pct alone -- the threshold this code's own comments call a
+      # guess -- and reported a laptop's afternoon as a regression on every endpoint.
+      describe "the noise floor when no baseline is set" do
+        # An endpoint AND a cell: deltas are computed over the endpoints the two runs
+        # share, so cells alone compare nothing.
+        def run_with_latency(ms)
+          endpoint = build_endpoint(path: "/widgets")
+          cell = build_cell(endpoint_key: endpoint.to_s, latencies: [ms])
+
+          write_run(cells: [cell], endpoints: [build_outcome(endpoint: endpoint)])
+        end
+
+        # first and the sibling are the same code at 100ms and 140ms -- a ~29% spread
+        # that IS this machine's noise by the tool's own definition. The 25% move in
+        # `third` clears the configured 20% threshold and does not clear that, which is
+        # the whole point of measuring rather than guessing.
+        it "measures one from a third run on the same commit rather than guessing" do
+          first = run_with_latency(100.0)
+          run_with_latency(140.0)
+          third = run_with_latency(125.0)
+
+          run_cli("compare", first.run_id, third.run_id)
+
+          expect(stdout.string).to include("measured")
+          expect(stdout.string).to include("No regressions.")
+        end
+
+        # CIRCULAR OTHERWISE. The floor is the max spread across the pair it is
+        # measured from, so measuring it from the pair under comparison would define
+        # every one of that pair's own deltas to be noise.
+        it "never measures it from the two runs being compared" do
+          first = run_with_latency(100.0)
+          second = run_with_latency(130.0)
+
+          run_cli("compare", first.run_id, second.run_id)
+
+          expect(stdout.string).to include("REGRESSED")
+        end
+
+        # The floor the user deliberately established still wins.
+        it "prefers a stored baseline floor over a measured one" do
+          first = run_with_latency(100.0)
+          run_with_latency(140.0)
+          third = run_with_latency(130.0)
+          store.set_baseline!(first.run_id, noise_floor: 0.0)
+
+          run_cli("compare", first.run_id, third.run_id)
+
+          expect(stdout.string).to include("REGRESSED")
+          expect(stdout.string).not_to include("measured noise floor")
+        end
+      end
+
       it "says what to do when no baseline is set" do
         write_run
 

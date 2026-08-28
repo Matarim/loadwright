@@ -35,11 +35,27 @@ module Loadwright
         @runner = runner
       end
 
+      # BOOT FIRST, THEN READ CONFIG. This order is not incidental.
+      #
+      # `integration_spec_paths` lives in config/initializers/loadwright.rb, which only
+      # exists once the application has been booted. Resolving the spec list before
+      # `load!` therefore read the setting on a Configuration nothing had configured
+      # yet -- so on every app that sets it the way the generated initializer says to,
+      # the list was empty and the command refused, with a message naming the very
+      # setting it had just failed to read. Someone following that message goes and
+      # checks a setting that was correct all along.
+      #
+      # `run` never had the bug because it reads config after booting, which is why the
+      # same setting drove discovery correctly in the very next command.
+      #
+      # --specs still wins when passed. It could be read before boot, but it is not:
+      # one resolution point for both sources is easier to keep honest than two.
       def call
+        (@loader || AppLoader.new(stdout: @stdout)).load!
+
         paths = spec_paths
         return missing_specs if paths.empty?
 
-        (@loader || AppLoader.new(stdout: @stdout)).load!
         warn_about_recording_database!
         return REFUSED unless confirm_database_writes!
 
@@ -185,9 +201,9 @@ module Loadwright
       # --specs wins over the configured paths, because someone passing the flag is
       # narrowing this invocation on purpose.
       def spec_paths
-        return Array(@options[:specs]) if @options[:specs]
+        source = @options[:specs] || config.integration_spec_paths
 
-        Array(config.integration_spec_paths).compact.map(&:to_s)
+        Array(source).compact.map(&:to_s).reject { |path| path.strip.empty? }
       end
 
       def record_with(source, paths)
@@ -239,14 +255,28 @@ module Loadwright
         OK
       end
 
+      # NAMES WHICH OF THE TWO IS EMPTY. The application is booted by the time this
+      # runs, so `integration_spec_paths` here is the value the initializer actually
+      # set -- and saying "set it" to someone who already has would send them to check
+      # something that is fine.
       def missing_specs
         @stderr.puts <<~MSG.strip
-          loadwright: nothing to record from.
-          Pass a spec directory, or set integration_spec_paths in config/initializers/loadwright.rb:
+          loadwright: nothing to record from. #{integration_spec_paths_state}
+
+          Pass a spec directory:
 
               bundle exec loadwright record --specs spec/requests
+
+          or set integration_spec_paths in config/initializers/loadwright.rb.
         MSG
         REFUSED
+      end
+
+      def integration_spec_paths_state
+        return "No --specs was passed and integration_spec_paths is empty." unless
+          config.respond_to?(:explicitly_set?) && config.explicitly_set?(:integration_spec_paths)
+
+        "integration_spec_paths is set, but every path in it is blank."
       end
 
       # A suite that ERRORED and a suite that ran fine without making requests are

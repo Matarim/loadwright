@@ -43,7 +43,7 @@ module Loadwright
           verdict_line,
           warnings_block,
           section("New findings", new_finding_rows, empty: "None. Nothing broke that was not already broken."),
-          section("Regressions", regression_rows, empty: "None."),
+          section("Regressions", regression_rows, empty: "None.", note: @comparison.machine_noise_note),
           # DIRECTLY AFTER REGRESSIONS, and before anything that reads as good news.
           # These are the rows most likely to be misread as wins: a query count that
           # fell because the endpoint returned fewer records. A reader who reaches
@@ -132,10 +132,17 @@ module Loadwright
         "Re-run one side under matching configuration, then compare again."
       end
 
+      # THE WORD STAYS, THE QUALIFIER JOINS IT. Downgrading the verdict on a heuristic
+      # would be the same error as the one being corrected, one direction over: a
+      # comparison that quietly decided a regression was noise is worse than one that
+      # made a reader think for a second. What was missing is not a softer word, it is
+      # the sentence saying what the shape of the evidence looks like.
       def verdict_line
-        return "**REGRESSED** — see below." if @comparison.regressed?
+        return "No regressions." unless @comparison.regressed?
+        return "**REGRESSED** — latency only, and it looks like the machine. See below." if
+          @comparison.machine_noise_signature?
 
-        "No regressions."
+        "**REGRESSED** — see below."
       end
 
       def warnings_block

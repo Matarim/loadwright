@@ -305,6 +305,10 @@ config.long_run_confirmation_threshold_minutes = 10
 config.confirm_recording_database = true    # `record` asks before running your specs against a non-test database
 ```
 
+The long-run prompt **proceeds** rather than refusing when nothing can answer it —
+it is a courtesy about your afternoon, not a safety decision about irreversible harm.
+Pass `--accept-long-run` to accept it from a script without detaching stdin.
+
 `max_error_rate_before_abort` counts *application* errors. Contention errors are
 structurally excluded from the numerator — otherwise a busy database would trip the
 breaker and the run would blame your app for someone else's lock.
@@ -339,6 +343,12 @@ config.max_response_bytes_warning = 1_048_576
 config.payload_growth_correlation_threshold = 0.8
 config.serializer_attribution = true
 ```
+
+`require_schema_valid_response` only does anything where a schema exists for the
+operation, and **only an OpenAPI document supplies one** — a recording cannot. Every
+endpoint therefore says which happened, on its own line in the report and on its one
+line in the clean list: *response schema: checked*, or *not checked (none declared)*.
+Silence used to look identical to a pass.
 
 ### Contention handling
 
@@ -844,7 +854,9 @@ report's skipped list too, so the output is about what you asked for.
 | `--only PATTERN` | Restrict to matching paths. |
 | `--mode in_process\|http` | Override `execution_mode` for this run. Beats the initializer. |
 | `--i-understand-the-risk` | Required for any run outside `enabled_environments`. |
-| `--specs PATH` | For `record`: the spec directory to run and capture. |
+| `--specs PATH` | For `record`: the spec directory to run and capture. Repeatable. |
+| `--accept-database-writes` | For `record`: acknowledge that your specs will run against the booted database. |
+| `--accept-long-run` | For `run`: accept a run estimated over `long_run_confirmation_threshold_minutes` without being asked. |
 | `--baseline` | For `compare`: compare the latest run against the designated baseline. |
 
 **Exit codes**

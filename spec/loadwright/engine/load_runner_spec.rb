@@ -411,6 +411,62 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     end
   end
 
+  # require_schema_valid_response defaults to true, and the check produced no output
+  # anywhere -- neither in the checked half of the coverage line nor in the not-checked
+  # half. A reader could not tell a validated response from one that was never
+  # validated because the operation declares no schema, which is exactly the
+  # distinction the setting exists to make.
+  describe "whether the response was checked against its declared schema" do
+    before do
+      config.scale_factors = [10]
+      config.page_size_sweep = [5]
+      config.concurrency_levels = [1]
+      config.requests_per_endpoint_per_level = 20
+      config.warmup_requests = 0
+    end
+
+    let(:document) do
+      { "components" => { "schemas" => { "Widget" => { "type" => "array" } } } }
+    end
+
+    let(:schema) do
+      Loadwright::Discovery::SchemaRef.for(document: document, pointer: "#/components/schemas/Widget")
+    end
+
+    let(:responder) { ->(_) { { status: 200, body: JSON.generate(Array.new(5) { { "id" => 1 } }) } } }
+
+    it "reports a schema that was checked and matched" do
+      documented = endpoint(response_schemas: { 200 => schema })
+      result = runner(context: build_context(responder: responder, metrics: { query_count: 2 }))
+               .run(endpoints: [documented])
+
+      expect(result.schema_validation[documented.to_s][:state]).to eq(:validated)
+    end
+
+    # The common case on an app discovering from recordings, and the one that looked
+    # identical to a pass. A recording cannot supply a response schema; only a
+    # document can.
+    it "says an endpoint with no declared schema was not checked, and why" do
+      result = runner(context: build_context(responder: responder, metrics: { query_count: 2 }))
+               .run(endpoints: [endpoint])
+
+      disclosure = result.schema_validation[endpoint.to_s]
+      expect(disclosure[:state]).to eq(:no_schema)
+      expect(disclosure[:note]).to include("no response schema is declared")
+    end
+
+    # Recorded for EVERY exercised endpoint, not only the ones that came back clean.
+    # An inconclusive endpoint is where a reader most wants to know whether the schema
+    # was consulted.
+    it "records the disclosure even when the endpoint came back inconclusive" do
+      forbidden = ->(_) { { status: 403, body: "{}" } }
+      result = runner(context: build_context(responder: forbidden)).run(endpoints: [endpoint])
+
+      expect(result.outcomes.first).to be_inconclusive
+      expect(result.schema_validation[endpoint.to_s]).not_to be_nil
+    end
+  end
+
   describe "the circuit breaker mid-run" do
     it "aborts the remaining matrix and marks it skipped rather than omitting it" do
       config.scale_factors = [10, 100]

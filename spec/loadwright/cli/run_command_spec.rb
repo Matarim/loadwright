@@ -312,4 +312,53 @@ RSpec.describe Loadwright::CLI::RunCommand do
       expect(exit_code_for(result_with(aborted: "circuit breaker"))).to eq(described_class::FINDINGS)
     end
   end
+
+  # THE ONE PROMPT THAT PROCEEDS RATHER THAN REFUSING. It is a courtesy about
+  # someone's afternoon, not a safety decision about irreversible harm -- unlike the
+  # production gate, which refuses when it cannot ask. The gap was that ACCEPTING it
+  # non-interactively meant detaching stdin: reshaping the process to answer one
+  # question, and changing how every other prompt behaves as a side effect.
+  describe "the long-run confirmation" do
+    let(:estimate) { double("estimate", estimated_minutes: 42.0) }
+
+    def prompt(options, stdin)
+      described_class.new(
+        options: { dry_run: false, execute: true }.merge(options),
+        stdout: stdout, stderr: stderr, stdin: stdin, loader: loader, guard: approving_guard
+      ).send(:prompt_for_long_run, estimate)
+    end
+
+    it "asks on a terminal, and a refusal means no run" do
+      tty = StringIO.new("n\n")
+      def tty.tty? = true
+
+      expect(prompt({}, tty)).to be(false)
+      expect(stdout.string).to include("Continue?")
+    end
+
+    it "proceeds without asking when the flag says so" do
+      tty = StringIO.new
+      def tty.tty? = true
+
+      expect(prompt({ accept_long_run: true }, tty)).to be(true)
+      expect(stdout.string).to include("--accept-long-run")
+      expect(stdout.string).not_to include("Continue?")
+    end
+
+    # The pre-existing escape hatch, kept: this is the behaviour the flag exists to
+    # make reachable WITHOUT stdin surgery, not a behaviour it replaces.
+    it "still proceeds with a warning when stdin is not a terminal" do
+      expect(prompt({}, StringIO.new)).to be(true)
+      expect(stdout.string).to include("not a terminal")
+    end
+
+    it "names the flag when someone declines, so the next attempt has a way through" do
+      tty = StringIO.new("n\n")
+      def tty.tty? = true
+
+      prompt({}, tty)
+
+      expect(stderr.string).to include("--accept-long-run")
+    end
+  end
 end

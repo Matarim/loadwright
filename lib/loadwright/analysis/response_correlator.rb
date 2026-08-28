@@ -158,10 +158,11 @@ module Loadwright
       # while the report printed identical query counts across a hundredfold change in
       # seeded rows a few lines below.
       def findings(observations:, duplicates: {}, tables_queried: [], response_keys: [], max_bytes: nil,
-                   scaling_observations: nil)
+                   scaling_observations: nil, duplicate_context: {})
         results = []
 
-        results.concat(n_plus_one_findings(observations, duplicates, scaling_observations || observations))
+        results.concat(n_plus_one_findings(observations, duplicates, scaling_observations || observations,
+                                           duplicate_context))
         results.concat(pagination_findings(observations, max_bytes))
         results.concat(over_fetch_findings(tables_queried, response_keys))
 
@@ -191,12 +192,12 @@ module Loadwright
         }
       end
 
-      def to_h(observations, duplicates = {})
+      def to_h(observations, duplicates = {}, duplicate_context = {})
         {
           queries_per_returned_record: measurement_to_h(queries_per_record(observations)),
           n_plus_one_slope: measurement_to_h(n_plus_one_slope(observations)),
           payload_growth_correlation: measurement_to_h(payload_growth(observations)),
-          sub_threshold_duplicates: duplicate_summary(duplicates),
+          sub_threshold_duplicates: duplicate_summary(duplicates, duplicate_context),
           observations: observations.map(&:to_h)
         }.compact
       end
@@ -245,20 +246,24 @@ module Loadwright
       #
       # nil rather than an empty hash when there is nothing to say, so `.compact` drops
       # the key and a genuinely duplicate-free endpoint renders no row.
-      def duplicate_summary(duplicates)
+      def duplicate_summary(duplicates, duplicate_context = {})
         worst = duplicates.max_by { |_, occurrences| occurrences.length }
         return nil if worst.nil?
         return nil if worst.last.length >= duplicate_threshold
+
+        context = duplicate_context[worst.first] || {}
 
         {
           fingerprint: worst.first,
           occurrences: worst.last.length,
           threshold: duplicate_threshold,
+          queries_in_request: context[:queries],
+          cell: context[:cell],
           note: "repeated queries were observed but not reported as a finding: the most repeated ran " \
-                "#{worst.last.length} time(s) in a single request, under the reporting threshold of " \
-                "#{duplicate_threshold}. Not nothing, and not a finding -- lower " \
-                "n_plus_one_duplicate_threshold to see it as one."
-        }
+                "#{worst.last.length} time(s) in a single request#{denominator_detail(context)}, under " \
+                "the reporting threshold of #{duplicate_threshold}. Not nothing, and not a finding -- " \
+                "lower n_plus_one_duplicate_threshold to see it as one."
+        }.compact
       end
 
       private
@@ -267,7 +272,8 @@ module Loadwright
         measurement.available? ? { value: measurement.value } : { unavailable: measurement.reason }
       end
 
-      def n_plus_one_findings(observations, duplicates, scaling_observations = observations)
+      def n_plus_one_findings(observations, duplicates, scaling_observations = observations,
+                              duplicate_context = {})
         results = []
 
         # Signal 1 — pattern matching: duplicate fingerprints within one request, the
@@ -275,13 +281,16 @@ module Loadwright
         worst = duplicates.max_by { |_, occurrences| occurrences.length }
         if worst && worst.last.length >= duplicate_threshold
           scaling = repeat_scaling(scaling_observations)
+          context = duplicate_context[worst.first] || {}
           results << Finding.new(
             kind: :n_plus_one_pattern_match,
             confidence: :high,
-            detail: "the same query ran #{worst.last.length} times in a single request: #{worst.first}" \
+            detail: "the same query ran #{worst.last.length} times in a single request" \
+                    "#{denominator_detail(context)}: #{worst.first}" \
                     "#{FIXED_REPEAT_DETAIL if scaling == :fixed}" \
                     "#{SEEDED_FIXED_REPEAT_DETAIL if scaling == :fixed_by_seed_scale}",
             evidence: { fingerprint: worst.first, occurrences: worst.last.length,
+                        queries_in_request: context[:queries], cell: context[:cell],
                         scaling: scaling == :unknown ? nil : scaling,
                         call_site: worst.last.first[:call_site],
                         resolver: worst.last.first[:field_path] }.compact,
@@ -312,6 +321,19 @@ module Loadwright
         # See response-analysis.md, "Outcome state is derived from coverage".
 
         results
+      end
+
+      # THE DENOMINATOR, NEXT TO THE NUMBER. A repeat count is only checkable against
+      # the query count of the request it came from, and for five releases the two were
+      # printed in different parts of the report -- a finding reading "ran 12 times in a
+      # single request" sat above a cell table reporting 8 queries per request, and the
+      # contradiction went unnoticed by everyone including us. Nothing enforces the
+      # invariant here; putting the two numbers in one sentence is what lets a reader
+      # enforce it.
+      def denominator_detail(context)
+        return "" if context[:queries].nil?
+
+        " (of #{context[:queries].round} queries in that request, #{context[:cell]})"
       end
 
       # :fixed / :scaling / :unknown — what the run OBSERVED about how the repeat

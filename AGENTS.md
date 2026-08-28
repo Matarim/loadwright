@@ -683,6 +683,12 @@ dry_run:        bundle exec loadwright run --dry-run
 execute:        bundle exec loadwright run --execute
 single_path:    bundle exec loadwright run --execute --only '/api/v1/orders'
 record_specs:   bundle exec loadwright record --specs spec/requests
+# --specs is REPEATABLE and accumulates. Omit it entirely to use
+# integration_spec_paths from the app's initializer, which `record` now reads
+# AFTER booting -- before 0.0.9 it read the setting before the initializer had
+# run, so the setting was always empty and the command refused while naming it.
+record_from_config: bundle exec loadwright record
+scripted_long_run:  bundle exec loadwright run --execute --accept-long-run
 list_runs:      bundle exec loadwright runs list
 set_baseline:   bundle exec loadwright baseline set <run_id>
 compare:        bundle exec loadwright compare <run_a> <run_b>
@@ -780,6 +786,34 @@ COMP-01:
     identical runs, so a latency delta must clear BOTH regression_threshold_pct
     AND the measured noise floor. Anything below is labelled "within noise" —
     shown, never called a regression.
+
+COMP-01b:
+  rule: >
+    Latency-only regressions that are one-directional across unrelated endpoints,
+    with no query-count movement anywhere, carry a machine-noise note. SAY IT.
+  detail: >
+    The verdict stays REGRESSED and the exit code is unchanged -- this is a
+    heuristic, and one that silently downgraded a regression would be the same
+    error one direction over. But the shape is diagnostic: a code change moves
+    query counts, or moves latency on the endpoints that changed. It does not push
+    p50 up by a similar amount on every endpoint at once, including endpoints that
+    touch no database.
+  what_to_tell_the_user: >
+    Quote the note. Then say the two things that resolve it: re-run and see whether
+    it reproduces, and `baseline set` on this commit so the noise floor is MEASURED
+    rather than assumed. Do NOT tell them to raise regression_threshold_pct.
+  never: >
+    Do not present a run carrying this note as a clean comparison. It is a
+    regression report with a caveat, not a pass.
+
+COMP-01c:
+  rule: >
+    `compare` measures a noise floor from history when no baseline stores one.
+  detail: >
+    It looks for a third run on the same commit and config fingerprint -- never the
+    two runs being compared, which would be circular. A stored baseline floor always
+    wins. When it measures one it says so on stdout; when it cannot, the bar is
+    regression_threshold_pct alone and that is a guess about this machine.
 
 COMP-02:
   rule: The comparability gate refuses rather than misleads, and names the dimension.
@@ -1276,6 +1310,39 @@ DIAG-34:
     saying plainly what it does: real writes against a real database, on every request
     of every cell. It is a deliberate decision, not a coverage tweak.
 
+DIAG-36:
+  symptom: >
+    "loadwright record says nothing to record from, but integration_spec_paths IS
+    set in my initializer"
+  cause: >
+    Before 0.0.9 `record` resolved the spec list BEFORE booting the app, so it read
+    the setting off a Configuration the initializer had not run against yet. The list
+    was always empty on exactly the apps that configured it correctly, and the error
+    message named the setting it had just failed to read.
+  fix: >
+    Upgrade to 0.0.9+. On an older version, pass the paths explicitly: --specs is
+    repeatable and accumulates, so one flag per directory works.
+  do_not: >
+    Do not tell the user to check integration_spec_paths. On an affected version the
+    setting is correct and reading it is what failed.
+
+DIAG-37:
+  symptom: >
+    "did loadwright check my responses against the OpenAPI schema?" /
+    "require_schema_valid_response is on and the report says nothing about schemas"
+  cause: >
+    Schema validity is part of the VALIDITY GATE, not a finding class, so it never
+    appeared in the coverage `checked:` line. Before 0.0.9 the report said nothing at
+    all, and a validated response looked identical to one that was never validated.
+  fix: >
+    0.0.9+ discloses it per endpoint -- "response schema: checked" or "not checked
+    (none declared)" -- on the endpoint section and on the clean list's one line.
+  say_this: >
+    The check only runs where a schema EXISTS for that operation, and only an OpenAPI
+    document supplies one. A recording cannot. An app discovering purely from
+    recordings has this unchecked on every endpoint, which is a coverage fact worth
+    stating rather than a setting to change.
+
 DIAG-35:
   symptom: >
     "an endpoint is healthy but I know it issues a duplicate query" / "why is a
@@ -1315,6 +1382,10 @@ DIAG-33:
     asked the expensive question, looks exactly like a fix and is not one.
     Note that the answer can also be honest: a repeat count that fell from 3 to 2 is
     below the reporting threshold and the finding is correctly gone. Say which.
+    From 0.0.9 the finding prints its DENOMINATOR -- "ran 12 times in a single request
+    (of 73 queries in that request, <cell>)" -- so the count can be checked against the
+    cell table on the same page. A repeat that exceeds its own request's query count is
+    a bug in this tool; report it.
 
 DIAG-31:
   symptom: >

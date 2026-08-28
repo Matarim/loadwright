@@ -23,13 +23,14 @@ module Loadwright
       attr_reader :config, :started_at, :finished_at, :cells, :outcomes, :correlations, :request_shapes,
                   :breaker, :guard, :seeder, :identities, :warnings, :aborted_reason,
                   :safety_decision, :containment, :discovery, :explain, :latency,
-                  :time_breakdowns, :cold_warm, :pool_sizing, :traffic, :containment_disclosure
+                  :time_breakdowns, :cold_warm, :pool_sizing, :traffic, :containment_disclosure,
+                  :schema_validation
 
       def initialize(config:, cells:, outcomes:, context: nil, started_at: nil, finished_at: nil,
                      correlations: {}, request_shapes: {}, breaker: nil, guard: nil, seeder: nil, identities: nil,
                      warnings: [], aborted_reason: nil, safety_decision: nil, containment: nil,
                      discovery: nil, explain: {}, latency: {}, time_breakdowns: {}, cold_warm: {},
-                     pool_sizing: nil, traffic: nil, containment_disclosure: nil)
+                     pool_sizing: nil, traffic: nil, containment_disclosure: nil, schema_validation: {})
         @config = config
         @context = context
         @started_at = started_at
@@ -58,6 +59,21 @@ module Loadwright
         @pool_sizing = pool_sizing
         @traffic = traffic
         @containment_disclosure = containment_disclosure
+        # WHETHER THE RESPONSE WAS CHECKED AGAINST ITS DECLARED SCHEMA, per endpoint.
+        # require_schema_valid_response defaults to true and the check produced no
+        # output at all -- neither in the checked half of the coverage line nor in the
+        # not-checked half -- so a reader could not tell a validated response from one
+        # that was never validated because the operation declares no schema. For a
+        # setting whose whole purpose is to stop an endpoint being called healthy on a
+        # response that is not what it claims, silence is the wrong output.
+        #
+        # NOT a Coverage class. Schema validity is part of the VALIDITY GATE, not a
+        # performance finding class: a violation makes the endpoint inconclusive
+        # (:schema_invalid) rather than producing a finding, and adding it to
+        # Coverage::CLASSES would make every endpoint without a declared schema
+        # uncovered -- the inconclusive flooding the three-state model exists to
+        # prevent. It is a disclosure, and it renders as one.
+        @schema_validation = schema_validation
       end
 
       def duration_seconds
@@ -213,6 +229,7 @@ module Loadwright
           findings: outcome.findings.map { |finding| finding.respond_to?(:to_h) ? finding.to_h : finding },
           correlation: correlations[key],
           request: request_shapes[key],
+          schema: schema_validation[key],
           # SUCCEEDED HERE, FAILED THERE. One verdict on the header while four of six
           # cells answered 200 makes a reader open the cell table to find out what
           # actually happened. The counts belong next to the verdict.

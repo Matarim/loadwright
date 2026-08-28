@@ -255,6 +255,10 @@ module Loadwright
       # cannot prompt -- that one is a safety decision about irreversible harm, this
       # one is a courtesy about someone's afternoon. Refusing here would break every
       # piped or scripted invocation of a tool whose whole point is to be run locally.
+      #
+      # `--accept-long-run` answers it explicitly, so a script with a terminal attached
+      # does not have to detach stdin -- reshaping the process to answer one question,
+      # and changing how every other prompt in the run behaves as a side effect.
       def confirm_duration!(runner, endpoints)
         return true if dry_run?
 
@@ -276,6 +280,12 @@ module Loadwright
       end
 
       def prompt_for_long_run(estimate)
+        if @options[:accept_long_run]
+          @stdout.puts "loadwright: estimated #{estimate.estimated_minutes} minute(s), accepted with " \
+                       "--accept-long-run."
+          return true
+        end
+
         unless @stdin.respond_to?(:tty?) && @stdin.tty?
           @stdout.puts "loadwright: this run is estimated at #{estimate.estimated_minutes} minute(s), over the " \
                        "#{config.long_run_confirmation_threshold_minutes}-minute confirmation threshold. " \
@@ -290,7 +300,8 @@ module Loadwright
         return true if answer.to_s.strip.casecmp("y").zero?
 
         @stderr.puts "loadwright: not running. Lower scale_factors, concurrency_levels, or " \
-                     "requests_per_endpoint_per_level, or raise long_run_confirmation_threshold_minutes."
+                     "requests_per_endpoint_per_level, raise long_run_confirmation_threshold_minutes, " \
+                     "or pass --accept-long-run."
         false
       end
 

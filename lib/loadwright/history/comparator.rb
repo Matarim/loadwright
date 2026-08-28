@@ -149,6 +149,47 @@ module Loadwright
         # two facts, not zero.
         def regressed? = new_findings.any? || regressions.any?
 
+        # THE SIGNATURE OF A BUSIER MACHINE, NAMED RATHER THAN LEFT TO THE READER.
+        #
+        # A real slowdown moves query counts, or moves latency on the endpoints that
+        # changed. What it does not do is push p50 up by a similar amount on every
+        # endpoint at once, including ones that touch no database -- that is the
+        # laptop, and the tool's own rule already says query deltas are the primary
+        # signal because they are near-deterministic and latency is not.
+        #
+        # This does NOT change the verdict or the exit code. It is a heuristic, and a
+        # heuristic that silently downgraded a regression would be the same class of
+        # error as reporting one that is not there. It says what the shape looks like
+        # and leaves the call to the reader -- which is what was missing: the evidence
+        # was all present and nothing assembled it into a sentence.
+        MACHINE_NOISE_MINIMUM_ENDPOINTS = 3
+
+        def machine_noise_signature?
+          return false if new_findings.any?
+
+          # The metric reads "p50 latency (<cell shape>)", so this matches on the word
+          # rather than a prefix -- a prefix check silently matched nothing, which would
+          # have made this diagnosis dead code that always answered false.
+          latency = regressions.select { |delta| delta.metric.to_s.include?("latency") }
+          return false unless latency.length == regressions.length
+          return false if latency.empty?
+
+          latency.map(&:endpoint).uniq.length >= MACHINE_NOISE_MINIMUM_ENDPOINTS &&
+            latency.all? { |delta| delta.change.to_f.positive? }
+        end
+
+        def machine_noise_note
+          return nil unless machine_noise_signature?
+
+          endpoints = regressions.map(&:endpoint).uniq.length
+
+          "Every regression here is latency, every one is in the same direction, and they are spread " \
+            "across #{endpoints} unrelated endpoints with no query-count movement anywhere. That is the " \
+            "signature of a busier machine rather than a code change. Query counts are the " \
+            "near-deterministic signal; treat these as suspect until a re-run reproduces them, and set " \
+            "a baseline on this commit so the noise floor is measured rather than assumed."
+        end
+
         def refusal
           return nil if comparable?
 
@@ -166,6 +207,7 @@ module Loadwright
             changed_findings: changed_findings,
             regressions: regressions.map(&:to_h),
             within_noise: within_noise.map(&:to_h),
+            machine_noise_note: machine_noise_note,
             transitions: transitions.map(&:to_h),
             endpoints_added: endpoints_added,
             endpoints_removed: endpoints_removed,

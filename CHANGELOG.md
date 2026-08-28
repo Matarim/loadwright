@@ -5,6 +5,79 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.9] — 2026-08-28
+
+### Fixed
+
+- **`record` read `integration_spec_paths` before booting the application, so it was
+  always empty.** The setting lives in `config/initializers/loadwright.rb`, which
+  only exists once the app has booted — and the command resolved its spec list
+  first. Every app that configured it the way the generated initializer says to got
+  a refusal, naming the very setting the command had just failed to read. Someone
+  following that message goes and checks a setting that was correct all along.
+
+  `run` never had this, because it reads config after booting; that is why the same
+  setting drove discovery correctly in the very next command. `record` now boots
+  first. `--specs` still wins when passed, and blank entries no longer count as
+  paths.
+
+- **`compare` could only use a measured noise floor if a baseline happened to store
+  one.** `baseline set` measures this machine's run-to-run spread from a second run
+  on the same commit; `compare` read it from the stored baseline and from nowhere
+  else. So a plain `compare <a> <b>` fell back to `regression_threshold_pct` alone —
+  the threshold this project's own documentation calls a guess — and reported a
+  laptop being busier in the afternoon as a regression on ~30 unrelated endpoints.
+
+  It now measures one from history when no baseline stores it, and says so. **Never
+  from the two runs under comparison**, which would be circular: the floor is the
+  maximum spread across the pair it is measured from, so using it on that same pair
+  defines every one of that pair's own deltas to be noise.
+
+### Added
+
+- **A regression report says when its evidence has the shape of a busier machine.**
+  Every regression being latency, all in the same direction, spread across unrelated
+  endpoints including ones that touch no database, with no query-count movement
+  anywhere, is the laptop rather than the code — and the tool's own rule already says
+  query deltas are the primary signal because they are near-deterministic.
+
+  The verdict stays **REGRESSED** and the exit code is unchanged. A comparison that
+  quietly decided a regression was noise would be the same class of error one
+  direction over; what was missing is not a softer word but the sentence saying what
+  the shape looks like. The evidence was all present and nothing assembled it.
+
+- **Every endpoint says whether its response was checked against a declared schema.**
+  `require_schema_valid_response` defaults to true and the report contained the word
+  "schema" nowhere — not in the checked half of the coverage line, not in the
+  not-checked half. A reader could not tell a validated response from one that was
+  never validated because the operation declares no schema, which is precisely the
+  distinction the setting exists to make.
+
+  It renders as its own line, and on the one line a clean endpoint gets. It is
+  **not** a `Coverage` class: schema validity belongs to the validity gate, a
+  violation makes the endpoint `inconclusive` rather than producing a finding, and
+  adding it to the coverage map would mark every endpoint without a declared schema
+  uncovered — the `inconclusive` flooding the three-state model exists to prevent.
+
+  Only an OpenAPI document supplies a schema; a recording cannot. An app discovering
+  purely from recordings now sees that stated on every endpoint.
+
+- **An N+1 repeat count prints its denominator.** "the same query ran 12 times in a
+  single request (of 73 queries in that request, seed_scale scale=10)". The invariant
+  — a repeat cannot exceed its own request's query count — has been specced since
+  0.0.5, but for five releases the two numbers were printed in different parts of the
+  report, and a finding reading "ran 12 times" sat above a cell table reporting 8
+  queries per request without anyone, us included, seeing the contradiction. Nothing
+  here enforces the invariant; putting both numbers in one sentence is what lets a
+  reader enforce it. Sub-threshold observations carry it too.
+
+- **`--accept-long-run`.** The >10-minute confirmation already proceeds on a non-TTY
+  — it is a courtesy about someone's afternoon, not a safety decision about
+  irreversible harm — but reaching that path meant detaching stdin, reshaping the
+  process to answer one question and changing how every other prompt behaves as a
+  side effect. `record` got `--accept-database-writes` in 0.0.5; this is the
+  equivalent for the cost prompt.
+
 ## [0.0.8] — 2026-08-27
 
 ### Fixed

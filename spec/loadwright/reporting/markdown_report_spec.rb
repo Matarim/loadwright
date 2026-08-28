@@ -33,6 +33,66 @@ RSpec.describe Loadwright::Reporting::MarkdownReport do
     end
   end
 
+  # A SETTING WHOSE WHOLE PURPOSE IS TO STOP AN ENDPOINT BEING CALLED HEALTHY ON A
+  # RESPONSE THAT IS NOT WHAT IT CLAIMS MUST NOT BE SILENT ABOUT WHETHER IT RAN.
+  #
+  # require_schema_valid_response defaults to true, and the report contained the
+  # string "schema" nowhere: not in the checked half of the coverage line, not in the
+  # not-checked half. A reader could not tell a validated response from one that was
+  # never validated because the operation declares no schema.
+  describe "response schema validation" do
+    def render_with(schema)
+      render(outcomes: [build_outcome(endpoint: build_endpoint(path: "/widgets/1"), state: :healthy)],
+             schema_validation: { "GET /widgets/1" => schema })
+    end
+
+    # A healthy endpoint gets one line in the appendix and nothing else, and it is the
+    # line a reader trusts most -- so the answer has to fit on it.
+    it "says so on a clean endpoint's one line when the response was checked" do
+      text = render_with({ state: :validated, note: "validated against the declared response schema" })
+
+      expect(text).to include("response schema: checked")
+    end
+
+    # The distinction that matters. "Not checked" and "checked and fine" are the two
+    # things a reader is trying to tell apart, and silence looked like both.
+    it "says a clean endpoint's response was not checked, rather than saying nothing" do
+      text = render_with({ state: :no_schema, note: "no response schema is declared for this operation" })
+
+      expect(text).to include("response schema: not checked (none declared)")
+    end
+
+    it "gives a measured endpoint the full sentence, with the reason" do
+      text = render(
+        outcomes: [build_outcome(endpoint: build_endpoint(path: "/widgets/1"), state: :has_findings,
+                                 findings: [build_finding])],
+        schema_validation: { "GET /widgets/1" => { state: :no_schema,
+                                                   note: "no response schema is declared for this operation" } }
+      )
+
+      expect(text).to include("Response schema: not checked")
+      expect(text).to include("no response schema is declared")
+    end
+
+    it "says when the response did not match" do
+      text = render(
+        outcomes: [build_outcome(endpoint: build_endpoint(path: "/widgets/1"), state: :has_findings,
+                                 findings: [build_finding])],
+        schema_validation: { "GET /widgets/1" => { state: :violations,
+                                                   note: "the response did not match its declared schema" } }
+      )
+
+      expect(text).to include("Response schema: violations found")
+    end
+
+    # An endpoint discovery skipped was never requested, so there is nothing to say
+    # about its response -- and an empty row a reader has to interpret is worse than
+    # no row.
+    it "renders nothing for an endpoint that was never exercised" do
+      expect(render).not_to include("Response schema")
+    end
+  end
+
   describe "tables" do
     it "escapes a pipe so a detail string cannot silently break the table" do
       finding = build_finding(detail: "a | b")

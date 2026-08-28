@@ -205,6 +205,7 @@ module Loadwright
         coverage = endpoint.dig(:coverage, :description)
         parts << "\n_#{coverage}_" unless coverage.to_s.empty?
 
+        parts << schema_block(endpoint)
         parts << sub_threshold_block(endpoint)
         parts << request_block(endpoint)
         parts << breakdown_block(endpoint)
@@ -263,7 +264,9 @@ module Loadwright
         return "" if clean.empty?
 
         (["## Clean endpoints (#{clean.length})", ""] +
-          clean.map { |endpoint| "- `#{endpoint[:endpoint]}` — #{endpoint.dig(:coverage, :description)}" })
+          clean.map do |endpoint|
+            "- `#{endpoint[:endpoint]}` — #{endpoint.dig(:coverage, :description)}#{schema_clause(endpoint)}"
+          end)
           .join("\n")
       end
 
@@ -348,12 +351,48 @@ module Loadwright
 
       # NOT A FINDING, AND NOT INVISIBLE EITHER. An endpoint that issued the same query
       # twice per request used to look identical to one that issued it once.
+      # SCHEMA VALIDITY IS NOT IN THE COVERAGE LINE, so it gets its own. It belongs to
+      # the validity gate rather than to a finding class, and a setting whose whole
+      # purpose is to stop an endpoint being called healthy on a response that is not
+      # what it claims must not be silent about whether it ran.
+      SCHEMA_LABELS = {
+        "validated" => "Response schema: checked, no violations.",
+        "no_schema" => "Response schema: not checked.",
+        "violations" => "Response schema: violations found."
+      }.freeze
+
+      # A CLEAN ENDPOINT GETS ONE LINE, and it is the line a reader trusts most, so the
+      # schema answer has to fit on it. This is where the silence was loudest: an
+      # endpoint declared healthy, its coverage line naming five checks, and no way to
+      # tell whether the sixth ran.
+      SCHEMA_CLAUSES = {
+        "validated" => " — response schema: checked",
+        "no_schema" => " — response schema: not checked (none declared)",
+        "violations" => " — response schema: violations found"
+      }.freeze
+
+      def schema_clause(endpoint)
+        state = endpoint.dig(:schema, :state)
+        return "" if state.nil?
+
+        SCHEMA_CLAUSES.fetch(state.to_s, "")
+      end
+
+      def schema_block(endpoint)
+        schema = endpoint[:schema]
+        return nil if schema.nil?
+
+        "\n_#{SCHEMA_LABELS.fetch(schema[:state].to_s, 'Response schema:')} #{schema[:note]}._"
+      end
+
       def sub_threshold_block(endpoint)
         summary = endpoint.dig(:correlation, :sub_threshold_duplicates)
         return nil if summary.nil?
 
+        denominator = summary[:queries_in_request] ? " of #{summary[:queries_in_request].round}" : ""
+
         "\n_Repeated queries seen, below the finding threshold: the most repeated ran " \
-          "#{summary[:occurrences]}x in one request (threshold #{summary[:threshold]})._"
+          "#{summary[:occurrences]}x in one request#{denominator} (threshold #{summary[:threshold]})._"
       end
 
       def request_block(endpoint)

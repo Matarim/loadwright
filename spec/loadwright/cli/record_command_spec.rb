@@ -216,4 +216,65 @@ RSpec.describe Loadwright::CLI::RecordCommand do
       Loadwright.reset_configuration!
     end
   end
+
+  # THE SETTING LIVES IN AN INITIALIZER, AND AN INITIALIZER ONLY EXISTS ONCE THE APP
+  # HAS BOOTED. Reading integration_spec_paths before `load!` read it off a
+  # Configuration nothing had configured, so on every app that sets it the way the
+  # generated initializer says to, the list was empty and the command refused --
+  # pointing at the very setting it had just failed to read.
+  describe "resolving which specs to record" do
+    # The loader is what stands in for booting; the config is only populated inside it.
+    # An example that set the value up front would pass against the old ordering too.
+    let(:booting_loader) do
+      instance_double(Loadwright::CLI::AppLoader).tap do |loader|
+        allow(loader).to receive(:load!) do
+          Loadwright.configuration.integration_spec_paths = ["spec/requests"]
+          false
+        end
+      end
+    end
+
+    def command_without_specs(loader:)
+      described_class.new(options: {}, stdout: stdout, stderr: stderr, loader: loader,
+                          runner: ->(_paths) { 0 })
+    end
+
+    after { Loadwright.reset_configuration! }
+
+    it "reads integration_spec_paths set by the app's initializer" do
+      command_without_specs(loader: booting_loader).call
+
+      expect(stdout.string).to include("recording requests from spec/requests")
+      expect(stderr.string).not_to include("nothing to record from")
+    end
+
+    # The premise is STATED, not inherited. integration_spec_paths has a lazy default
+    # that points at conventional locations, so in a repository that happens to have
+    # one this example would otherwise pass or fail on what is on disk.
+    it "still refuses when neither --specs nor the setting supplies a path" do
+      empty = instance_double(Loadwright::CLI::AppLoader).tap do |l|
+        allow(l).to receive(:load!) do
+          Loadwright.configuration.integration_spec_paths = []
+          false
+        end
+      end
+
+      status = command_without_specs(loader: empty).call
+
+      expect(status).to eq(described_class::REFUSED)
+      expect(stderr.string).to include("nothing to record from")
+    end
+
+    # A path of "" is not a path. It used to survive `compact` and be handed to RSpec.
+    it "treats blank entries as no path at all" do
+      blank = instance_double(Loadwright::CLI::AppLoader).tap do |l|
+        allow(l).to receive(:load!) do
+          Loadwright.configuration.integration_spec_paths = ["  "]
+          false
+        end
+      end
+
+      expect(command_without_specs(loader: blank).call).to eq(described_class::REFUSED)
+    end
+  end
 end

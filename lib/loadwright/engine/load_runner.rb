@@ -48,6 +48,10 @@ module Loadwright
       # One cell of the matrix. Records the concurrency it ACTUALLY ran at, which may
       # be lower than requested after a guard step-down — a report must never present
       # a stepped-down result as though it ran at the requested level.
+      NO_SCHEMA_NOTE = "not validated: no response schema is declared for this operation in the " \
+                       "discovery source. An OpenAPI document is what supplies one; a recording " \
+                       "cannot."
+
       Cell = Struct.new(
         :endpoint_key, :sweep, :scale_factor, :page_size, :requested_concurrency,
         :actual_concurrency, :requests, :latencies, :query_counts, :record_counts,
@@ -863,6 +867,7 @@ module Loadwright
           outcomes: @outcomes,
           correlations: @correlations,
           request_shapes: @request_shapes,
+          schema_validation: @schema_validation,
           breaker: @breaker,
           guard: @guard,
           seeder: @seeder,
@@ -1003,6 +1008,11 @@ module Loadwright
 
         return skipped_outcome(endpoint) if cells.empty?
 
+        # Recorded for EVERY exercised endpoint, whatever the outcome -- including the
+        # inconclusive ones below, which is where a reader most wants to know whether
+        # the schema was consulted.
+        @schema_validation[key] = schema_validation_for(verdicts)
+
         # The validity gate comes first, always. No performance verdict is attached to
         # a response that did not prove it did the work.
         invalid = verdicts.find { |verdict| !verdict.valid? }
@@ -1028,7 +1038,10 @@ module Loadwright
         return inconclusive(endpoint, :quarantined, quarantine_detail(key)) if @guard&.quarantined?(key)
 
         findings = findings_for(endpoint, cells)
-        @correlations[key] = correlator.to_h(observations_for(cells), duplicates_for(cells))
+        context = duplicate_context_for(cells)
+        @correlations[key] = correlator.to_h(observations_for(cells),
+                                             context.transform_values { |entry| entry[:occurrences] },
+                                             context)
 
         # The state comes from finding-class COVERAGE, not from how many signals
         # happened to produce a number. EndpointOutcome.derive owns the precedence so
@@ -1118,6 +1131,39 @@ module Loadwright
                                               query[:duration_ms].to_f > existing[:duration_ms].to_f
       end
 
+      # WAS THIS RESPONSE CHECKED AGAINST ITS DECLARED SCHEMA, AND IF NOT, WHY NOT.
+      #
+      # Derived from what the validator actually did rather than from configuration,
+      # because the two answer different questions. `require_schema_valid_response`
+      # says whether a violation invalidates the response; it does not say whether
+      # there was a schema to check against. An endpoint whose operation declares no
+      # response schema is not validated no matter how the setting is left, and
+      # reporting the setting would tell a reader the check ran when it did not.
+      #
+      # Verdict#schema_errors is the ground truth and is deliberately tri-state:
+      # nil (no schema for this operation), [] (checked, clean), non-empty (checked,
+      # violations). The same distinction Measurement makes, for the same reason.
+      def schema_validation_for(verdicts)
+        errors = verdicts.map(&:schema_errors)
+        return { state: :no_schema, note: NO_SCHEMA_NOTE } if errors.all?(&:nil?)
+
+        violations = errors.compact.reject(&:empty?)
+        return { state: :validated, note: "validated against the declared response schema" } if violations.empty?
+
+        # No error text here. The violations already reach the report through the
+        # endpoint's inconclusive detail, and duplicating raw schema messages into a
+        # second field puts response-derived strings through the redactor twice for no
+        # extra signal.
+        { state: :violations, checked: errors.compact.length, note: violation_note }
+      end
+
+      def violation_note
+        return "the response did not match its declared schema" if @config.require_schema_valid_response
+
+        "the response did not match its declared schema, and require_schema_valid_response is false, " \
+          "so this did not affect the endpoint's verdict"
+      end
+
       def findings_for(endpoint, cells)
         # The two sweeps answer different questions, so their observations are fed to
         # the correlator separately — the whole point of holding one axis fixed in each.
@@ -1137,16 +1183,12 @@ module Loadwright
         # report with no change to the app, corrupted run-over-run comparison, and made
         # a fixed repeat look like one that scales -- arguing against the very
         # classification the fixed/scaling split exists to make.
-        duplicates = cells.each_with_object({}) do |cell, out|
-          Array(cell.duplicates).each do |fingerprint, occurrences|
-            existing = out[fingerprint]
-            out[fingerprint] = occurrences if existing.nil? || occurrences.length > existing.length
-          end
-        end
+        context = duplicate_context_for(cells)
 
         findings = correlator.findings(
           observations: observations_for(page_size_cells.empty? ? seed_scale_cells : page_size_cells),
-          duplicates: duplicates,
+          duplicates: context.transform_values { |entry| entry[:occurrences] },
+          duplicate_context: context,
           # EVERY cell, for the fixed/scaling question only. The slope needs one sweep
           # at a time; the repeat classifier needs whichever axis actually moved, and
           # on an API of single-record endpoints the seeded scale is the only one that
@@ -1229,13 +1271,29 @@ module Loadwright
       end
 
       # The worst single request across cells, same rule the finding itself uses.
-      def duplicates_for(cells)
+      # THE WORST SINGLE REQUEST, AND WHICH CELL IT CAME FROM.
+      #
+      # The merge takes the max per fingerprint rather than concatenating, because a
+      # repeat count is a property of ONE request. Carrying the winning cell alongside
+      # it is what makes the number self-checkable: "ran 12 times in a single request"
+      # sat next to a cell table reporting 8 queries per request for five releases, and
+      # nobody could see the contradiction because the two numbers were never printed
+      # together. The invariant (a repeat cannot exceed that request's query count) is
+      # specced; this is the same invariant made visible to a reader.
+      def duplicate_context_for(cells)
         cells.each_with_object({}) do |cell, out|
           Array(cell.duplicates).each do |fingerprint, occurrences|
             existing = out[fingerprint]
-            out[fingerprint] = occurrences if existing.nil? || occurrences.length > existing.length
+            next if existing && existing[:occurrences].length >= occurrences.length
+
+            out[fingerprint] = { occurrences: occurrences, cell: cell_label(cell),
+                                 queries: cell.median_queries }
           end
         end
+      end
+
+      def duplicates_for(cells)
+        duplicate_context_for(cells).transform_values { |entry| entry[:occurrences] }
       end
 
       def observations_for(cells)
@@ -1410,6 +1468,7 @@ module Loadwright
         @cells = []
         @outcomes = []
         @verdicts = {}
+        @schema_validation = {}
         @correlations = {}
         # Slowest exemplar per (endpoint, fingerprint). Bounded by the number of
         # distinct query shapes rather than by request count, so a long run does not

@@ -441,4 +441,54 @@ RSpec.describe Loadwright::Analysis::ResponseCorrelator do
       expect(correlator.findings(observations: [], duplicates: twice)).to be_empty
     end
   end
+
+  # THE NUMBER NEXT TO ITS DENOMINATOR.
+  #
+  # A repeat count is only checkable against the query count of the request it came
+  # from, and for five releases the two were printed in different parts of the report:
+  # a finding reading "the same query ran 12 times in a single request" sat above a
+  # cell table reporting 8 queries per request, and nobody -- us included -- saw the
+  # contradiction. Nothing here enforces the invariant; putting both numbers in one
+  # sentence is what lets a reader enforce it.
+  describe "the repeat count and the request it came from" do
+    let(:duplicates) { { "SELECT 1" => Array.new(4) { { fingerprint: "SELECT 1" } } } }
+    let(:context) { { "SELECT 1" => { occurrences: duplicates["SELECT 1"], cell: "seed_scale scale=10", queries: 73.0 } } }
+
+    it "prints the queries that request issued, and which cell it was" do
+      finding = correlator.findings(observations: [], duplicates: duplicates,
+                                    duplicate_context: context).first
+
+      expect(finding.detail).to include("ran 4 times in a single request")
+      expect(finding.detail).to include("of 73 queries in that request")
+      expect(finding.detail).to include("seed_scale scale=10")
+    end
+
+    it "carries both numbers as evidence, not only as prose" do
+      finding = correlator.findings(observations: [], duplicates: duplicates,
+                                    duplicate_context: context).first
+
+      expect(finding.evidence[:occurrences]).to eq(4)
+      expect(finding.evidence[:queries_in_request]).to eq(73.0)
+    end
+
+    # An older persisted run, or a cell that recorded no query counts. Saying nothing
+    # is right; inventing a denominator would be worse than omitting one.
+    it "says nothing about a denominator it does not have" do
+      finding = correlator.findings(observations: [], duplicates: duplicates).first
+
+      expect(finding.detail).to include("ran 4 times in a single request")
+      expect(finding.detail).not_to include("queries in that request")
+      expect(finding.evidence).not_to have_key(:queries_in_request)
+    end
+
+    it "gives a sub-threshold observation the same denominator" do
+      twice = { "SELECT 1" => Array.new(2) { { fingerprint: "SELECT 1" } } }
+      ctx = { "SELECT 1" => { occurrences: twice["SELECT 1"], cell: "page_size scale=1", queries: 19.0 } }
+
+      summary = correlator.to_h([], twice, ctx)[:sub_threshold_duplicates]
+
+      expect(summary[:queries_in_request]).to eq(19.0)
+      expect(summary[:note]).to include("of 19 queries in that request")
+    end
+  end
 end

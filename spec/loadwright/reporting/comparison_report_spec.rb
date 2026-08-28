@@ -136,6 +136,41 @@ RSpec.describe Loadwright::Reporting::ComparisonReport do
     end
   end
 
+  # THE WORD STAYS, THE QUALIFIER JOINS IT. A comparison that quietly decided a
+  # regression was noise is worse than one that made a reader think for a second --
+  # so this qualifies the verdict rather than downgrading it, and the exit code is
+  # untouched.
+  describe "regressions with the shape of a busier machine" do
+    let(:noisy) do
+      comparison(deltas: %w[GET\ /a GET\ /b GET\ /c].map do |key|
+        delta(verdict: :regression, metric: "p50 latency (seed_scale)", endpoint: key,
+              before: 100.0, after: 180.0, change: 0.8)
+      end)
+    end
+
+    it "still says REGRESSED" do
+      expect(report.render(noisy)).to include("**REGRESSED**")
+    end
+
+    it "says what the shape of the evidence looks like, rather than leaving it to the reader" do
+      text = report.render(noisy)
+
+      expect(text).to include("looks like the machine")
+      expect(text).to include("busier machine")
+    end
+
+    it "is still a regression for exit-code purposes" do
+      expect(noisy).to be_regressed
+    end
+
+    it "adds no such qualifier to a query-count regression" do
+      text = report.render(comparison(deltas: [delta(verdict: :regression)]))
+
+      expect(text).to include("**REGRESSED** — see below.")
+      expect(text).not_to include("busier machine")
+    end
+  end
+
   describe "a finding that vanished because the endpoint stopped being measurable" do
     it "is rendered as NOT a fix, in the resolved section where it would otherwise mislead" do
       text = report.render(comparison(

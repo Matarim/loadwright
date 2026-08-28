@@ -188,9 +188,10 @@ module Loadwright
     # It is measured from a SECOND run on the same commit -- two runs of identical code
     # differ only by noise, so the spread between them IS the noise. Nothing is
     # fabricated when there is no second run; the user is told what to do instead.
-    def measure_noise_floor(baseline)
+    def measure_noise_floor(baseline, exclude: [])
+      excluded = ([baseline.run_id] + Array(exclude)).compact
       sibling = store.list.find do |record|
-        record.run_id != baseline.run_id && record.git_sha == baseline.git_sha &&
+        !excluded.include?(record.run_id) && record.git_sha == baseline.git_sha &&
           record.config_fingerprint == baseline.config_fingerprint
       end
       return nil if sibling.nil?
@@ -229,7 +230,7 @@ module Loadwright
       before, after = resolve_comparison(argv)
       return 1 if before.nil?
 
-      floor = store.baseline&.fetch("noise_floor", nil)
+      floor = comparison_noise_floor(before, after)
       result = History::Comparator.new(config: configuration).compare(before, after, noise_floor: floor)
 
       print_comparison(before, after, result)
@@ -239,6 +240,36 @@ module Loadwright
       return 2 unless result.comparable?
 
       configuration.fail_on_regression && result.regressed? ? 1 : 0
+    end
+
+    # THE FLOOR WAS ONLY EVER AVAILABLE TO PEOPLE WHO HAD SET A BASELINE.
+    #
+    # `baseline set` measures the machine's run-to-run spread and stores it; `compare`
+    # read it from there and from nowhere else. So a straight `compare <a> <b>` on a
+    # machine with plenty of history fell back to regression_threshold_pct alone --
+    # the threshold this class's own documentation calls a guess -- and reported a
+    # laptop's afternoon as ~30 regressions. The measurement existed; the path that
+    # needed it could not reach it.
+    #
+    # The stored value still wins: it is the floor the user deliberately established.
+    # NOT MEASURED FROM THE PAIR UNDER COMPARISON, which would be circular -- the floor
+    # is the max spread across the pair, so using it on that same pair defines every
+    # one of its own deltas to be noise. It comes from a third run on the same commit
+    # and configuration, which is the same non-circular rule `baseline set` follows.
+    def comparison_noise_floor(before, after)
+      stored = store.baseline&.fetch("noise_floor", nil)
+      return stored if stored
+
+      # A non-nil sha is REQUIRED here, unlike in `baseline set`. There, the user named
+      # the run and is told what was measured. Here it is automatic and silent, and
+      # `nil == nil` would match every run in a repository without git -- borrowing a
+      # floor from an unrelated run and raising the bar a real regression has to clear.
+      return nil if before.git_sha.nil?
+
+      floor = measure_noise_floor(before, exclude: [after.run_id])
+      @stdout.puts "loadwright: no baseline noise floor is set; measured " \
+                   "#{(floor * 100).round(1)}% from another run on this commit." if floor
+      floor
     end
 
     def resolve_comparison(argv)
@@ -317,6 +348,15 @@ module Loadwright
         o.on("--accept-database-writes",
              "For `record`: acknowledge that your specs will run against the booted database") do
           @options[:accept_database_writes] = true
+        end
+        # The long-run prompt already PROCEEDS on a non-TTY -- it is a courtesy about
+        # someone's afternoon, not a safety decision about irreversible harm. But
+        # reaching that path meant detaching stdin, which changes how every other
+        # prompt in the run behaves in order to answer one of them. A flag says the
+        # same thing without reshaping the process.
+        o.on("--accept-long-run",
+             "For `run`: accept a run estimated over long_run_confirmation_threshold_minutes") do
+          @options[:accept_long_run] = true
         end
         o.on("--full", "For `init`: write the complete annotated key surface") { @options[:full] = true }
         o.on("--force", "For `init`: overwrite an existing initializer") { @options[:force] = true }
