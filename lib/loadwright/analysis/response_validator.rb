@@ -29,7 +29,7 @@ module Loadwright
       ENVELOPE_KEYS = %w[data results items records rows entries collection].freeze
 
       Verdict = Struct.new(:valid, :reason, :detail, :record_count, :body_bytes, :shape,
-                           :schema_errors, keyword_init: true) do
+                           :schema_errors, :schema_resolution_error, keyword_init: true) do
         def valid? = valid == true
 
         def collection? = !record_count.nil?
@@ -37,7 +37,8 @@ module Loadwright
         def to_h
           {
             valid: valid, reason: reason, detail: detail, record_count: record_count,
-            body_bytes: body_bytes, shape: shape, schema_errors: schema_errors
+            body_bytes: body_bytes, shape: shape, schema_errors: schema_errors,
+            schema_resolution_error: schema_resolution_error
           }.compact
         end
       end
@@ -78,9 +79,11 @@ module Loadwright
         # 2. A response that does not match its declared contract means either the
         #    document is stale or the endpoint is misbehaving — either way the
         #    measurement is untrustworthy.
+        resolution_error = schema_resolution_error(endpoint)
         schema_errors = schema_errors_for(endpoint, parsed)
         if schema_errors&.any? && @config.require_schema_valid_response
-          return invalid(:schema_invalid, schema_errors.first(5).join("; "), schema_errors: schema_errors, **base)
+          return invalid(:schema_invalid, schema_errors.first(5).join("; "), schema_errors: schema_errors,
+                         **base)
         end
 
         # 3. Seeded 200 posts, got []. A SETUP problem — wrong tenant, wrong
@@ -97,7 +100,7 @@ module Loadwright
           )
         end
 
-        Verdict.new(valid: true, schema_errors: schema_errors, **base)
+        Verdict.new(valid: true, schema_errors: schema_errors, schema_resolution_error: resolution_error, **base)
       end
 
       # 4. Cross-scale shape consistency, which needs more than one response and so
@@ -300,12 +303,33 @@ module Loadwright
       # nil when there is no schema — response-analysis.md gates on schema validity
       # only "when a schema exists for that operation". nil is distinct from [], which
       # means "checked, and valid".
+      # A SCHEMA WE COULD NOT LOAD IS NOT A RESPONSE THAT FAILED.
+      #
+      # Those are opposite facts and they were folded into one: a resolution failure
+      # inside this gem came back as an error string, which the validity gate then
+      # reported as "response did not validate against its declared OpenAPI schema".
+      # Twenty endpoints were told their responses were invalid on the strength of a
+      # check that never ran, and because a schema violation disqualifies an endpoint,
+      # three correctly-measured N+1 findings went with them.
+      #
+      # A resolution failure is OURS. It is recorded on the verdict, never used to
+      # invalidate the response, and the endpoint is judged on everything else --
+      # exactly as it would be if the operation declared no schema at all.
       def schema_errors_for(endpoint, parsed)
         schema = endpoint&.success_response_schema
         return nil if schema.nil?
         return ["response body was not parseable JSON"] if parsed.nil?
 
         schema.errors_for(parsed)
+      rescue Discovery::SchemaRef::ResolutionError
+        nil
+      end
+
+      def schema_resolution_error(endpoint)
+        schema = endpoint&.success_response_schema
+        return nil if schema.nil? || !schema.respond_to?(:resolution_error)
+
+        schema.resolution_error
       end
 
       def empty_with_seeded_data?(record_count, seeded_count)

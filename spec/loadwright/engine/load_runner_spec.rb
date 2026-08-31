@@ -521,6 +521,37 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(outcome.detail.to_s).not_to include("ZERO queries")
     end
 
+    # THE EXCEPTION STANDS ON ITS OWN. It used to be printed only as part of the
+    # zero-query sentence, so an endpoint that DID reach the database and then raised --
+    # which is most 500s, and every one that renders a framework error page -- named
+    # nothing at all. A quarantined endpoint is precisely the one whose cause nobody
+    # has.
+    it "names the exception even when the endpoint reached the database first" do
+      responder = lambda do |_|
+        { status: 500, body: "<html>error</html>",
+          app_exception: { class: "Widgets::CalculationError", frame: "/app/models/widget.rb:41" } }
+      end
+      outcome = run_with(responder, metrics: { query_count: 7 }).outcomes.first
+
+      expect(outcome.detail).to include("Widgets::CalculationError")
+      expect(outcome.detail).to include("widget.rb:41")
+      expect(outcome.detail.to_s).not_to include("ZERO queries")
+    end
+
+    # ONLY WE CAN SEE THIS ONE. The block is ours and invisible to the user, so a
+    # containment false positive is indistinguishable from a broken endpoint.
+    it "says when our own containment caused the failure" do
+      responder = lambda do |_|
+        { status: 500, body: "{}",
+          app_exception: { class: "Client::RequestFailure", frame: "/app/lib/client.rb:75",
+                           containment: "blocked by config.block_outbound_http: keys.example.test" } }
+      end
+      outcome = run_with(responder).outcomes.first
+
+      expect(outcome.detail).to include("block_outbound_http")
+      expect(outcome.detail).to include("keys.example.test")
+    end
+
     # A 404 with no queries is an ordinary routing or scope answer, not a failure
     # ahead of the data layer worth this sentence.
     it "is reserved for 5xx, not for any non-2xx" do
@@ -608,6 +639,37 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(outcome.detail).not_to include("accounts")
     end
 
+    # SQL KEYWORDS AND TABLE NAMES ARE NOT COLUMNS. `IN` with no word boundary matched
+    # inside DISTINCT and JOIN, so the first version emitted `DIST` and `JO` as column
+    # names and truncated real identifiers mid-word -- one to a single character
+    # matching three columns on its own table.
+    it "names no SQL keyword, and no truncated fragment" do
+      joined = "SELECT DISTINCT widgets.* FROM widgets INNER JOIN accounts " \
+               "ON accounts.id = widgets.owner_id WHERE widgets.owner_type = ? AND widgets.removed_at IS NULL"
+      outcome = runner(context: build_context(responder: ->(_) { { status: 404, body: "{}" } },
+                                              metrics: { query_count: 1,
+                                                         queries: [{ fingerprint: joined, row_count: 0 }] }))
+                .run(endpoints: [endpoint]).outcomes.first
+
+      expect(outcome.detail).to include("owner_type", "removed_at")
+      expect(outcome.detail).not_to include("DIST")
+      expect(outcome.detail).not_to include("JO,")
+    end
+
+    # A JOIN's ON keys are join STRUCTURE, not the filter that excluded the rows, and
+    # naming them sends someone to change an association that is working.
+    it "reads the WHERE clause only, not the join keys or the select list" do
+      joined = "SELECT widgets.* FROM widgets INNER JOIN accounts ON accounts.id = widgets.owner_id " \
+               "WHERE widgets.status = ? ORDER BY widgets.id LIMIT ?"
+      outcome = runner(context: build_context(responder: ->(_) { { status: 404, body: "{}" } },
+                                              metrics: { query_count: 1,
+                                                         queries: [{ fingerprint: joined, row_count: 0 }] }))
+                .run(endpoints: [endpoint]).outcomes.first
+
+      expect(outcome.detail).to include("status")
+      expect(outcome.detail).not_to include("owner_id")
+    end
+
     # ABSENT, NEVER ZERO. An adapter or Rails version that does not report row counts
     # must not be read as "every query found nothing".
     it "says nothing when the row count was never reported" do
@@ -618,6 +680,148 @@ RSpec.describe Loadwright::Engine::LoadRunner do
                 .run(endpoints: [endpoint]).outcomes.first
 
       expect(outcome.detail.to_s).not_to include("No rows came back")
+    end
+  end
+
+  # A SCHEMA WE COULD NOT LOAD IS NOT A RESPONSE THAT FAILED, and the difference is not
+  # cosmetic: a schema violation disqualifies an endpoint, and a disqualified endpoint
+  # keeps none of its findings. So a one-line escaping fault inside this gem reported
+  # twenty endpoints as having invalid responses AND discarded three N+1 findings it
+  # had already measured correctly.
+  describe "a declared schema Loadwright cannot load" do
+    before do
+      config.scale_factors = [10]
+      config.page_size_sweep = [5]
+      config.concurrency_levels = [1]
+      config.requests_per_endpoint_per_level = 20
+      config.warmup_requests = 0
+    end
+
+    # A pointer into a document that does not contain it: resolution fails the way a
+    # malformed one does, without depending on the specific malformation.
+    let(:broken) do
+      Loadwright::Discovery::SchemaRef.new(document: { "paths" => {} },
+                                           pointer: "#/paths/~1gone/get/schema")
+    end
+
+    let(:documented) { endpoint(response_schemas: { 200 => broken }) }
+
+    let(:n_plus_one) do
+      { query_count: 9,
+        queries: Array.new(9) { { fingerprint: "SELECT * FROM widgets WHERE id = ?" } } }
+    end
+
+    def run_it
+      runner(context: build_context(responder: ->(_) { { status: 200, body: '[{"id":1}]' } },
+                                    metrics: n_plus_one)).run(endpoints: [documented])
+    end
+
+    it "does not report the response as having failed validation" do
+      outcome = run_it.outcomes.first
+
+      expect(outcome.reason).not_to eq(:schema_invalid)
+    end
+
+    it "keeps the findings it measured before the schema was ever consulted" do
+      outcome = run_it.outcomes.first
+
+      expect(outcome.findings.map(&:kind)).to include(:n_plus_one_pattern_match)
+    end
+
+    # OURS, AND SAID SO. The reader must not go looking at their document or their
+    # responses for something neither of them caused.
+    it "discloses it as a Loadwright fault, naming nothing about the response" do
+      disclosure = run_it.schema_validation[documented.to_s]
+
+      expect(disclosure[:state]).to eq(:unresolvable)
+      expect(disclosure[:note]).to include("fault in Loadwright")
+      expect(disclosure[:note]).not_to include("did not validate")
+    end
+
+    # The distinction has to survive: a response that genuinely fails a schema it
+    # COULD load is still invalid, and still disqualifies the endpoint.
+    it "still invalidates a response that fails a schema it could load" do
+      schema = Loadwright::Discovery::SchemaRef.for(
+        document: { "s" => { "type" => "object", "required" => %w[missing] } }, pointer: "#/s"
+      )
+      outcome = runner(context: build_context(responder: ->(_) { { status: 200, body: '{"id":1}' } },
+                                              metrics: { query_count: 2 }))
+                .run(endpoints: [endpoint(response_schemas: { 200 => schema })]).outcomes.first
+
+      expect(outcome.reason).to eq(:schema_invalid)
+    end
+  end
+
+  # THE SETTING PROMISES THE CACHE IS OFF AND IT IS NOT: Rails' own QueryCache
+  # middleware enables it per request, after our setup-time disable.
+  #
+  # What that does and does not affect is the whole point of the sentence, and the
+  # first version of this warning got it backwards. Counts are LOGICAL -- the tracker
+  # records every query the code issued, hit or not -- so the N+1 threshold applies to
+  # how many times the code asked and nothing is undercounted. Latency is what a live
+  # cache changes.
+  describe "when disable_query_cache_during_run did not hold" do
+    before do
+      config.scale_factors = [10]
+      config.page_size_sweep = [5]
+      config.concurrency_levels = [1]
+      config.requests_per_endpoint_per_level = 20
+      config.warmup_requests = 0
+    end
+
+    let(:cached_metrics) do
+      { query_count: 4,
+        queries: [{ fingerprint: "SELECT 1", cached: false }, { fingerprint: "SELECT 1", cached: true }] }
+    end
+
+    it "says so on the run, where the reader can see it" do
+      result = runner(context: build_context(responder: ->(_) { { status: 200, body: "[]" } },
+                                             metrics: cached_metrics)).run(endpoints: [endpoint])
+
+      expect(result.warnings.join).to include("disable_query_cache_during_run")
+      expect(result.warnings.join).to include("did not take effect")
+    end
+
+    # THE SENTENCE HAS TO BE RIGHT, not merely present. Telling someone their N+1
+    # counts are undercounted when they are not sends them to re-run at a lower
+    # threshold chasing findings that were never missing.
+    it "says plainly that counts are unaffected, and that latency is not" do
+      result = runner(context: build_context(responder: ->(_) { { status: 200, body: "[]" } },
+                                             metrics: cached_metrics)).run(endpoints: [endpoint])
+
+      expect(result.warnings.join).to include("counts are UNAFFECTED")
+      expect(result.warnings.join).to include("latency")
+    end
+
+    # The count the threshold sees is what the code ASKED for: two executed plus three
+    # served from the cache is a repeat of five, and clears a threshold of three.
+    it "counts a cache hit toward the repeat count, so no finding is missed" do
+      mixed = { query_count: 5,
+                queries: Array.new(2) { { fingerprint: "SELECT 1", cached: false } } +
+                         Array.new(3) { { fingerprint: "SELECT 1", cached: true } } }
+      result = runner(context: build_context(responder: ->(_) { { status: 200, body: '[{"id":1}]' } },
+                                             metrics: mixed)).run(endpoints: [endpoint])
+
+      finding = result.outcomes.first.findings.find { |f| f.kind == :n_plus_one_pattern_match }
+      expect(finding).not_to be_nil
+      expect(finding.detail).to include("ran 5 times in a single request")
+    end
+
+    # The warning is about a promise not kept. With the setting off there is no
+    # promise, and a cache hit is expected rather than notable.
+    it "says nothing when the cache was never asked to be disabled" do
+      config.disable_query_cache_during_run = false
+      result = runner(context: build_context(responder: ->(_) { { status: 200, body: "[]" } },
+                                             metrics: cached_metrics)).run(endpoints: [endpoint])
+
+      expect(result.warnings.join).not_to include("disable_query_cache_during_run")
+    end
+
+    it "says nothing when no cached query ever arrived" do
+      result = runner(context: build_context(responder: ->(_) { { status: 200, body: "[]" } },
+                                             metrics: { query_count: 2 })).run(endpoints: [endpoint])
+
+      expect(result.warnings.join).not_to include("disable_query_cache_during_run")
     end
   end
 

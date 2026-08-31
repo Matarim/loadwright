@@ -112,8 +112,36 @@ module Loadwright
           "",
           table(%w[Dimension Earlier Later], rows),
           "",
-          remedy
-        ].join("\n")
+          remedy,
+          verdict_movement_block
+        ].compact.reject(&:empty?).join("\n")
+      end
+
+      # RENDERED UNDER THE REFUSAL, DELIBERATELY. Every number is correctly withheld;
+      # this is not a number. Which endpoints changed verdict is a fact about two
+      # lists, it requires trusting neither detector, and across a version boundary it
+      # is the single thing a reader most needs -- because that is the boundary where a
+      # verdict moves for tool reasons rather than application ones. Eighteen verdicts
+      # once moved across an upgrade with nothing anywhere saying so.
+      def verdict_movement_block
+        movement = @comparison.verdict_movement
+        return "" if movement.nil?
+
+        rows = @comparison.transitions.map { |t| [t.endpoint, t.before, t.after] }
+
+        ["",
+         "## Verdicts that changed",
+         "",
+         "No delta above is computed, and none of these is one. Which endpoints changed " \
+         "verdict is a fact about two lists rather than a measurement, so it survives the " \
+         "refusal — and this is the boundary where a verdict is most likely to have moved " \
+         "because the TOOL changed rather than because your application did.",
+         "",
+         "#{movement[:changed]} endpoint(s) changed verdict: #{movement[:became_inconclusive]} became " \
+         "inconclusive, #{movement[:became_measurable]} became measurable, " \
+         "#{movement[:lost_findings]} stopped reporting findings.",
+         "",
+         table(%w[Endpoint Before After], rows)].join("\n")
       end
 
       # A VERSION DIVERGENCE NEEDS A DIFFERENT SENTENCE. "Re-run under matching

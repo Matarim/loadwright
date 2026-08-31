@@ -828,6 +828,36 @@ the column whose value goes into the path:
 "widget" => { factory: :widget, param: "widget_guid" }
 ```
 
+**When the routing value is not a column on the seeded record at all** — it lives an
+association or two away — `value:` takes a callable given the created record:
+
+```ruby
+"caller" => { factory: :account,
+              value: ->(account) { account.customer.phone_numbers.first&.number } }
+```
+
+`nil` is a legitimate answer and is dropped rather than substituted, so a partly
+populated graph produces fewer routing values instead of wrong ones. If the callable
+raises, the run warns and continues — the seeded rows are real, and only that
+resource's endpoints report an unresolved path parameter.
+
+### Preconditions that are not data
+
+Some endpoints need something true that no factory can create — a feature toggle on,
+a setting flipped.
+
+```ruby
+config.before_seed = -> { Flipper.enable(:partner_api) }
+config.after_run   = -> { Flipper.disable(:partner_api) }
+```
+
+`before_seed` runs **after** the safety gate and containment, so anything it touches
+is inside the run's protections, and **before** discovery and seeding, so a toggle it
+flips can decide which routes exist. `after_run` is registered with the interrupt
+handler, so a Ctrl-C still restores what the hook changed. Neither runs on a dry run,
+and a `before_seed` that raises refuses the run rather than measuring an application
+in a state you said it should not be in.
+
 **Your factories need `sequence` for unique columns.** If a factory produces a
 duplicate value on a uniquely-indexed column, Loadwright reports the collision and
 tells you which factory and field to fix:

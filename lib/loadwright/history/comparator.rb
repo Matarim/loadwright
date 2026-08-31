@@ -179,6 +179,20 @@ module Loadwright
             latency.all? { |delta| delta.change.to_f.positive? }
         end
 
+        # The one-line arithmetic a reader checks the report against. Every verdict
+        # moving in the same direction across an upgrade is the signature of a change
+        # in the tool, and it is a fact about two lists rather than about any
+        # measurement -- so it survives a refusal.
+        def verdict_movement
+          return nil if transitions.empty?
+
+          worse = transitions.count { |t| t.after.to_s == "inconclusive" && t.before.to_s != "inconclusive" }
+          better = transitions.count { |t| t.before.to_s == "inconclusive" && t.after.to_s != "inconclusive" }
+
+          { changed: transitions.length, became_inconclusive: worse, became_measurable: better,
+            lost_findings: transitions.count { |t| t.before.to_s == "has_findings" && t.after.to_s != "has_findings" } }
+        end
+
         def machine_noise_note
           return nil unless machine_noise_signature?
 
@@ -210,6 +224,7 @@ module Loadwright
             within_noise: within_noise.map(&:to_h),
             machine_noise_note: machine_noise_note,
             transitions: transitions.map(&:to_h),
+            verdict_movement: verdict_movement,
             endpoints_added: endpoints_added,
             endpoints_removed: endpoints_removed,
             excluded_signals: excluded_signals,
@@ -226,7 +241,7 @@ module Loadwright
 
       def compare(before, after, noise_floor: nil, noise_floor_source: nil)
         divergences = hard_divergences(before, after)
-        return refused(divergences) if divergences.any?
+        return refused(divergences, before, after) if divergences.any?
 
         excluded = excluded_signals(before, after)
         shared = before.endpoint_keys & after.endpoint_keys
@@ -720,12 +735,41 @@ module Loadwright
           end
       end
 
-      def refused(divergences)
+      # A REFUSAL STILL OWES THE READER THE SET FACTS.
+      #
+      # Refusing to compute deltas across a version boundary is right, and it is the
+      # boundary where a verdict is most likely to move for TOOL reasons rather than
+      # application ones -- which is exactly when a reader needs to be told. In one real
+      # upgrade eighteen endpoints changed verdict, every one for the worse, and the
+      # only mechanism built to say so could not speak across the boundary where it
+      # happened. The user found it by diffing two reports by hand.
+      #
+      # Verdict membership is a SET FACT, not a measurement. "3 endpoints that had
+      # findings no longer do" requires trusting neither detector, only the two verdict
+      # lists, so it survives a refusal that every number correctly does not. Deltas,
+      # repeat counts and latency stay refused.
+      def refused(divergences, before = nil, after = nil)
         Result.new(
           comparable: false, divergences: divergences, warnings: [], new_findings: [],
-          resolved_findings: [], changed_findings: [], deltas: [], transitions: [],
-          endpoints_added: [], endpoints_removed: [], excluded_signals: []
+          resolved_findings: [], changed_findings: [], deltas: [],
+          transitions: before && after ? transitions(before, after, shared_keys(before, after)) : [],
+          endpoints_added: added_keys(before, after), endpoints_removed: removed_keys(before, after),
+          excluded_signals: []
         )
+      end
+
+      def shared_keys(before, after) = before.endpoint_keys & after.endpoint_keys
+
+      def added_keys(before, after)
+        return [] if before.nil? || after.nil?
+
+        after.endpoint_keys - before.endpoint_keys
+      end
+
+      def removed_keys(before, after)
+        return [] if before.nil? || after.nil?
+
+        before.endpoint_keys - after.endpoint_keys
       end
     end
   end

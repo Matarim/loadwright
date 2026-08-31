@@ -104,6 +104,31 @@ RSpec.describe Loadwright::Reporting::MarkdownReport do
     end
   end
 
+  # RENDERED IN HTML AND NOWHERE ELSE. Every warning a run produced -- a page-size
+  # sweep that could not run, a containment measure that did not hold -- was invisible
+  # to anyone reading the Markdown report, which is the format people paste into a PR
+  # and the one an agent reads.
+  #
+  # Found because a warning added in 0.0.10 was reported as not firing when it HAD
+  # fired: its condition was met and printed on the same page, and the sentence naming
+  # it went to a format the reader was not looking at.
+  describe "warnings about the run itself" do
+    it "renders them, rather than leaving them to the HTML format alone" do
+      text = render(warnings: ["the page-size sweep could not run: no endpoint accepts a page size"])
+
+      expect(text).to include("## Warnings")
+      expect(text).to include("the page-size sweep could not run")
+    end
+
+    it "renders no section at all when the run had nothing to say" do
+      expect(render).not_to include("## Warnings")
+    end
+
+    it "drops a blank warning rather than rendering an empty bullet" do
+      expect(render(warnings: ["", nil])).not_to include("## Warnings")
+    end
+  end
+
   describe "tables" do
     it "escapes a pipe so a detail string cannot silently break the table" do
       finding = build_finding(detail: "a | b")

@@ -272,6 +272,20 @@ module Loadwright
     # DATA SEEDING
     setting :factory_bot_enabled, true, section: :seeding
     setting :factory_map, {}.freeze, section: :seeding
+
+    # NON-DATA PRECONDITIONS. Some endpoints need something true that no factory can
+    # create -- a feature toggle on, a setting flipped, a cache warmed. Without a hook
+    # they are unmeasurable for a reason no seeding change can address, and the report
+    # can only say the endpoint failed.
+    #
+    # Called once, after the safety gate and containment and before any seeding, so
+    # anything it touches is inside the run's protections. Restore in `after_run`; both
+    # are ordinary callables and neither is retried.
+    #
+    #   config.before_seed = -> { Flipper.enable(:partner_api) }
+    #   config.after_run   = -> { Flipper.disable(:partner_api) }
+    setting :before_seed, nil, section: :seeding
+    setting :after_run, nil, section: :seeding
     setting :scale_factors, [1, 10, 50, 200].freeze, section: :seeding
     setting :seed_batch_size, 50, section: :seeding
     setting :seed_cleanup_strategy, :delete_created_rows, section: :seeding

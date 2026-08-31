@@ -24,7 +24,11 @@ module Loadwright
         # A scripted response. `body` may be a String or anything that responds to
         # #to_json-able structure; it is serialised at construction so the
         # transport hands back exactly what a real one would.
-        Script = Struct.new(:status, :headers, :body, :latency_ms, :error, keyword_init: true)
+        # `app_exception` scripts what a real application would have left in the env
+        # for the in-process transport to read, so the reporting path around it can be
+        # exercised without booting Rails.
+        Script = Struct.new(:status, :headers, :body, :latency_ms, :error, :app_exception,
+                            keyword_init: true)
 
         attr_reader :issued
 
@@ -62,6 +66,7 @@ module Loadwright
             # guard's Tier 3 degradation check are testable; otherwise real
             # elapsed time, which is near zero.
             latency_ms: script.latency_ms || (monotonic_ms - started_ms),
+            app_exception: script.app_exception,
             transport: name
           )
         end

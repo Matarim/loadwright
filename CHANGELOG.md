@@ -5,6 +5,85 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.11] — 2026-08-31
+
+### Fixed
+
+- **A JSON pointer is not a URI fragment until it is escaped, and json_schemer takes a
+  URI.** An OpenAPI path template contains `{` and `}`, which are illegal in a fragment
+  unescaped, so resolving the declared schema raised `URI::InvalidURIError` on **every
+  operation with a path parameter** — which is most of them.
+
+  The raise was not the damage. It was rescued and returned as a validation *error
+  string*, so a fault inside this gem reached the user as **"response did not validate
+  against its declared OpenAPI schema"**: twenty endpoints told their responses were
+  invalid on the strength of a check that never executed. This is the first release in
+  which `require_schema_valid_response` has ever validated anything, and it arrived
+  broken.
+
+- **A schema Loadwright could not load no longer discards findings it had already
+  measured.** A schema violation disqualifies an endpoint, and a disqualified endpoint
+  keeps none of its findings — so the one-line escaping bug above did not merely
+  mislabel twenty endpoints, it **deleted three correctly-measured N+1 findings** on
+  the way past. A resolution failure is now reported as ours, the response is judged on
+  everything else, and no finding is lost for it. A response that genuinely fails a
+  schema we *could* load still invalidates the endpoint, unchanged.
+
+- **Run warnings were rendered in HTML and nowhere else.** Every warning a run produced
+  — a page-size sweep that could not run, a discovery source that found nothing, a
+  containment measure that did not hold — was invisible to anyone reading the Markdown
+  report, which is the format people paste into a PR and the one an agent reads.
+
+  Found because a warning added in 0.0.10 was reported as not firing when it *had*
+  fired: its condition was met and printed on the same page, and the sentence naming it
+  went to a format the reader was not looking at.
+
+- **The query-cache warning said the wrong thing, in the direction that matters.** It
+  claimed repeat counts were counts of what executed. They are not: the tracker records
+  every query the code issued, cache hit or not, so the N+1 threshold applies to how
+  many times the code **asked** and nothing is undercounted. What a live cache actually
+  affects is latency, and the `executed` figure printed beside each repeat count. The
+  warning now says that.
+
+- **The zero-row query attribution named SQL keywords and truncated identifiers as
+  columns.** `IN` with no word boundary matched inside `DISTINCT` and `JOIN`, emitting
+  `DIST` and `JO` as column names and truncating real identifiers mid-word — one to a
+  single character matching three columns on its own table. It now reads the `WHERE`
+  clause only (a join's `ON` keys are join structure, not the filter that excluded the
+  rows), anchors word operators, and consumes a table qualifier.
+
+- **The exception behind a 500 is printed on its own**, not only as part of the
+  zero-query sentence. An endpoint that reached the database and then raised — which is
+  most 500s, and every one that renders a framework error page — named nothing at all.
+  A quarantined endpoint is precisely the one whose cause nobody has.
+
+### Added
+
+- **A refusal still reports which endpoints changed verdict.** Refusing to compute
+  deltas across a version boundary is right, and that boundary is exactly where a
+  verdict is most likely to move because the **tool** changed rather than the
+  application — which is when a reader most needs to be told. In one real upgrade
+  eighteen endpoints changed verdict, every one for the worse, and the only mechanism
+  built to say so could not speak across the boundary where it happened; it was found
+  by diffing two reports by hand.
+
+  Verdict membership is a *set fact*, not a measurement: it requires trusting neither
+  detector, only the two verdict lists. Every number stays refused.
+
+- **`factory_map` accepts `value:`, a callable for a routing identifier that is not a
+  column on the seeded record.** `param:` reaches one attribute; a real API routes on
+  values that live two associations away — a customer's phone number, an account's
+  external reference — and no column name can express that. `nil` is dropped rather
+  than substituted, and a callable that raises warns instead of aborting the run.
+
+- **`before_seed` and `after_run`, for preconditions that are not data.** A feature
+  toggle, a setting flipped. `before_seed` runs after the safety gate and containment,
+  so anything it touches is inside the run's protections, and before discovery and
+  seeding, so a toggle it flips can decide which routes exist. `after_run` is
+  registered with the interrupt handler. Neither runs on a dry run, and a `before_seed`
+  that raises refuses the run rather than measuring an application in a state the user
+  said it should not be in. 108 config keys.
+
 ## [0.0.10] — 2026-08-28
 
 ### Fixed

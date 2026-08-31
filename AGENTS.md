@@ -1328,6 +1328,62 @@ DIAG-34:
     saying plainly what it does: real writes against a real database, on every request
     of every cell. It is a deliberate decision, not a coverage tweak.
 
+DIAG-41:
+  symptom: >
+    "every endpoint says its response did not validate against the OpenAPI schema" /
+    "our findings disappeared after upgrading to 0.0.10"
+  cause: >
+    A bug in 0.0.10 only. The schema pointer was not URI-escaped, so resolving a
+    declared schema raised on every operation with a path parameter -- and the
+    resolution failure was reported as a VALIDATION failure. Because a schema
+    violation disqualifies an endpoint, it also discarded findings already measured.
+  fix: upgrade to 0.0.11+.
+  read_this_first: |
+    0.0.11+ distinguishes three things and they are not interchangeable:
+      - "response did not validate"  -> the response is wrong. Theirs.
+      - "not checked (no document operation matched)" -> the join. Check `servers`.
+      - "NOT CHECKED - a Loadwright fault" -> ours. Nothing was concluded from it,
+        no finding was discarded for it, and it should be reported to us.
+  do_not: >
+    Never tell a user their responses are invalid on the strength of a sentence that
+    also says the schema could not be applied. Those are opposite facts.
+
+DIAG-42:
+  symptom: >
+    "we upgraded and the healthy count collapsed" / "endpoints stopped being measured
+    and nothing says why"
+  cause: >
+    A verdict can move because the APPLICATION changed or because the TOOL changed,
+    and an upgrade is the boundary where the second is likely.
+  fix: |
+    Run `compare <older-run> <newer-run>`. It exits 2 and refuses every delta across a
+    version boundary -- correctly -- but 0.0.11+ still prints a "Verdicts that changed"
+    table under the refusal, because verdict membership is a set fact rather than a
+    measurement.
+    Read the direction. Every verdict moving the same way across an upgrade, with none
+    improving, is the signature of a change in the tool, not in the app.
+  say_this: >
+    A refused comparison is not an absence of information. The set facts survive it.
+
+DIAG-43:
+  symptom: >
+    "an endpoint routes on an identifier no factory creates" / "factory_map param:
+    cannot reach the value we route on"
+  cause: >
+    `param:` reads one attribute off the seeded record. A value two associations away
+    -- a customer's phone number, an account's external reference -- cannot be named
+    by a column.
+  fix: |
+    0.0.11+: `value:` takes a callable given the created record.
+      "caller" => { factory: :account,
+                    value: ->(a) { a.customer.phone_numbers.first&.number } }
+    nil is dropped rather than substituted. A callable that raises warns and the run
+    continues; only that resource's endpoints report an unresolved parameter.
+  also: >
+    For a precondition that is not data at all -- a feature toggle, a setting -- use
+    config.before_seed with config.after_run. before_seed runs inside containment and
+    before discovery; a raise there refuses the run.
+
 DIAG-38:
   symptom: >
     "every endpoint says no response schema is declared, but our OpenAPI documents

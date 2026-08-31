@@ -224,7 +224,7 @@ module Loadwright
             return
           end
 
-          track(resource, records, spec[:param] || :id)
+          track(resource, records, spec[:value] || spec[:param] || :id)
           created += records.length
           remaining -= batch
 
@@ -253,14 +253,40 @@ module Loadwright
       # says otherwise. An API that routes on a public guid or slug got its primary key
       # substituted into the path, 404'd every request, and reported the endpoint as
       # broken. Both are common: to_param and friendly_id exist for exactly this.
+      #
+      # A CALLABLE, when the routing value is not a column on the seeded record.
+      # `param:` reaches one attribute; a real API routes on values that live two
+      # associations away -- a customer's phone number, an account's external
+      # reference -- and no column name can express that. Those endpoints resolved
+      # nothing, requested the raw template or a wrong id, and were reported as the
+      # application's failure.
+      #
+      # It is given the created record and returns the value to route on. nil is a
+      # legitimate answer -- that record simply has no routing value -- and is dropped
+      # rather than substituted, so a partially-populated graph degrades to fewer
+      # values instead of to wrong ones.
       def track(resource, records, param = :id)
         ids = records.filter_map { |record| record.id if record.respond_to?(:id) }
         (@created_ids[resource] ||= []).concat(ids)
 
-        values = records.filter_map { |record| record.public_send(param) if record.respond_to?(param) }
-        (@path_values[resource] ||= []).concat(values)
+        (@path_values[resource] ||= []).concat(routing_values(resource, records, param))
 
         records.each { |record| @models[resource] ||= record.class }
+      end
+
+      def routing_values(resource, records, param)
+        return records.filter_map { |record| record.public_send(param) if record.respond_to?(param) } unless
+          param.respond_to?(:call)
+
+        records.filter_map { |record| param.call(record) }
+      rescue StandardError => e
+        # NOT FATAL, AND NOT SILENT. The seeded rows are real and every other resource
+        # is still usable; what is lost is this resource's routing values, and the
+        # endpoints keyed on them will say they could not be resolved. A raise here
+        # would throw away a whole run's seeding for one bad lambda.
+        @warnings << "factory_map[#{resource.inspect}] value/param raised #{e.class}: #{e.message}. " \
+                     "Endpoints routing on it will report their path parameter as unresolved."
+        []
       end
 
       # What the resolver substitutes into a path. Falls back to ids for a resource

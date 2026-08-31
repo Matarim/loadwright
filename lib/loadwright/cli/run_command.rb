@@ -60,6 +60,7 @@ module Loadwright
 
         decision = approve!
         install_containment!
+        run_preconditions!
 
         discovery = discover!
         return no_endpoints(discovery) if discovery.endpoints.empty?
@@ -139,6 +140,37 @@ module Loadwright
       # `abort_if_containment_unavailable` is also on by default. So a new user
       # following the README hit a refusal on their very first command, before seeing
       # a single endpoint. Found by installing the built gem into a fresh Rails app.
+      # NON-DATA PRECONDITIONS, and where they run is the whole point.
+      #
+      # AFTER the safety gate and containment: anything a hook touches is inside the
+      # run's protections, so a hook that sends mail or calls out cannot escape them.
+      # BEFORE discovery and seeding: a feature toggle it flips may decide which routes
+      # exist at all.
+      #
+      # Never on a dry run -- a dry run issues no requests and must change nothing about
+      # the application. `after_run` is registered with Lifecycle so an interrupt still
+      # restores what the hook changed; that is the whole reason it is a pair.
+      def run_preconditions!
+        return if dry_run?
+
+        after = config.after_run
+        lifecycle.register("after_run hook") { after.call } if after.respond_to?(:call)
+
+        before = config.before_seed
+        return unless before.respond_to?(:call)
+
+        @stdout.puts "loadwright: running the before_seed hook"
+        before.call
+      rescue StandardError => e
+        # A precondition that did not hold is a REFUSAL, not a warning. Proceeding means
+        # measuring an application in a state the user said it should not be in, and
+        # every endpoint that depended on the hook fails for a reason the report cannot
+        # name.
+        raise Loadwright::ConfigurationError,
+              "config.before_seed raised #{e.class}: #{e.message}. Nothing was seeded and no request was " \
+              "issued -- fix the hook, or unset it if the precondition is no longer needed."
+      end
+
       def install_containment!
         @containment = SideEffects::Containment.new(config: config, lifecycle: lifecycle, stdout: @stdout)
         @containment.install!

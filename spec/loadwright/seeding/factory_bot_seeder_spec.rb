@@ -450,4 +450,54 @@ RSpec.describe Loadwright::Seeding::FactoryBotSeeder, :sample_app do
       expect(audit[:failures].first).to include(resource: "tag")
     end
   end
+
+  # `param:` REACHES ONE ATTRIBUTE. A real API routes on values that live two
+  # associations away -- a customer's phone number, an account's external reference --
+  # and no column name on the seeded record can express that. Those endpoints resolved
+  # nothing, requested the raw template or a wrong id, and were reported as the
+  # application's failure.
+  describe "a routing value that is not a column on the seeded record" do
+    it "routes on whatever the callable returns" do
+      config.factory_map = {
+        "post" => { factory: :post, trait: :with_comments, count: 2,
+                    value: ->(post) { "c-#{post.comments.first&.id}" } }
+      }
+
+      seeder.seed!(2)
+
+      values = seeder.path_values["post"]
+      expect(values.length).to eq(2)
+      expect(values).to all(start_with("c-"))
+    end
+
+    # nil is a legitimate answer -- that record has no routing value -- and dropping it
+    # degrades to fewer values rather than to wrong ones.
+    it "drops a record with no value instead of substituting something else" do
+      config.factory_map = { "post" => { factory: :post, count: 2, value: ->(post) { post.id.even? ? post.id : nil } } }
+
+      seeder.seed!(2)
+
+      expect(seeder.path_values["post"].length).to be < 2
+    end
+
+    # NOT FATAL, AND NOT SILENT. The seeded rows are real and every other resource is
+    # still usable; a raise here would throw away a whole run's seeding for one bad
+    # lambda. What is lost is this resource's routing values, and the endpoints keyed
+    # on them will say they could not be resolved.
+    it "warns rather than aborting the run when the callable raises" do
+      config.factory_map = { "post" => { factory: :post, count: 1, value: ->(_) { raise "boom" } } }
+
+      expect { seeder.seed!(1) }.not_to raise_error
+      expect(seeder.warnings.join).to include("factory_map")
+      expect(seeder.warnings.join).to include("unresolved")
+    end
+
+    it "still accepts a plain column name" do
+      config.factory_map = { "post" => { factory: :post, count: 1, param: :title } }
+
+      seeder.seed!(1)
+
+      expect(seeder.path_values["post"].first).to eq(Post.last.title)
+    end
+  end
 end

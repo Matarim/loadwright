@@ -426,6 +426,7 @@ module Loadwright
       SCHEMA_LABELS = {
         "validated" => "Response schema: checked, no violations.",
         "no_document_match" => "Response schema: not checked.",
+        "unresolvable" => "Response schema: NOT CHECKED — a Loadwright fault, not yours.",
         "no_schema" => "Response schema: not checked.",
         "violations" => "Response schema: violations found."
       }.freeze
@@ -435,6 +436,7 @@ module Loadwright
       SCHEMA_CLAUSES = {
         "validated" => " — response schema: checked",
         "no_document_match" => " — response schema: not checked (no document operation matched)",
+        "unresolvable" => " — response schema: not checked (Loadwright could not load it)",
         "no_schema" => " — response schema: not checked (matched, none declared)",
         "violations" => " — response schema: violations found"
       }.freeze

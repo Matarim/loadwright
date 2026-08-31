@@ -639,6 +639,46 @@ RSpec.describe Loadwright::History::Comparator do
       expect(comparator.compare(before, after)).not_to be_comparable
     end
 
+    # A REFUSAL STILL OWES THE READER THE SET FACTS. Refusing the deltas is right, and
+    # a version boundary is exactly where a verdict moves for TOOL reasons -- so it is
+    # where a reader most needs to be told. In one real upgrade eighteen endpoints
+    # changed verdict, every one for the worse, and the only mechanism built to say so
+    # could not speak across the boundary where it happened.
+    it "still reports which endpoints changed verdict" do
+      earlier = record(version: "0.0.9",
+                       endpoints: [endpoint("GET /a"), endpoint("GET /b", state: "has_findings",
+                                                                 findings: [:n_plus_one_slope])])
+      later = record(version: "0.0.10",
+                     endpoints: [endpoint("GET /a", state: "inconclusive", reason: "schema_invalid"),
+                                 endpoint("GET /b", state: "inconclusive", reason: "schema_invalid")])
+
+      result = comparator.compare(earlier, later)
+
+      expect(result).not_to be_comparable
+      expect(result.verdict_movement)
+        .to eq(changed: 2, became_inconclusive: 2, became_measurable: 0, lost_findings: 1)
+    end
+
+    # Set facts only. Every number stays refused, because every number depends on
+    # detectors that may have changed underneath the two runs.
+    it "computes no deltas and no finding diff across the boundary" do
+      earlier = record(version: "0.0.9", endpoints: [endpoint("GET /a")], cells: [cell("GET /a", queries: 3)])
+      later = record(version: "0.0.10", endpoints: [endpoint("GET /a")], cells: [cell("GET /a", queries: 47)])
+
+      result = comparator.compare(earlier, later)
+
+      expect(result.deltas).to be_empty
+      expect(result.new_findings).to be_empty
+      expect(result.resolved_findings).to be_empty
+    end
+
+    it "says nothing about movement when no verdict moved" do
+      earlier = record(version: "0.0.9", endpoints: [endpoint("GET /a")])
+      later = record(version: "0.0.10", endpoints: [endpoint("GET /a")])
+
+      expect(comparator.compare(earlier, later).verdict_movement).to be_nil
+    end
+
     it "names the version as the dimension that moved" do
       divergence = comparator.compare(before, after).divergences.first
 

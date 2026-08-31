@@ -60,6 +60,11 @@ module Loadwright
                                "expected a document to describe it, check that the document's path -- " \
                                "including any `servers` base path -- resolves to this template."
 
+      UNRESOLVABLE_NOTE = "not validated: the declared schema could not be loaded (%<error>s). This is a " \
+                          "fault in Loadwright, not in your response or your document -- nothing about " \
+                          "this endpoint's body was checked, and nothing was concluded from it. Please " \
+                          "report it."
+
       NO_SCHEMA_NOTE = "not validated: an OpenAPI operation matched this endpoint but declares no 2xx " \
                        "response schema, so there is nothing to validate against. Declare one and the " \
                        "check starts running."
@@ -867,7 +872,7 @@ module Loadwright
           detail: "#{erroring_status_phrase(endpoint)}. An error path was measured, not the endpoint. " \
                   "It failed on nearly every request, so it was quarantined and the rest of the run " \
                   "continued without it." \
-                  "#{pre_data_layer_note(@cells.select { |cell| cell.endpoint_key == endpoint.to_s })}",
+                  "#{failure_notes_for(endpoint)}",
           capability_epoch: @context.capability_epoch
         )
       end
@@ -1087,7 +1092,8 @@ module Loadwright
           diagnosed = traffic_reason_for(key)
           return inconclusive(endpoint, diagnosed || invalid.reason,
                               "#{invalid.detail}#{replayed_identifier_note(key, cells)}" \
-                              "#{pre_data_layer_note(cells)}#{zero_row_query_note(cells)}")
+                              "#{pre_data_layer_note(cells)}#{app_exception_note(cells)}" \
+                              "#{zero_row_query_note(cells)}")
         end
 
         shapes = cells.map(&:shape)
@@ -1204,6 +1210,14 @@ module Loadwright
       # nil (no schema for this operation), [] (checked, clean), non-empty (checked,
       # violations). The same distinction Measurement makes, for the same reason.
       def schema_validation_for(verdicts, endpoint)
+        # OURS, AND SAID SO. A schema we could not load is not a response that failed,
+        # and reporting the first as the second told twenty endpoints their responses
+        # were invalid on the strength of a check that never ran. It is reported as a
+        # tool fault, the endpoint is judged on everything else, and no finding is
+        # discarded for it.
+        resolution = verdicts.filter_map(&:schema_resolution_error).first
+        return { state: :unresolvable, note: format(UNRESOLVABLE_NOTE, error: resolution) } if resolution
+
         errors = verdicts.map(&:schema_errors)
         return unmatched_or_undeclared(endpoint) if errors.all?(&:nil?)
 
@@ -1463,11 +1477,17 @@ module Loadwright
 
         " Every request issued ZERO queries, so it failed before reaching the data layer: " \
           "no factory, trait or scale factor can change this endpoint's outcome, and seeding is not " \
-          "the remedy.#{app_exception_note(measured)}"
+          "the remedy."
       end
 
+      # ON ITS OWN, not folded into the zero-query note. It was only ever printed as part
+      # of that sentence, so an endpoint that DID reach the database and then raised --
+      # which is most 500s, and every one that renders a framework error page -- named
+      # nothing at all. A quarantined endpoint is precisely the one whose cause nobody
+      # has, which makes it the place a named exception is worth most.
       def app_exception_note(cells)
-        exceptions = cells.flat_map { |cell| Hash(cell.app_exceptions).values }.uniq { |e| e[:class] }
+        exceptions = cells.reject(&:skipped?)
+                          .flat_map { |cell| Hash(cell.app_exceptions).values }.uniq { |e| e[:class] }
         return "" if exceptions.empty?
 
         described = exceptions.first(3).map do |exception|
@@ -1480,13 +1500,28 @@ module Loadwright
         " Raised: #{described.join('; ')}."
       end
 
+      # WHAT IS AND IS NOT AFFECTED, because the obvious reading of this is wrong and
+      # the first version of this warning got it backwards.
+      #
+      # Query and repeat counts are LOGICAL: the tracker records every query the code
+      # issued, cache hit or not, so the N+1 threshold is applied to how many times the
+      # code ASKED. Nothing is undercounted and no finding is missed. What a live cache
+      # does change is LATENCY -- those requests were served warm -- and the executed
+      # figure reported alongside each repeat count, which is lower than the logical
+      # one by exactly the hits.
+      #
+      # Said out loud because the setting promises the cache is off and it is not:
+      # Rails' own QueryCache middleware enables it per request, after our setup-time
+      # disable, and nothing until now noticed.
       def query_cache_warnings
         return [] unless @query_cache_observed && @config.disable_query_cache_during_run
 
-        ["disable_query_cache_during_run is true, but query-cache hits were still recorded -- Rails' own " \
-         "QueryCache middleware re-enables the cache per request, after our disable. Repeat counts in " \
-         "this run therefore separate what EXECUTED from what was served from the cache; the total is " \
-         "how many times the code asked, which is the number a cold reproduction will show."]
+        ["disable_query_cache_during_run is true and query-cache hits were still recorded: Rails' own " \
+         "QueryCache middleware enables the cache per request, after our disable, so the setting did not " \
+         "take effect. Query and repeat counts are UNAFFECTED -- they count every query the code issued, " \
+         "cache hit or not, so the N+1 threshold still applies to how many times your code asked. What is " \
+         "affected is latency, which is a warm-cache measurement here, and the `executed` figure printed " \
+         "beside each repeat count, which is lower than the total by exactly the number of hits."]
       end
 
       def select?(fingerprint) = fingerprint.to_s.match?(/\A\s*SELECT\b/i)
@@ -1511,16 +1546,59 @@ module Loadwright
           "data -- a factory trait setting those columns is usually the fix."
       end
 
-      # From the normalised fingerprint, which keeps column names and drops values.
+      # SQL KEYWORDS AND TABLE NAMES ARE NOT COLUMNS, and the first version of this
+      # reported both. `IN` with no word boundary matched inside `DISTINCT` and `JOIN`,
+      # so it emitted `DIST` and `JO` as column names and truncated real identifiers
+      # mid-word -- one of them to a single character matching three different columns
+      # on its own table. Roughly two thirds of the attributions carried at least one
+      # token that was not a column. Naming fewer columns confidently beats naming four
+      # fragments.
+      #
+      # Three changes, each removing a class of wrong answer:
+      #   * only the WHERE clause is read, so a SELECT list and a JOIN's ON keys --
+      #     which are join structure rather than the filter that excluded the rows --
+      #     cannot leak in
+      #   * word operators are anchored with \b, which is what produced DIST and JO
+      #   * an optional table qualifier is consumed, so `"widgets"."status"` yields the
+      #     column and not the table
+      FILTER_KEYWORDS = %w[AND OR NOT WHERE SELECT FROM JOIN INNER LEFT RIGHT OUTER ON LIMIT OFFSET
+                           ORDER GROUP BY HAVING AS DISTINCT NULL TRUE FALSE CASE WHEN THEN ELSE END
+                           EXISTS ALL ANY].freeze
+
+      FILTER_OPERATOR = /\s*(?:<=|>=|<>|!=|=|<|>|\bIN\b|\bIS\b|\bLIKE\b|\bILIKE\b|\bBETWEEN\b)/i
+
+      FILTER_COLUMN =
+        /(?:[`"']?[A-Za-z_][A-Za-z0-9_]*[`"']?\.)?[`"']?([A-Za-z_][A-Za-z0-9_]*)[`"']?#{FILTER_OPERATOR}/o
+
       def filter_columns(fingerprint)
-        fingerprint.to_s.scan(/[`"']?([A-Za-z_][A-Za-z0-9_]*)[`"']?\s*(?:=|IN|IS|>|<|LIKE)/i)
-                   .flatten
-                   .reject { |name| %w[AND OR NOT WHERE SELECT FROM JOIN ON LIMIT OFFSET].include?(name.upcase) }
-                   .uniq
-                   .first(4)
+        where = fingerprint.to_s[/\bWHERE\b(.*)/im, 1]
+        return [] if where.nil?
+
+        where = where.sub(/\b(?:ORDER|GROUP|LIMIT|OFFSET|HAVING)\b.*/im, "")
+        where.scan(FILTER_COLUMN)
+             .flatten
+             .reject { |name| FILTER_KEYWORDS.include?(name.upcase) }
+             .uniq
+             .first(4)
+      end
+
+      def failure_notes_for(endpoint)
+        cells = @cells.select { |cell| cell.endpoint_key == endpoint.to_s }
+
+        "#{pre_data_layer_note(cells)}#{app_exception_note(cells)}"
       end
 
       def quarantine_detail(key)
+        "#{contention_quarantine_detail(key)}#{failure_notes_for_key(key)}"
+      end
+
+      def failure_notes_for_key(key)
+        cells = @cells.select { |cell| cell.endpoint_key == key }
+
+        "#{pre_data_layer_note(cells)}#{app_exception_note(cells)}"
+      end
+
+      def contention_quarantine_detail(key)
         events = Array(@guard&.events).select { |event| event.endpoint_key == key }
         blocker = events.map(&:blocker).uniq.join(", ")
 

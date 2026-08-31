@@ -408,8 +408,27 @@ if defined?(Loadwright)
     # for seeding; its endpoints can still be hit.
     config.factory_map = {
       # "user" => { factory: :user },
-      # "post" => { factory: :post, trait: :with_comments },
+      # "post" => { factory: :post, traits: [:with_comments, :published] },
+      #
+      # `param:` when the API routes on a column other than the primary key.
+      # "widget" => { factory: :widget, param: :public_guid },
+      #
+      # `value:` when the routing value is not a column on the seeded record at all --
+      # a callable given the created record, returning what the path should carry.
+      # This is the only way to express an identifier that lives two associations away.
+      # "caller" => { factory: :account, value: ->(a) { a.customer.phone_numbers.first&.number } },
     }
+
+    # NON-DATA PRECONDITIONS. Some endpoints need something true that no factory can
+    # create -- a feature toggle on, a setting flipped. before_seed runs after the
+    # safety gate and containment (so anything it touches is inside the run's
+    # protections) and before discovery and seeding (so a toggle it flips can decide
+    # which routes exist). after_run is registered with Lifecycle, so an interrupt
+    # still restores what the hook changed. Neither runs on a dry run.
+    # config.before_seed = -> { Flipper.enable(:partner_api) }
+    # config.after_run   = -> { Flipper.disable(:partner_api) }
+    config.before_seed = nil
+    config.after_run = nil
 
     # Population sizes tested, in order. Query-count-vs-scale-factor is the
     # core N+1 heuristic — see discovery-and-load-engine.md.

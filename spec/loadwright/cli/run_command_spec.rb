@@ -361,4 +361,54 @@ RSpec.describe Loadwright::CLI::RunCommand do
       expect(stderr.string).to include("--accept-long-run")
     end
   end
+
+  # NON-DATA PRECONDITIONS. Some endpoints need something true that no factory can
+  # create -- a feature toggle on, a setting flipped -- and without a hook they are
+  # unmeasurable for a reason no seeding change can address.
+  #
+  # WHERE it runs is the whole point: after the safety gate and containment, so
+  # anything it touches is inside the run's protections, and before discovery and
+  # seeding, so a toggle it flips can decide which routes exist.
+  describe "the before_seed hook" do
+    after { Loadwright.reset_configuration! }
+
+    it "does not run on a dry run, which must change nothing about the app" do
+      ran = false
+      config.before_seed = -> { ran = true }
+
+      command.send(:run_preconditions!)
+
+      expect(ran).to be(false)
+    end
+
+    it "runs before anything is seeded or requested" do
+      ran = false
+      config.before_seed = -> { ran = true }
+
+      command(execute: true, dry_run: false).send(:run_preconditions!)
+
+      expect(ran).to be(true)
+    end
+
+    # A precondition that did not hold is a REFUSAL. Proceeding means measuring an
+    # application in a state the user said it should not be in, and every endpoint that
+    # depended on the hook then fails for a reason the report cannot name.
+    it "refuses the run rather than warning when the hook raises" do
+      config.before_seed = -> { raise "toggle service is down" }
+
+      expect { command(execute: true, dry_run: false).send(:run_preconditions!) }
+        .to raise_error(Loadwright::ConfigurationError, /before_seed raised/)
+    end
+
+    # Registered with Lifecycle rather than called in an ensure: `ensure` does not run
+    # on a signal, and an interrupt is the most likely way a long run ends.
+    it "registers after_run as a teardown, so an interrupt still restores it" do
+      config.after_run = -> { nil }
+      cmd = command(execute: true, dry_run: false)
+
+      cmd.send(:run_preconditions!)
+
+      expect(cmd.send(:lifecycle).registered_names).to include("after_run hook")
+    end
+  end
 end
