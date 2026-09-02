@@ -169,8 +169,8 @@ RSpec.describe Loadwright::Discovery::OpenapiSource do
         endpoint = source.endpoints.find { |e| e.key == ["/api/v1/posts", :get] }
 
         expect(endpoint.query_params).to contain_exactly(
-          { name: "per_page", required: false, example: 25, type: "integer" },
-          { name: "published", required: true, example: nil, type: "boolean" }
+          { name: "per_page", required: false, example: 25, type: "integer", enum: [] },
+          { name: "published", required: true, example: nil, type: "boolean", enum: [] }
         )
       end
     end
@@ -383,6 +383,50 @@ RSpec.describe Loadwright::Discovery::OpenapiSource do
     # saying so is the difference between "fix this first" and "give up".
     it "names the discovery sources that need no document" do
       expect(failure.message).to include("loadwright record")
+    end
+  end
+
+  # ASK THE ENDPOINT WHAT IT ACCEPTS. A collection constraining its page size to a set
+  # is common, and sweeping outside that set produces a client error the report then has
+  # to explain -- an inconsistency the sweep itself created. It is declared right there
+  # on the parameter, and nothing read it.
+  describe "a page-size parameter that declares the values it accepts" do
+    def endpoint_with(schema_extra)
+      dir = Dir.mktmpdir("openapi-enum-")
+      path = File.join(dir, "swagger.yaml")
+      File.write(path, <<~YAML)
+        openapi: "3.0.0"
+        info: { title: t, version: "1" }
+        paths:
+          /widgets:
+            get:
+              parameters:
+                - name: per_page
+                  in: query
+                  schema: { type: integer, #{schema_extra} }
+              responses:
+                "200": { description: ok }
+      YAML
+      config.openapi_spec_paths = [path]
+      source.endpoints.first
+    end
+
+    it "captures the enum off the parameter" do
+      expect(endpoint_with("enum: [10, 25, 50]").query_params.first[:enum]).to eq([10, 25, 50])
+    end
+
+    it "offers them as the sizes the sweep should use" do
+      expect(endpoint_with("enum: [10, 25, 50]").declared_page_sizes(%w[per_page])).to eq([10, 25, 50])
+    end
+
+    # nil, not an empty array: the configured sweep stays the default when the document
+    # declares nothing, and a caller must be able to tell those apart.
+    it "declares nothing when the parameter has no enum" do
+      expect(endpoint_with("default: 25").declared_page_sizes(%w[per_page])).to be_nil
+    end
+
+    it "declares nothing for a parameter name the run does not treat as a page size" do
+      expect(endpoint_with("enum: [10, 25]").declared_page_sizes(%w[limit])).to be_nil
     end
   end
 end

@@ -348,6 +348,35 @@ module Loadwright
         end
       end
 
+      # ASK THE ENDPOINT WHAT IT ACCEPTS, where its document says so.
+      #
+      # A page size the sweep chose that the endpoint rejects is our doing -- 0.0.7
+      # added a whole outcome reason to say so, which was the right response to the
+      # symptom and not to the cause. An enum on the page-size parameter names the legal
+      # values exactly, and reading it turns a fabricated inconsistency into a real
+      # measurement. One integration lost most of a round explaining a 400 band that
+      # existed only because the default sweep guessed outside a declared set.
+      #
+      # Only values the run could support: a declared size larger than the seeded scale
+      # would measure the same rows repeatedly, which is the flat line that reads as
+      # healthy.
+      def sweep_values_for(endpoint)
+        configured = Array(@config.page_size_sweep)
+        declared = endpoint.respond_to?(:declared_page_sizes) &&
+                   endpoint.declared_page_sizes(@config.page_size_parameters)
+        return configured unless declared&.any?
+
+        usable = declared.select { |size| size <= page_size_sweep_scale.to_i }
+        return configured if usable.empty?
+
+        @warnings << "#{endpoint} declares the page sizes it accepts (#{declared.join(', ')}), so the " \
+                     "sweep used #{usable.join(', ')} instead of the configured " \
+                     "#{configured.join(', ')}. A page size the sweep chose that the endpoint rejects " \
+                     "is our doing, not yours."
+        @warnings.uniq!
+        usable
+      end
+
       # Run-level first, then per-endpoint: a GraphQL operation with no page-size
       # variable cannot be swept even when the run as a whole can.
       def page_size_cell_skip_reason(endpoint)
@@ -456,7 +485,7 @@ module Loadwright
         endpoints.each do |endpoint|
           next if skip_page_size_sweep?(endpoint)
 
-          Array(@config.page_size_sweep).each do |page_size|
+          sweep_values_for(endpoint).each do |page_size|
             run_cell(endpoint: endpoint, sweep: :page_size, scale: seeded, page_size: page_size,
                      concurrency: 1, seeded: seeded)
           end
@@ -604,13 +633,17 @@ module Loadwright
       #
       # The values go through the redactor on the way into a persisted record, which is
       # where the app's own filter_parameters are honoured.
-      def note_request_shape(endpoint, request, sources)
+      def note_request_shape(endpoint, request, sources, resolution = nil)
         key = endpoint.to_s
         return if @request_shapes.key?(key)
 
         query = Hash(request.query)
         @request_shapes[key] = {
           path: request.path,
+          # WHICH SOURCE WON, PER PATH SEGMENT. A seeded value losing to a recorded
+          # literal is invisible otherwise: the path looks fine, the run says nothing,
+          # and finding out costs a probe plus a cross-round diff.
+          path_values: Hash(resolution&.sources).to_h { |name, source| [name, source] },
           query: sources.to_h { |name, source| [name, { source: source, value: query[name] }] },
           headers: request.headers.keys.reject { |name| name.to_s.downcase == "authorization" }.sort
         }
@@ -642,7 +675,7 @@ module Loadwright
           body: endpoint.body_for(page_size),
           endpoint_key: endpoint.to_s
         )
-        note_request_shape(endpoint, request, sources)
+        note_request_shape(endpoint, request, sources, resolution)
         request
       end
 
@@ -892,7 +925,8 @@ module Loadwright
         return if @outcomes.any? { |o| o.endpoint == endpoint && o.reason == :path_params_unresolved }
 
         @outcomes << EndpointOutcome.inconclusive(
-          endpoint: endpoint, reason: :path_params_unresolved, detail: resolution.detail,
+          endpoint: endpoint, reason: :path_params_unresolved,
+          detail: "#{resolution.detail}#{rejection_only_note(endpoint)}",
           capability_epoch: @context.capability_epoch
         )
       end
@@ -936,7 +970,7 @@ module Loadwright
           guard: @guard,
           seeder: @seeder,
           identities: @identities,
-          warnings: @warnings + query_cache_warnings,
+          warnings: @warnings + query_cache_warnings + resolver_warnings,
           aborted_reason: aborted_reason,
           explain: @explain,
           latency: @latency,
@@ -1093,7 +1127,8 @@ module Loadwright
           return inconclusive(endpoint, diagnosed || invalid.reason,
                               "#{invalid.detail}#{replayed_identifier_note(key, cells)}" \
                               "#{pre_data_layer_note(cells)}#{app_exception_note(cells)}" \
-                              "#{zero_row_query_note(cells)}")
+                              "#{zero_row_query_note(cells)}",
+                              findings: retained_findings_for(endpoint, cells, invalid.reason))
         end
 
         shapes = cells.map(&:shape)
@@ -1513,6 +1548,28 @@ module Loadwright
       # Said out loud because the setting promises the cache is off and it is not:
       # Rails' own QueryCache middleware enables it per request, after our setup-time
       # disable, and nothing until now noticed.
+      # A SEEDED RESOURCE NOBODY ASKED FOR. The factory ran, the rows exist, and every
+      # request went out carrying something else -- with no warning, because a lookup
+      # miss looks exactly like having no factory_map entry. Naming both sides (what was
+      # seeded, what endpoints actually asked for) turns a cross-round investigation
+      # into one line.
+      def resolver_warnings
+        [@resolver.respond_to?(:unconsumed_warning) ? @resolver.unconsumed_warning : nil].compact
+      end
+
+      # WHY THERE WAS NOTHING TO REPLAY, when the answer is that every recording of this
+      # template was a spec asserting a rejection. Without this the endpoint reads as an
+      # ordinary resolution failure and the reader goes looking for a factory -- when
+      # what actually happened is that their suite never exercised it successfully.
+      def rejection_only_note(endpoint)
+        return "" unless endpoint.respond_to?(:recorded_only_as_rejection?) && endpoint.recorded_only_as_rejection?
+
+        " Every one of the #{endpoint.recorded_attempts} recording(s) of this template was a request " \
+          "your specs expected to be REJECTED, so no usable identifier was captured from any of them " \
+          "and none was replayed. The route is real; nothing here says the endpoint is broken. Give it " \
+          "a factory_map entry or a path_param_overrides value and it becomes measurable."
+      end
+
       def query_cache_warnings
         return [] unless @query_cache_observed && @config.disable_query_cache_during_run
 
@@ -1624,9 +1681,34 @@ module Loadwright
         EndpointOutcome.inconclusive(endpoint: endpoint, reason: reason)
       end
 
-      def inconclusive(endpoint, reason, detail)
+      def inconclusive(endpoint, reason, detail, findings: [])
         EndpointOutcome.inconclusive(endpoint: endpoint, reason: reason, detail: detail,
+                                     findings: findings,
                                      capability_epoch: @context.capability_epoch)
+      end
+
+      # THE ONE REASON WHOSE RESPONSES DID THE WORK.
+      #
+      # A schema violation says the payload does not match its documentation. Every
+      # other invalid reason says the response did not prove it did the work at all --
+      # an error status, an empty collection where records were seeded, a page size the
+      # endpoint rejected, a shape that changed between cells. Findings measured on
+      # those describe an error path and are correctly discarded; that is the round-5
+      # healthy-404 rule and it is not being loosened.
+      #
+      # Findings measured on a 200 that merely under-documents itself are real, and
+      # dropping them cost one integration two rounds of a high-confidence N+1 the tool
+      # had reported correctly in the eight rounds before.
+      RETAINS_FINDINGS = %i[schema_invalid].freeze
+
+      def retained_findings_for(endpoint, cells, reason)
+        return [] unless RETAINS_FINDINGS.include?(reason)
+
+        findings_for(endpoint, cells)
+      rescue StandardError
+        # A finding we could not assemble is not worth failing the outcome over: the
+        # endpoint is already inconclusive and the detail already says why.
+        []
       end
 
       def mark_remaining_skipped(endpoints, error)

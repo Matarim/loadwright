@@ -46,8 +46,13 @@ module Loadwright
       # 404'd every request, and the documented fix could not take effect.
       SOURCE_ORDER = %i[override seeded recorded example].freeze
 
+      # Resource name -> the endpoints that asked for it. Lets the run say which key a
+      # path parameter was looked up under, which is the half a silent miss hides.
+      attr_reader :looked_up
+
       def initialize(config: Loadwright.configuration, seeded_ids: {})
         @config = config
+        @looked_up = {}
         # { "post" => [1, 2, 3] } — resource name to ids the seeder just created.
         @seeded_ids = seeded_ids
         @cursors = {}
@@ -123,9 +128,33 @@ module Loadwright
         !resource_from_name(name).nil?
       end
 
+      # Seeded, and asked for by nobody. Either the factory_map key does not match what
+      # any path parameter derives to, or no endpoint routes on it. Both are worth a
+      # sentence: the first is a silent misconfiguration, and until now the run's only
+      # symptom was requests carrying a recorded literal for no stated reason.
+      def unconsumed_resources
+        Array(@seeded_ids.keys).map(&:to_s).reject { |name| @looked_up.key?(name) }
+      end
+
+      def unconsumed_warning
+        unused = unconsumed_resources
+        return nil if unused.empty? || @looked_up.empty?
+
+        "factory_map seeded #{unused.map(&:inspect).join(', ')} and no endpoint's path parameter " \
+          "resolved to #{unused.length == 1 ? 'it' : 'them'}. A factory_map key is matched against a " \
+          "name derived from the PATH PARAMETER, not from the factory: #{example_derivation}. The " \
+          "names endpoints actually asked for were #{@looked_up.keys.map(&:inspect).sort.join(', ')} " \
+          "-- rekey factory_map to one of those, or use path_param_overrides."
+      end
+
+      def example_derivation
+        "`{widget_id}`, `{widget_guid}` and `{widget_number}` all look under \"widget\""
+      end
+
       def to_h
         {
           seeded_resources: @seeded_ids.keys,
+          resources_endpoints_asked_for: @looked_up.keys.sort,
           overrides: @config.path_param_overrides.keys
         }
       end
@@ -147,6 +176,16 @@ module Loadwright
       def from_seeded(endpoint, param, index)
         resource = resource_for(endpoint, param)
         return nil if resource.nil?
+
+        # WHAT WE LOOKED UNDER, whether or not we found it. A factory_map key is
+        # matched against a name derived from the PATH PARAMETER, not from the factory
+        # -- `{caller_number}` looks under "caller" -- and a key that does not match is
+        # a silent miss: resolution falls through to the recorded literal and the run
+        # looks exactly like one with no factory_map entry at all. One integration
+        # configured `value:` correctly, watched 100 rows get seeded, saw no warning,
+        # and had the recorded literal sent anyway.
+        (@looked_up[resource] ||= []) << endpoint.to_s
+        @looked_up[resource].uniq!
 
         ids = Array(@seeded_ids[resource] || @seeded_ids[resource.to_sym])
         return nil if ids.empty?

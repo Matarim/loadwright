@@ -395,10 +395,38 @@ module Loadwright
         raise DiscoveryError, "#{input_path} is not readable JSON: #{e.message}. Re-record it."
       end
 
+      # A REJECTION SPEC'S IDENTIFIER IS NOT EVIDENCE THAT A TEMPLATE IS EXERCISABLE.
+      #
+      # The comment below used to say these values were "demonstrably real because a
+      # spec used them successfully" -- and the code took them from EVERY recording in
+      # the group, including the ones asserting that the API rejects a bad request.
+      # Those hardcode a deliberately-non-record identifier into the path, so the
+      # recorder faithfully captured a value guaranteed to resolve to nothing, and the
+      # endpoint then failed on every request of every cell, forever.
+      #
+      # The status was on disk the whole time. In one real recording of 600 requests,
+      # 56 carried such a literal: NONE of them had returned 2xx, and none involved a
+      # template substitution. Either signal identifies all of them with no false
+      # positives, and status is the one that needs no knowledge of anybody's
+      # placeholder vocabulary -- so it works for every app rather than for the one
+      # whose naming habits somebody enumerated by hand.
+      #
+      # Two workarounds died here: excluding rejection spec files by name (which forces
+      # a bad trade when one file carries both a rejection and a healthy case), and
+      # listing the literals in excluded_paths (which is a property of one team's
+      # naming and rots the moment somebody invents a new one).
+      def successful?(recording)
+        status = recording["status"]
+
+        status.is_a?(Integer) && (200..299).cover?(status)
+      end
+
       def build_endpoint(template, verb, group)
-        # Concrete ids, one list per param — resolution order #2 for path params,
-        # and demonstrably real because a spec used them successfully.
-        recorded_values = group.each_with_object({}) do |recording, out|
+        # Concrete ids, one list per param — resolution order #2 for path params, and
+        # taken ONLY from recordings that actually succeeded, which is what makes the
+        # "demonstrably real" claim true rather than aspirational.
+        successful = group.select { |recording| successful?(recording) }
+        recorded_values = successful.each_with_object({}) do |recording, out|
           Array(recording["path_values"]).each do |name, value|
             (out[name.to_sym] ||= []) << value
           end
@@ -419,6 +447,12 @@ module Loadwright
           query_params: (richest["query"] || {}).map { |name, value| { name: name, example: value } },
           request_body: presence(richest["body"]),
           recorded_path_values: recorded_values,
+          # Whether ANY recording of this template succeeded. When none did, the
+          # template is real (a route recognised it) but no usable identifier was ever
+          # captured -- and saying that is far more useful than replaying a literal
+          # that cannot resolve and reporting the resulting 404 as the endpoint's.
+          recorded_success: successful.any?,
+          recorded_attempts: group.length,
           recorded_headers: richest["headers"] || {},
           expected_statuses: group.filter_map { |r| r["status"] }.uniq,
           description: [richest["controller"], richest["action"]].compact.join("#").then { |s| presence(s) }

@@ -294,4 +294,59 @@ RSpec.describe Loadwright::Discovery::IntegrationSpecSource do
       expect(JSON.parse(File.read(output))["requests"]).to eq([])
     end
   end
+
+  # A REJECTION SPEC'S IDENTIFIER IS NOT EVIDENCE THAT A TEMPLATE IS EXERCISABLE.
+  #
+  # Path values used to be taken from EVERY recording in a group, including specs
+  # asserting that the API rejects a bad request -- which hardcode a
+  # deliberately-non-record identifier into the path. The recorder captured it
+  # faithfully, resolution replayed it, and the endpoint failed on every request of
+  # every cell forever. The status was on disk the whole time.
+  #
+  # In one real recording of 600 requests, 56 carried such a literal and NONE had
+  # returned 2xx. Two standing workarounds died here: excluding rejection spec files by
+  # name, and enumerating the placeholder literals in excluded_paths.
+  describe "a template recorded both successfully and as a rejection" do
+    def endpoints_over(requests)
+      File.write(@output, JSON.generate("version" => described_class::FORMAT_VERSION,
+                                        "requests" => requests))
+      described_class.new(config: config, stdout: StringIO.new).endpoints(input_path: @output)
+    end
+
+    def request_for(value, status)
+      { "verb" => "get", "path" => "/api/v1/widgets/#{value}",
+        "template" => "/api/v1/widgets/{id}", "path_values" => { "id" => value },
+        "status" => status, "query" => {}, "headers" => {}, "controller" => "widgets",
+        "action" => "show" }
+    end
+
+    it "replays only the identifier that actually worked" do
+      endpoint = endpoints_over([request_for("42", 200), request_for("not-a-real-id", 404)]).first
+
+      expect(endpoint.recorded_path_values[:id]).to eq(["42"])
+    end
+
+    it "captures nothing from a template only ever recorded as a rejection" do
+      endpoint = endpoints_over([request_for("not-a-real-id", 404),
+                              request_for("also-bogus", 422)]).first
+
+      expect(endpoint.recorded_path_values[:id]).to be_nil.or be_empty
+      expect(endpoint).to be_recorded_only_as_rejection
+    end
+
+    # The parameter must stay DECLARED even with no value, or the template and the
+    # parameter list disagree and the raw placeholder goes out as a URL.
+    it "keeps the endpoint and its template, because the route is real" do
+      endpoint = endpoints_over([request_for("not-a-real-id", 404)]).first
+
+      expect(endpoint.path).to eq("/api/v1/widgets/{id}")
+      expect(endpoint.path_params).to eq([:id])
+    end
+
+    it "does not call a successfully-recorded template a rejection" do
+      endpoint = endpoints_over([request_for("42", 200)]).first
+
+      expect(endpoint).not_to be_recorded_only_as_rejection
+    end
+  end
 end

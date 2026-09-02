@@ -1328,6 +1328,64 @@ DIAG-34:
     saying plainly what it does: real writes against a real database, on every request
     of every cell. It is a deliberate decision, not a coverage tweak.
 
+DIAG-44:
+  symptom: >
+    "an endpoint is inconclusive for a schema violation and its N+1 disappeared" /
+    "the tool used to report this finding and now reports nothing"
+  cause: >
+    Before 0.0.12 a schema violation disqualified the endpoint BEFORE the detectors'
+    results were kept, so measurements taken on responses that did the work were
+    discarded. It cost one integration two rounds of a finding reported correctly in
+    the eight rounds before.
+  fix: >
+    0.0.12+ retains them under "Measured before this endpoint was set aside". The
+    endpoint stays inconclusive -- coverage really is incomplete -- but the findings
+    are visible.
+  say_this: |
+    Read a retained finding as EVIDENCE, not a verdict. It was measured on a response
+    that returned successfully; the endpoint could not be judged for an unrelated
+    reason. Fixing the schema gap makes it a normal finding.
+  do_not: >
+    Do not treat this as licence to trust findings on any inconclusive endpoint. Only
+    :schema_invalid retains them. An error status, an empty collection with seeded
+    records, a rejected page size and an inconsistent shape all still discard them,
+    because those findings describe an error path rather than the endpoint.
+
+DIAG-45:
+  symptom: >
+    "I set factory_map value:/param: and the request still carries the recorded id" /
+    "seeding runs but the seeded value is never used"
+  cause: >
+    A factory_map key is matched against a name derived from the PATH PARAMETER, not
+    from the factory. `{caller_number}` looks under "caller"; `{account_ref}` under
+    "account". A key named after the factory misses silently and resolution falls
+    through to the recorded literal.
+  fix: |
+    0.0.12+ warns, naming what was seeded and what endpoints actually asked for, and
+    each endpoint's request block shows which source won per path segment.
+    Rekey factory_map to the derived name, or use path_param_overrides, which is
+    checked FIRST and takes a literal or a callable.
+  do_not: >
+    Do not conclude the feature is broken before reading the request block. It names
+    the winning source for every path segment.
+
+DIAG-46:
+  symptom: >
+    "endpoints from our rejection specs 404 on every request" / "should I exclude the
+    spec files that test rejections"
+  cause: >
+    Before 0.0.12 path values were taken from every recording, including specs
+    asserting the API REJECTS a bad request -- which hardcode a non-record identifier.
+  fix: >
+    Upgrade. 0.0.12+ takes path values only from recordings that returned 2xx, and a
+    template recorded only as a rejection says so instead of replaying a literal that
+    cannot resolve.
+  do_not: >
+    Do NOT tell a user to exclude rejection spec files or to list their placeholder
+    literals in excluded_paths. Both were workarounds for this bug: the first forces a
+    bad trade when one file carries a rejection AND a healthy case, and the second is a
+    property of one team's naming that rots when somebody invents a new placeholder.
+
 DIAG-41:
   symptom: >
     "every endpoint says its response did not validate against the OpenAPI schema" /

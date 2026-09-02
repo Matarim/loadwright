@@ -5,6 +5,74 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.12] — 2026-09-02
+
+### Fixed
+
+- **A schema violation no longer discards findings that were already measured.** 0.0.11
+  stopped a schema Loadwright *could not load* from being read as a violation. This is
+  the layer underneath: a **genuine** violation still disqualified the endpoint before
+  the detectors ran, and everything they had measured went with it.
+
+  The cost was a two-round regression against the tool's own prior output on unchanged
+  code — a high-confidence `n_plus_one_pattern_match` (the same query 12 times in a
+  single request, of 73 queries in that request) reported correctly in eight
+  consecutive rounds, then absent from two, because the operation under-described a
+  parameterised response. Silence is indistinguishable from health to anyone who was
+  not there for the earlier rounds.
+
+  The validity gate is **not** loosened: "the response did not prove it did the work"
+  and "the response did the work and does not match its documentation" are different
+  sentences, and only the first justifies throwing measurements away. `:schema_invalid`
+  is the only reason that retains findings. An error status, an empty collection where
+  records were seeded, a rejected page size and an inconsistent shape all still discard
+  them, because those findings describe an error path.
+
+  The state stays `inconclusive` — three states remain load-bearing, coverage really is
+  incomplete, and `inconclusive` still never fails the exit code. The findings render
+  under their own heading: *"Measured before this endpoint was set aside — real, and not
+  a verdict."*
+
+- **A `factory_map` key that matches nothing is no longer silent.** The key is looked up
+  under a name derived from the **path parameter**, not from the factory —
+  `{caller_number}` looks under `"caller"` — and a key that does not match falls through
+  to the recorded literal, producing a run indistinguishable from one with no
+  `factory_map` entry at all. One integration configured `value:` correctly, watched 100
+  rows seed, saw no warning, and had the recorded literal sent anyway; establishing why
+  cost a probe and a cross-round diff.
+
+  The run now names both sides: what was seeded, and what the endpoints actually asked
+  for. Each endpoint's request block also shows **which source won for each path
+  segment**, so a seeded value losing to a recorded one is visible at a glance.
+
+- **A rejection spec's identifier is no longer replayed.** Recorded path values were
+  taken from every capture in a group, including specs asserting that the API *rejects*
+  a bad request — which hardcode a deliberately-non-record identifier into the path. The
+  recorder captured it faithfully, resolution replayed it, and the endpoint failed on
+  every request of every cell, forever.
+
+  **The response status was on disk the whole time.** In one real recording of 600
+  requests, 56 carried such a literal and **none had returned 2xx**. Values now come
+  only from recordings that succeeded. A template recorded *only* as a rejection keeps
+  its route and says so, rather than sending a literal that cannot resolve and reporting
+  the resulting 404 as the endpoint's fault.
+
+  This removes two standing workarounds — excluding rejection spec files by name (which
+  forces a bad trade when one file carries both a rejection and a healthy case) and
+  enumerating the placeholder literals in `excluded_paths` (a property of one team's
+  naming that rots the moment somebody invents a new one). Neither needed config, and
+  the rule works for every app because it needs no knowledge of anyone's placeholder
+  vocabulary.
+
+### Added
+
+- **The page-size sweep reads the values the endpoint declares.** An `enum` on the
+  page-size parameter names the legal sizes exactly. 0.0.7 added an outcome reason to
+  explain a page size the sweep chose and the endpoint rejected — the right response to
+  the symptom, not to the cause. The better answer is not to choose it. The sweep now
+  uses the declared set where there is one (bounded by the seeded scale), says so, and
+  falls back to `page_size_sweep` where nothing is declared.
+
 ## [0.0.11] — 2026-08-31
 
 ### Fixed

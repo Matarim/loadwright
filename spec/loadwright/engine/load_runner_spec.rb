@@ -825,6 +825,89 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     end
   end
 
+  # A FINDING MEASURED ON A RESPONSE THAT DID THE WORK SURVIVES A DISQUALIFICATION ON A
+  # DIFFERENT AXIS.
+  #
+  # The validity gate exists so no performance verdict attaches to a response that did
+  # not prove it did the work -- the round-5 healthy-404 rule, not being loosened. But
+  # "did not do the work" and "did the work and does not match its documentation" are
+  # different sentences, and only the first justifies discarding measurements.
+  #
+  # Discarding them there cost one integration TWO CONSECUTIVE ROUNDS of a
+  # high-confidence N+1 the tool had reported correctly in the eight rounds before, on
+  # an endpoint that answered 200 six hundred times. Silence is indistinguishable from
+  # health to a reader who was not there for those rounds.
+  describe "an endpoint disqualified by its schema after the work was measured" do
+    before do
+      config.scale_factors = [10]
+      config.page_size_sweep = [5]
+      config.concurrency_levels = [1]
+      config.requests_per_endpoint_per_level = 20
+      config.warmup_requests = 0
+    end
+
+    let(:violating) do
+      schema = Loadwright::Discovery::SchemaRef.for(
+        document: { "s" => { "type" => "object", "required" => %w[absent] } }, pointer: "#/s"
+      )
+      endpoint(response_schemas: { 200 => schema })
+    end
+
+    let(:n_plus_one) do
+      { query_count: 12,
+        queries: Array.new(12) { { fingerprint: "SELECT * FROM widgets WHERE id = ?" } } }
+    end
+
+    def run_it(ep = violating, metrics: n_plus_one, body: '[{"id":1}]')
+      runner(context: build_context(responder: ->(_) { { status: 200, body: body } }, metrics: metrics))
+        .run(endpoints: [ep])
+    end
+
+    it "still reports the endpoint as inconclusive, because coverage really is incomplete" do
+      outcome = run_it.outcomes.first
+
+      expect(outcome).to be_inconclusive
+      expect(outcome.reason).to eq(:schema_invalid)
+    end
+
+    it "keeps the finding it measured rather than discarding it" do
+      outcome = run_it.outcomes.first
+
+      expect(outcome.retained_findings.map(&:kind)).to include(:n_plus_one_pattern_match)
+      expect(outcome.retained_findings.first.detail).to include("ran 12 times in a single request")
+    end
+
+    # Three states stay load-bearing. A retained finding is evidence, not a verdict, and
+    # counting it as one would make `has_findings` mean two different things.
+    it "does not count as an endpoint with findings" do
+      result = run_it
+
+      expect(result.with_findings).to be_empty
+      expect(result.summary[:has_findings]).to eq(0)
+      expect(result.summary[:inconclusive]).to eq(1)
+    end
+
+    # THE ROUND-5 RULE, UNTOUCHED. An error status means the response never proved it
+    # did the work, so its findings describe an error path and are correctly discarded.
+    it "discards findings measured on an endpoint that failed its status check" do
+      outcome = run_it(endpoint, body: "boom",
+                       metrics: n_plus_one).outcomes.first
+      erroring = runner(context: build_context(responder: ->(_) { { status: 500, body: "boom" } },
+                                               metrics: n_plus_one)).run(endpoints: [endpoint]).outcomes.first
+
+      expect(outcome).not_to be_nil
+      expect(erroring).to be_inconclusive
+      expect(erroring.retained_findings).to be_empty
+    end
+
+    it "renders them under a heading that is not a verdict" do
+      text = Loadwright::Reporting::MarkdownReport.new(config: config).render(run_it)
+
+      expect(text).to include("Measured before this endpoint was set aside")
+      expect(text).to include("n_plus_one_pattern_match")
+    end
+  end
+
   describe "the circuit breaker mid-run" do
     it "aborts the remaining matrix and marks it skipped rather than omitting it" do
       config.scale_factors = [10, 100]

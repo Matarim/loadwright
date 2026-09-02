@@ -18,12 +18,14 @@ module Loadwright
       attr_reader :path, :verb, :sources, :operation_id, :path_params, :query_params,
                   :request_body, :request_schema, :response_schemas, :recorded_path_values,
                   :recorded_headers, :expected_statuses, :description, :graphql_operation,
+                  :recorded_success, :recorded_attempts,
                   :graphql_operation_type, :graphql_page_size_variable
 
       def initialize(path:, verb:, source: nil, sources: nil, operation_id: nil,
                      path_params: nil, query_params: [], request_body: nil,
                      request_schema: nil, response_schemas: {}, recorded_path_values: {},
                      recorded_headers: {}, expected_statuses: [], description: nil, graphql_operation: nil,
+                     recorded_success: nil, recorded_attempts: nil,
                      graphql_operation_type: :query, graphql_page_size_variable: nil)
         @path = path
         @verb = verb.to_s.downcase.to_sym
@@ -56,6 +58,9 @@ module Loadwright
         # negotiation, not resending somebody's Host header.
         @recorded_headers = recorded_headers.freeze
         @expected_statuses = expected_statuses.freeze
+        # nil when no recording contributed; true/false once one did.
+        @recorded_success = recorded_success
+        @recorded_attempts = recorded_attempts
         @description = description
         freeze
       end
@@ -98,12 +103,38 @@ module Loadwright
 
       def graphql? = !graphql_operation.nil?
 
+      # Recorded, and never once successfully. The template is real -- a route
+      # recognised it -- but every capture of it was a spec asserting a rejection, so no
+      # usable identifier was ever taken from it.
+      def recorded_only_as_rejection?
+        recorded_success == false && recorded_attempts.to_i.positive?
+      end
+
       # REST varies page size with a query parameter, which any endpoint will accept
       # (and ignoring it shows up as "unable to vary result size"). GraphQL varies it
       # through a declared variable, so an operation without one cannot be swept at
       # all -- and saying so beats measuring the same page three times and calling the
       # flat line healthy.
       def page_size_varying? = !graphql? || !graphql_page_size_variable.nil?
+
+      # THE SWEEP ASKS THE ENDPOINT WHAT IT ACCEPTS, where the document says so.
+      #
+      # A page size the sweep chose that the endpoint rejects is our doing, not theirs
+      # -- 0.0.7 added a whole outcome reason to say so. The better answer is not to
+      # choose it: an enum on the page-size parameter names the legal values exactly,
+      # and reading it turns a fabricated inconsistency into a real measurement.
+      #
+      # nil when nothing is declared, so the configured sweep stays the default.
+      def declared_page_sizes(parameter_names)
+        wanted = Array(parameter_names).map(&:to_s)
+        param = Array(query_params).find do |candidate|
+          wanted.include?(candidate[:name].to_s) && Array(candidate[:enum]).any?
+        end
+        return nil if param.nil?
+
+        values = Array(param[:enum]).filter_map { |v| Integer(v, exception: false) }.sort
+        values.empty? ? nil : values
+      end
 
       def page_size_unavailable_reason
         return nil if page_size_varying?
@@ -214,6 +245,8 @@ module Loadwright
           recorded_path_values: deep_merge_recorded(other),
           recorded_headers: documented.recorded_headers.merge(recorded.recorded_headers),
           expected_statuses: (expected_statuses | other.expected_statuses),
+          recorded_success: [recorded_success, other.recorded_success].compact.any? || nil,
+          recorded_attempts: [recorded_attempts, other.recorded_attempts].compact.max,
           description: description || other.description
         )
       end

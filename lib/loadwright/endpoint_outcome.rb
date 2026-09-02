@@ -108,11 +108,31 @@ module Loadwright
             capability_epoch: capability_epoch, coverage: coverage)
       end
 
-      def inconclusive(endpoint:, reason:, detail: nil, capability_epoch: 0, coverage: nil)
+      # FINDINGS MEASURED ON A SUCCESSFUL RESPONSE SURVIVE A DISQUALIFICATION ON A
+      # DIFFERENT AXIS.
+      #
+      # The validity gate exists because a performance verdict must never be attached to
+      # a response that did not prove it did the work -- that is the round-5 healthy-404
+      # lesson and it is not being loosened. But "the response did not prove it did the
+      # work" and "the response did the work and does not match its documentation" are
+      # different sentences, and only the first justifies throwing measurements away.
+      #
+      # An endpoint that answered 200 six hundred times, issued 73 queries per request,
+      # and repeated one of them twelve times has a real N+1. A schema under-describing
+      # its payload does not make that untrue. Discarding it there cost one integration
+      # two consecutive rounds of a finding the tool had reported correctly in the eight
+      # before -- silence being indistinguishable from health to anyone who was not
+      # there for those rounds.
+      #
+      # The STATE is still `inconclusive`: three states are load-bearing, coverage
+      # genuinely is incomplete, and `inconclusive` never fails the exit code (decision
+      # 27). What changes is that the findings are carried and rendered rather than
+      # dropped on the floor.
+      def inconclusive(endpoint:, reason:, detail: nil, capability_epoch: 0, coverage: nil, findings: [])
         raise ArgumentError, "unknown inconclusive reason #{reason.inspect}" unless REASONS.key?(reason)
 
         new(
-          endpoint: endpoint, state: :inconclusive, reason: reason,
+          endpoint: endpoint, state: :inconclusive, reason: reason, findings: findings,
           detail: detail, capability_epoch: capability_epoch, coverage: coverage
         )
       end
@@ -173,6 +193,13 @@ module Loadwright
     # class of check was missing". Both are inconclusive; only the second says the
     # endpoint itself was fine as far as we looked.
     def incomplete_coverage? = inconclusive? && reason == :incomplete_coverage
+
+    # Measured, real, and carrying no verdict -- the endpoint could not be judged, but
+    # these were observed on responses that did the work. Reported under their own
+    # heading so nobody reads them as a verdict, and never counted as `has_findings`.
+    def retained_findings = inconclusive? ? findings : []
+
+    def retained_findings? = retained_findings.any?
 
     def quarantined?       = inconclusive? && QUARANTINE_REASONS.include?(reason)
     def externally_blocked? = inconclusive? && EXTERNAL_REASONS.include?(reason)

@@ -322,7 +322,12 @@ module Loadwright
             name: param["name"],
             required: param["required"] == true,
             example: param["example"] || param.dig("schema", "example") || param.dig("schema", "default"),
-            type: param.dig("schema", "type")
+            type: param.dig("schema", "type"),
+            # THE VALUES THE ENDPOINT SAYS IT ACCEPTS. A collection constraining its
+            # page size to a set is common, and sweeping outside that set produces a
+            # client error the report then has to explain -- an inconsistency the sweep
+            # itself created. It is declared right here; nothing read it.
+            enum: Array(param.dig("schema", "enum")).compact
           }
         end
       end

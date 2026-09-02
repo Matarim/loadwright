@@ -222,4 +222,50 @@ RSpec.describe Loadwright::Discovery::PathParamResolver do
       expect(subject.resolve(target).path).to eq("/api/v1/posts/11")
     end
   end
+
+  # A LOOKUP MISS LOOKS EXACTLY LIKE HAVING NO factory_map ENTRY.
+  #
+  # The key is matched against a name derived from the PATH PARAMETER, not from the
+  # factory -- `{caller_number}` looks under "caller" -- so a key named after the
+  # factory silently misses and resolution falls through to the recorded literal. One
+  # integration configured `value:` correctly, watched 100 rows seed, saw no warning,
+  # and had the recorded literal sent anyway; establishing why cost a probe and a
+  # cross-round diff.
+  describe "a seeded resource no endpoint asked for" do
+    let(:endpoint) do
+      Loadwright::Discovery::Endpoint.new(path: "/api/v1/widgets/{widget_number}", verb: :get,
+                                          source: :route)
+    end
+
+    it "names what was seeded and what endpoints actually looked for" do
+      resolver = described_class.new(config: config, seeded_ids: { "account" => %w[a1 a2] })
+      resolver.resolve(endpoint)
+
+      warning = resolver.unconsumed_warning
+      expect(warning).to include('"account"')
+      expect(warning).to include('"widget"')
+      expect(warning).to include("PATH PARAMETER")
+    end
+
+    it "says nothing when the seeded resource was used" do
+      resolver = described_class.new(config: config, seeded_ids: { "widget" => %w[w1] })
+      resolver.resolve(endpoint)
+
+      expect(resolver.unconsumed_warning).to be_nil
+    end
+
+    # Nothing resolved at all is a different problem with its own reporting, and a
+    # warning about key names would be noise on top of it.
+    it "says nothing when no endpoint resolved a path parameter at all" do
+      resolver = described_class.new(config: config, seeded_ids: { "account" => %w[a1] })
+
+      expect(resolver.unconsumed_warning).to be_nil
+    end
+
+    it "reports which source won, so a seeded value losing is visible" do
+      resolver = described_class.new(config: config, seeded_ids: { "widget" => %w[w1] })
+
+      expect(resolver.resolve(endpoint).sources).to eq(widget_number: :seeded)
+    end
+  end
 end

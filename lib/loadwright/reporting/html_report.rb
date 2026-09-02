@@ -354,7 +354,15 @@ module Loadwright
               "#{suggestion_html(finding)}</li>"
         end
 
-        "<ul class=\"findings\">#{items.join}</ul>"
+        list = "<ul class=\"findings\">#{items.join}</ul>"
+        return list unless endpoint[:state].to_s == "inconclusive"
+
+        # MEASURED, REAL, AND CARRYING NO VERDICT. Observed on responses that did the
+        # work, on an endpoint that could not be judged for an unrelated reason. Given
+        # its own heading so nobody reads it as a verdict.
+        "<p class=\"note\"><strong>Measured before this endpoint was set aside</strong> — real, " \
+          "and not a verdict. The endpoint is inconclusive for the reason above; these were " \
+          "observed on responses that did the work.</p>#{list}"
       end
 
       # Visually subordinate to the finding, and labelled "Try", because it is a

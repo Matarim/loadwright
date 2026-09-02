@@ -194,6 +194,20 @@ module Loadwright
         end
 
         findings = Array(endpoint[:findings])
+        # MEASURED, REAL, AND CARRYING NO VERDICT. An inconclusive endpoint's findings
+        # were observed on responses that did the work; they are shown under their own
+        # heading so nobody reads them as a verdict, and never in the ranked table.
+        if endpoint[:state].to_s == "inconclusive" && !findings.empty?
+          parts << ""
+          parts << "**Measured before this endpoint was set aside** — real, and not a verdict. " \
+                   "The endpoint is `inconclusive` for the reason above; these were observed on " \
+                   "responses that did the work."
+          parts += findings.map do |finding|
+            finding = finding.to_h if finding.respond_to?(:to_h)
+            "- **`#{finding[:kind]}`** (#{finding[:confidence]}) — #{finding[:detail]}"
+          end
+          findings = []
+        end
         unless findings.empty?
           parts << ""
           parts += findings.map do |finding|
@@ -353,6 +367,15 @@ module Loadwright
       # different parameters -- which is how a confirmed 73-query finding came back
       # HEALTHY in the next run, with nothing in either report saying the question had
       # changed.
+      # WHICH SOURCE WON, PER PATH SEGMENT. A seeded value losing to a recorded literal
+      # is invisible otherwise -- the path looks fine and the run says nothing.
+      PATH_SOURCES = {
+        "override" => "from path_param_overrides",
+        "seeded" => "from a seeded record",
+        "recorded" => "**replayed from your specs** — a seeded value did not match this parameter's name",
+        "example" => "**from the OpenAPI example** — no seeded or recorded value matched"
+      }.freeze
+
       VALUE_SOURCES = {
         "seeded" => "from a seeded record",
         "recorded" => "replayed from your specs",
@@ -452,9 +475,13 @@ module Loadwright
         return nil if shape.nil?
 
         query = Hash(shape[:query])
-        return nil if query.empty?
+        path_values = Hash(shape[:path_values])
+        return nil if query.empty? && path_values.empty?
 
-        rows = query.map do |name, entry|
+        rows = path_values.map do |name, source|
+          "  - `{#{name}}` — #{PATH_SOURCES.fetch(source.to_s, source.to_s)}"
+        end
+        rows += query.map do |name, entry|
           "  - `#{name}` = `#{request_value(entry)}` — #{value_source(entry)}"
         end
 
