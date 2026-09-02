@@ -42,7 +42,7 @@ module Loadwright
       # One query worth explaining. `sql` is the exemplar statement with its literals
       # intact — a fingerprint cannot be explained, and substituting a literal into one
       # would change the plan the planner picks, which is the thing being measured.
-      Candidate = Struct.new(:endpoint_key, :fingerprint, :sql, :duration_ms, :call_site,
+      Candidate = Struct.new(:endpoint_key, :fingerprint, :sql, :duration_ms, :call_site, :binds,
                              keyword_init: true)
 
       # What one EXPLAIN produced. `analyzed` records whether the statement was
@@ -150,7 +150,8 @@ module Loadwright
           .first(@config.explain_top_n_queries)
           .map do |fingerprint, slowest|
             Candidate.new(endpoint_key: endpoint_key, fingerprint: fingerprint, sql: slowest[:sql],
-                          duration_ms: slowest[:duration_ms], call_site: slowest[:call_site])
+                          duration_ms: slowest[:duration_ms], call_site: slowest[:call_site],
+                          binds: slowest[:binds])
           end
       end
 
@@ -256,13 +257,53 @@ module Loadwright
 
       # ------------------------------------------------------------------- explain
 
+      # A PLACEHOLDER WITHOUT ITS BINDS IS NOT AN ERROR, IT IS A MISSING INPUT.
+      #
+      # Rails emits a PREPARED statement's SQL with `$1` placeholders and the values
+      # separately, and whether a query is prepared depends on a per-connection
+      # statement cache that warms during a run. The same query therefore arrives
+      # sometimes with literals and sometimes with placeholders. EXPLAIN on a
+      # placeholder with no parameters raises, so index analysis failed intermittently
+      # -- and once a skipped check legitimately blocks a clean verdict, that
+      # intermittency reached the headline: two runs of one commit against the same data
+      # reported 18 clean and 20.
+      #
+      # With binds we explain it properly. Without them we say so, deterministically,
+      # instead of raising -- a stably pessimistic answer beats one that flips.
+      # NARROWED TO THE FORM THAT ACTUALLY BLOCKS A PLAN. SQLite and MySQL plan a
+      # statement with unbound placeholders perfectly well -- measured, both `?` and
+      # `$1` -- so treating any placeholder as unexplainable would remove index analysis
+      # from adapters where it works today. Only Postgres numbered parameters raise, and
+      # only when nothing supplies them.
+      NUMBERED_PLACEHOLDER = /(?<!\w)\$\d+(?!\w)/
+
+      def unbound?(candidate)
+        return false unless dialect == :postgresql
+        return false unless Array(candidate.binds).empty?
+
+        candidate.sql.to_s.match?(NUMBERED_PLACEHOLDER)
+      end
+
       def explain(candidate)
+        if unbound?(candidate)
+          return Plan.new(
+            endpoint_key: candidate.endpoint_key, fingerprint: candidate.fingerprint,
+            adapter: adapter_name, analyzed: false,
+            error: "the statement reached EXPLAIN as a prepared statement with no bind values, so its " \
+                   "plan could not be produced. Under :http the bind values deliberately do not " \
+                   "cross the collection endpoint, so this is a Loadwright limitation rather than a " \
+                   "problem with your query -- and it is reported the same way on every run rather " \
+                   "than depending on whether the statement cache happened to be warm."
+          )
+        end
+
         analyzed = analyzable?(candidate.sql)
         statement = explain_statement(candidate.sql, analyzed: analyzed)
 
         Plan.new(
           endpoint_key: candidate.endpoint_key, fingerprint: candidate.fingerprint,
-          adapter: adapter_name, analyzed: analyzed && executes_statement?, raw: select_rows(statement)
+          adapter: adapter_name, analyzed: analyzed && executes_statement?,
+          raw: select_rows(statement, candidate.binds)
         )
       rescue StandardError => e
         Plan.new(endpoint_key: candidate.endpoint_key, fingerprint: candidate.fingerprint,
@@ -283,7 +324,11 @@ module Loadwright
         end
       end
 
-      def select_rows(statement) = connection.select_all(statement).to_a
+      def select_rows(statement, binds = nil)
+        return connection.select_all(statement).to_a if Array(binds).empty?
+
+        connection.select_all(statement, "EXPLAIN", Array(binds)).to_a
+      end
 
       def execute(statement) = connection.execute(statement)
 

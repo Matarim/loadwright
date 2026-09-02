@@ -109,7 +109,9 @@ module Loadwright
           # QueryTracker), and to_h is the boundary every persisted artefact crosses:
           # a run record, a JSON report, a bug-report attachment. The fingerprint is
           # what findings are built from, and it carries no bind values.
-          query_sample: queries.first(50).map { |query| query.except(:sql) }
+          # AND WITHOUT :binds, for the same reason and more urgently: a bind IS the
+          # user's data, where the statement merely contains it.
+          query_sample: queries.first(50).map { |query| query.except(:sql, :binds) }
         )
       end
     end

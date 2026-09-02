@@ -5,6 +5,67 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.13] — 2026-09-02
+
+### Fixed
+
+- **The response-schema validator ignored OpenAPI 3.0's `nullable`, so every violation
+  it reported against a 3.0 document was false.** The raw document was handed to a
+  **JSON Schema** validator; `nullable` is an OpenAPI extension and not a JSON Schema
+  keyword, so it was silently discarded and `type: string` then rejected `null`. Every
+  property a document legitimately declares nullable produced a violation on every
+  response where that property was null.
+
+  The cost was not the false errors. A schema violation disqualifies an endpoint, so a
+  real, hand-verified N+1 sat suppressed for three rounds behind a defect that **did not
+  exist** — and the user, reading a confident report, wrote down that the fault was
+  theirs and invented a plausible mechanism to explain it. That is the most expensive
+  kind of wrong answer this tool can give: a report of a defect on the user's side is
+  believed, and a long run of being right is what makes it believed fastest.
+
+  **The translation is document-wide, and that is load-bearing.** `$ref`s resolve against
+  the document root, so a nullable schema reached *through* a `$ref` is invisible to a
+  fix scoped to the resolved subtree. Measured on a real document: translating the
+  subtree cleared three of four violations and left the fourth — a partial fix that looks
+  exactly like a working one.
+
+  Also translated: the 3.0 boolean form of `exclusiveMinimum`/`exclusiveMaximum`.
+  Annotations a document may legally carry and the validator does not interpret
+  (`discriminator`, `xml`, `externalDocs`) are **named in a warning** rather than
+  rewritten — they cannot cause a valid response to be rejected, and inventing meaning
+  for them would be guessing.
+
+- **An endpoint that retained its findings no longer prints prose denying them.** The
+  `:schema_invalid` path carried no coverage, so the line read *"not checked: N+1 …
+  latency percentiles"* directly below a printed N+1 and directly above six cells of
+  populated percentiles — and the sentence above it said no finding was attached, eight
+  lines above two attached findings. The detectors ran; only the verdict is withheld, and
+  both sentences now say so.
+
+- **Index analysis is deterministic.** Rails emits a *prepared* statement's SQL with `$1`
+  placeholders and the values separately, and whether a query is prepared depends on a
+  per-connection statement cache that warms during a run — so the same query arrived
+  sometimes with literals and sometimes with placeholders, and `EXPLAIN` on a Postgres
+  placeholder with no parameters raises. Once a skipped check legitimately blocked a
+  clean verdict, that intermittency reached the headline: **two runs of one commit
+  against the same data reported 18 clean endpoints and 20.**
+
+  Binds are now captured alongside the exemplar statement and passed to `EXPLAIN`, under
+  exactly the rule the statement already followed: only when `EXPLAIN` is enabled,
+  stripped from every serialisation, dropped by the redactor. Where they genuinely cannot
+  arrive — under `:http` they deliberately do not cross the collection endpoint — the
+  plan is reported unavailable **with that reason, the same way on every run**. The check
+  is narrowed to Postgres numbered parameters, because SQLite and MySQL plan an unbound
+  statement perfectly well (measured, both `?` and `$1`).
+
+- **The remedy for a rejection recording caught up with the detection.** It advised
+  excluding the spec from `integration_spec_paths` — reinstating the workaround 0.0.12
+  removed, and costing the healthy recordings in the same file. It now says what the
+  endpoint actually needs, and says not to exclude the spec.
+
+- **A violation list is terminated**, so it no longer runs straight into the sentence
+  after it.
+
 ## [0.0.12] — 2026-09-02
 
 ### Fixed

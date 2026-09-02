@@ -355,4 +355,66 @@ RSpec.describe Loadwright::Analysis::ExplainAnalyzer do
       expect(analyzer(FakeConnection.new).candidates_from(no_sql, endpoint_key: "GET /x")).to be_empty
     end
   end
+
+  # A PLACEHOLDER WITHOUT ITS BINDS IS A MISSING INPUT, NOT AN ERROR.
+  #
+  # Rails emits a PREPARED statement's SQL with `$1` placeholders and the values
+  # separately, and whether a query is prepared depends on a per-connection statement
+  # cache that warms during a run -- so the same query arrives sometimes with literals
+  # and sometimes with placeholders. EXPLAIN on a Postgres placeholder with no
+  # parameters raises, so index analysis failed intermittently; and once a skipped check
+  # legitimately blocks a clean verdict, that intermittency reached the headline. Two
+  # runs of one commit against the same data reported 18 clean and 20.
+  describe "a prepared statement whose binds did not arrive" do
+    def candidate(sql, binds: nil)
+      described_class::Candidate.new(endpoint_key: "GET /widgets", fingerprint: sql,
+                                     sql: sql, duration_ms: 50.0, binds: binds)
+    end
+
+    def analyzer_on(dialect)
+      described_class.new(config: config).tap do |a|
+        allow(a).to receive(:dialect).and_return(dialect)
+        allow(a).to receive(:adapter_name).and_return(dialect.to_s)
+      end
+    end
+
+    it "says so deterministically rather than raising" do
+      plan = analyzer_on(:postgresql).send(:explain, candidate("SELECT * FROM widgets WHERE id = $1"))
+
+      expect(plan.error).to include("no bind values")
+      expect(plan.error).to include("Loadwright limitation")
+      expect(plan.analyzed).to be(false)
+    end
+
+    # The same answer on every run, which is the whole point: a stably pessimistic
+    # verdict beats one that flips between identical runs.
+    it "gives the same answer twice" do
+      a = analyzer_on(:postgresql)
+      first = a.send(:explain, candidate("SELECT * FROM widgets WHERE id = $1"))
+      second = a.send(:explain, candidate("SELECT * FROM widgets WHERE id = $1"))
+
+      expect(first.error).to eq(second.error)
+    end
+
+    # MEASURED, not assumed: SQLite plans both `?` and `$1` with nothing bound, so
+    # treating any placeholder as unexplainable would remove index analysis from
+    # adapters where it works today.
+    it "does not withhold a plan from an adapter that can produce one unbound" do
+      plan = analyzer_on(:sqlite).send(:explain, candidate("SELECT * FROM widgets WHERE id = ?"))
+
+      expect(plan.error.to_s).not_to include("no bind values")
+    end
+
+    it "explains normally once the binds are present" do
+      a = analyzer_on(:postgresql)
+
+      expect(a.send(:unbound?, candidate("SELECT * FROM widgets WHERE id = $1", binds: [1]))).to be(false)
+    end
+
+    it "is not triggered by a statement with no placeholders at all" do
+      a = analyzer_on(:postgresql)
+
+      expect(a.send(:unbound?, candidate("SELECT * FROM widgets WHERE id = 7"))).to be(false)
+    end
+  end
 end

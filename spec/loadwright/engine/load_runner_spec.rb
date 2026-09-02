@@ -900,6 +900,24 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(erroring.retained_findings).to be_empty
     end
 
+    # THE PROSE HAS TO AGREE WITH THE PAYLOAD. Without coverage attached the outcome
+    # carried Coverage.none, so the line read "not checked: N+1 ... latency percentiles"
+    # directly below a printed N+1 and directly above populated percentiles. A reader
+    # who trusts the prose over the payload concludes the exact opposite of the truth.
+    it "reports the detectors that ran as checked, not as skipped" do
+      outcome = run_it.outcomes.first
+
+      expect(outcome.coverage.describe).to include("checked:")
+      expect(outcome.coverage.covered_classes).to include(:n_plus_one)
+    end
+
+    it "does not tell the reader nothing was checked while printing findings" do
+      text = Loadwright::Reporting::MarkdownReport.new(config: config).render(run_it)
+
+      expect(text).to include("those findings are real")
+      expect(text).not_to include("its absence from the findings list means nothing was checked")
+    end
+
     it "renders them under a heading that is not a verdict" do
       text = Loadwright::Reporting::MarkdownReport.new(config: config).render(run_it)
 

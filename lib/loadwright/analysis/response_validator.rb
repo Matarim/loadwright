@@ -82,8 +82,10 @@ module Loadwright
         resolution_error = schema_resolution_error(endpoint)
         schema_errors = schema_errors_for(endpoint, parsed)
         if schema_errors&.any? && @config.require_schema_valid_response
-          return invalid(:schema_invalid, schema_errors.first(5).join("; "), schema_errors: schema_errors,
-                         **base)
+          # TERMINATED. The list used to end without punctuation and the next sentence was
+          # appended directly to it, so the final error ran into the following hint.
+          return invalid(:schema_invalid, "#{schema_errors.first(5).join('; ')}.",
+                         schema_errors: schema_errors, **base)
         end
 
         # 3. Seeded 200 posts, got []. A SETUP problem — wrong tenant, wrong
@@ -280,10 +282,16 @@ module Loadwright
         # endpoint is broken" and "this was never an endpoint with a success path".
         if endpoint && Array(endpoint.expected_statuses).include?(response.status) &&
            !(200..399).cover?(response.status)
+          # THE ADVICE HAD TO CATCH UP WITH THE DETECTION. Excluding the spec was the
+          # workaround for replaying a rejection's identifier, and 0.0.12 removed the
+          # need for it: path values now come only from recordings that returned 2xx.
+          # Suggesting it here reinstates a workaround the release before this one made
+          # unnecessary, and costs the healthy recordings in the same file.
           detail += " A recording for this endpoint observed #{response.status} too, so the spec it " \
                     "was discovered from was probably asserting a rejection rather than exercising a " \
-                    "success path. Exclude that spec from integration_spec_paths, or give the endpoint " \
-                    "a resolvable value in path_param_overrides."
+                    "success path. Its identifier is no longer replayed; what this endpoint needs is a " \
+                    "value that resolves -- a factory_map entry, or path_param_overrides. Do not " \
+                    "exclude the spec: that would drop the healthy recordings in the same file too."
         end
 
         if [401, 403].include?(response.status)

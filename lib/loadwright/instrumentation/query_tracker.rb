@@ -171,7 +171,20 @@ module Loadwright
         # nil outside GraphQL, and outside a traced schema.
         field_path = CurrentField.path
         entry[:field_path] = field_path if field_path
-        entry[:sql] = payload[:sql].to_s if @capture_exemplars
+        if @capture_exemplars
+          entry[:sql] = payload[:sql].to_s
+          # THE BINDS THAT BELONG TO THE STATEMENT. Rails emits a PREPARED statement's
+          # SQL with `$1` placeholders and the values separately, and whether a given
+          # query is prepared depends on a per-connection statement cache that warms up
+          # during a run. So the SAME query arrives sometimes with literals and
+          # sometimes with placeholders -- and EXPLAIN on a placeholder with no
+          # parameters errors, which made index analysis intermittently unavailable and
+          # moved the clean count between two identical runs (18 and 20 on one commit).
+          #
+          # Captured under exactly the same rule as the SQL: only when EXPLAIN is
+          # enabled, stripped from every serialisation, dropped by the redactor.
+          entry[:binds] = payload[:binds] if payload[:binds]
+        end
 
         request_id = CurrentRequest.id
 

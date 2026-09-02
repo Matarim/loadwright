@@ -106,7 +106,9 @@ module Loadwright
       REASON_KEYS = %i[reason cause unavailable detail message explanation summary caveat
                        error aborted_reason].freeze
 
-      DROPPED_KEYS = %i[sql].freeze
+      # `:binds` joins it, and is the more urgent of the two: the statement CONTAINS the
+      # user's data, a bind IS it.
+      DROPPED_KEYS = %i[sql binds].freeze
 
       def document(value)
         case value

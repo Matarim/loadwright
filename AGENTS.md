@@ -1328,6 +1328,45 @@ DIAG-34:
     saying plainly what it does: real writes against a real database, on every request
     of every cell. It is a deliberate decision, not a coverage tweak.
 
+DIAG-47:
+  symptom: >
+    "loadwright says our response does not match its schema, but the property is
+    declared nullable and the value is legitimately null"
+  cause: >
+    A bug in 0.0.12 and every release before it. The raw OpenAPI document was handed to
+    a JSON SCHEMA validator. `nullable: true` is an OpenAPI 3.0 EXTENSION and not a JSON
+    Schema keyword, so it was discarded and `type: string` then rejected null.
+  fix: upgrade to 0.0.13+.
+  say_this: |
+    On an affected version, EVERY violation involving a nullable property is FALSE, and
+    because a schema violation disqualifies an endpoint it may also be suppressing real
+    findings on that endpoint. Do not help the user "fix" their document to satisfy it.
+  do_not: >
+    Do NOT accept a reported schema violation as the user's defect without reading the
+    declaration. This bug held a real, hand-verified N+1 hostage for three rounds
+    because the user believed the report, wrote the defect down as theirs, and invented
+    a plausible mechanism to explain it. A tool that reports a fault on the user's side
+    is believed by default; that default is what a false positive exploits.
+
+DIAG-48:
+  symptom: >
+    "the clean count changed between two identical runs" / "index analysis works
+    sometimes and not others on the same endpoint"
+  cause: >
+    Rails emits a PREPARED statement's SQL with `$1` placeholders and the bind values
+    separately, and whether a query is prepared depends on a per-connection statement
+    cache that warms during a run. EXPLAIN on a Postgres placeholder with no parameters
+    raises, so index analysis failed intermittently -- and a skipped check legitimately
+    blocks a clean verdict, so the intermittency reached the headline number.
+  fix: >
+    0.0.13+ captures the binds with the exemplar statement and passes them to EXPLAIN.
+    Where they cannot arrive (under :http they deliberately do not cross the collection
+    endpoint) the plan is reported unavailable WITH THAT REASON, the same way every run.
+  say_this: >
+    A stably pessimistic verdict is correct here and a fluctuating one is not. If a
+    clean count still moves between identical runs on 0.0.13+, that is a defect and
+    should be reported.
+
 DIAG-44:
   symptom: >
     "an endpoint is inconclusive for a schema violation and its N+1 disappeared" /

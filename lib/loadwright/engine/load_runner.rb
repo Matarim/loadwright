@@ -1128,7 +1128,14 @@ module Loadwright
                               "#{invalid.detail}#{replayed_identifier_note(key, cells)}" \
                               "#{pre_data_layer_note(cells)}#{app_exception_note(cells)}" \
                               "#{zero_row_query_note(cells)}",
-                              findings: retained_findings_for(endpoint, cells, invalid.reason))
+                              findings: retained_findings_for(endpoint, cells, invalid.reason),
+                              # COVERAGE HAS TO MATCH WHAT WAS PRINTED. Without it the
+                              # outcome carried Coverage.none, so the line read "not
+                              # checked: N+1, ... latency percentiles" directly below a
+                              # printed N+1 and directly above six cells of populated
+                              # percentiles. The detectors ran; only the verdict is
+                              # withheld.
+                              coverage: retained_coverage_for(endpoint, key, cells, invalid.reason))
         end
 
         shapes = cells.map(&:shape)
@@ -1681,10 +1688,18 @@ module Loadwright
         EndpointOutcome.inconclusive(endpoint: endpoint, reason: reason)
       end
 
-      def inconclusive(endpoint, reason, detail, findings: [])
+      def inconclusive(endpoint, reason, detail, findings: [], coverage: nil)
         EndpointOutcome.inconclusive(endpoint: endpoint, reason: reason, detail: detail,
-                                     findings: findings,
+                                     findings: findings, coverage: coverage,
                                      capability_epoch: @context.capability_epoch)
+      end
+
+      def retained_coverage_for(_endpoint, key, cells, reason)
+        return nil unless RETAINS_FINDINGS.include?(reason)
+
+        coverage_for(key, cells)
+      rescue StandardError
+        nil
       end
 
       # THE ONE REASON WHOSE RESPONSES DID THE WORK.

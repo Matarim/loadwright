@@ -189,8 +189,19 @@ module Loadwright
           parts << ""
           parts << "**Not measured.** #{endpoint[:explanation]}"
           parts << ""
-          parts << "No performance verdict is attached. Its absence from the findings list means " \
-                   "nothing was checked — not that nothing is wrong."
+          # THE SENTENCE HAS TO KNOW WHAT IS PRINTED BELOW IT. Where findings were
+          # retained, "its absence from the findings list" is contradicted eight lines
+          # later by the findings themselves -- and a reader who trusts the prose over
+          # the payload concludes the exact opposite of the truth, on the one endpoint
+          # this branch exists for.
+          parts << if Array(endpoint[:findings]).any?
+                     "No performance VERDICT is attached, and this endpoint is not counted as " \
+                       "passing. What was measured before it was set aside is printed below: those " \
+                       "findings are real. Anything not listed was not checked."
+                   else
+                     "No performance verdict is attached. Its absence from the findings list means " \
+                       "nothing was checked — not that nothing is wrong."
+                   end
         end
 
         findings = Array(endpoint[:findings])

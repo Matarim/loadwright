@@ -4,6 +4,7 @@ require "json"
 require "yaml"
 require "loadwright/errors"
 require "loadwright/discovery/endpoint"
+require "loadwright/discovery/openapi_dialect"
 require "loadwright/discovery/schema_ref"
 
 module Loadwright
@@ -89,9 +90,33 @@ module Loadwright
 
         raw = load_raw(path)
         validate!(path, raw)
+        raw = translate_dialect(path, raw)
         built = build_endpoints(raw)
         warn_about_base_path_conflicts(path)
         built
+      end
+
+      # THE DOCUMENT SAYS 3.0; THE VALIDATOR SPEAKS JSON SCHEMA. Everything the first
+      # can express and the second cannot is either translated here or named, because
+      # the alternative -- silently discarding a keyword and then reporting the payload
+      # as invalid -- tells a user their API is broken when their document was right.
+      def translate_dialect(document_path, raw)
+        result = OpenapiDialect.translate(raw)
+
+        if result.annotations.any?
+          @warnings << "#{document_path} uses #{result.annotations.join(', ')}, which the response " \
+                       "validator does not interpret. They are annotations and cannot cause a valid " \
+                       "response to be reported as invalid, but nothing in this run reads them."
+        end
+
+        result.document
+      rescue StandardError => e
+        # A translation failure must never cost the whole document. Untranslated is how
+        # every release before this one behaved; saying so is what that release did not.
+        @warnings << "#{document_path} could not be translated from the OpenAPI 3.0 dialect " \
+                     "(#{e.class}: #{e.message}), so `nullable` properties may be reported as " \
+                     "violations. Please report this."
+        raw
       end
 
       def warn_about_base_path_conflicts(document_path)

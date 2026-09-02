@@ -333,12 +333,23 @@ module Loadwright
       def inconclusive_explanation(endpoint)
         return "" unless endpoint[:state].to_s == "inconclusive"
 
+        # THE SENTENCE HAS TO KNOW WHAT IS PRINTED BELOW IT. Where findings were
+        # retained, "its absence from the findings list" is contradicted by the findings
+        # themselves a few lines later.
+        note = if Array(endpoint[:findings]).any?
+                 "No performance <strong>verdict</strong> is attached to this endpoint and it is not " \
+                   "counted as passing. What was measured before it was set aside is printed below: " \
+                   "those findings are real. Anything not listed was not checked."
+               else
+                 "No performance verdict is attached to this endpoint. It is not counted as passing, " \
+                   "and its absence from the findings list means nothing was checked — not that " \
+                   "nothing is wrong."
+               end
+
         <<~HTML
           <div class="explanation">
             <strong>Not measured.</strong> #{h(endpoint[:explanation])}
-            <p class="note">No performance verdict is attached to this endpoint. It is not counted as
-            passing, and its absence from the findings list means nothing was checked — not that
-            nothing is wrong.</p>
+            <p class="note">#{note}</p>
           </div>
         HTML
       end
