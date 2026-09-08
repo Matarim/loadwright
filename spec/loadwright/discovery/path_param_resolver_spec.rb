@@ -268,4 +268,76 @@ RSpec.describe Loadwright::Discovery::PathParamResolver do
       expect(resolver.resolve(endpoint).sources).to eq(widget_number: :seeded)
     end
   end
+
+  # ONE RESOURCE, TWO IDENTIFIER COLUMNS, CHOSEN BY PARAMETER NAME. A record addressed by
+  # a GUID on one mount and a number on another cannot be expressed by one value per
+  # resource -- and `{resource_id}` and `resource_number` both derive to "resource", so
+  # setting it for one mount breaks the other.
+  describe "a resource addressed differently per parameter" do
+    let(:endpoint) do
+      Loadwright::Discovery::Endpoint.new(path: "/api/v1/resources/{resource_id}", verb: :get,
+                                          source: :route)
+    end
+
+    let(:seeded) do
+      { "resource" => %w[fallback-1 fallback-2],
+        "resource_id" => %w[guid-1 guid-2],
+        "resource_number" => %w[num-1 num-2] }
+    end
+
+    it "prefers the parameter-keyed value for a path segment" do
+      resolver = described_class.new(config: config, seeded_ids: seeded)
+
+      expect(resolver.resolve(endpoint).path).to eq("/api/v1/resources/guid-1")
+    end
+
+    it "prefers the parameter-keyed value for a query parameter" do
+      resolver = described_class.new(config: config, seeded_ids: seeded)
+
+      expect(resolver.resolve_query_param("resource_number")).to eq("num-1")
+    end
+
+    # CORRELATION. Both lists come from the same records in the same order and rotate on
+    # a shared index, so one request's GUID and number are the same row. Selecting them
+    # independently produces two valid values from two different graphs -- still a 404,
+    # and it looks like the application's fault.
+    it "keeps the two in step, so one request gets one row" do
+      resolver = described_class.new(config: config, seeded_ids: seeded)
+
+      expect(resolver.resolve(endpoint, index: 1).path).to eq("/api/v1/resources/guid-2")
+      expect(resolver.resolve_query_param("resource_number", index: 1)).to eq("num-2")
+    end
+
+    it "falls through to the resource's shared value for a parameter with no entry" do
+      resolver = described_class.new(config: config, seeded_ids: { "resource" => %w[shared-1] })
+
+      expect(resolver.resolve(endpoint).path).to eq("/api/v1/resources/shared-1")
+    end
+  end
+
+  # THE REPORT ADVISED A SETTING THIS RESOLVER NEVER READ, so the prescribed fix could
+  # not affect the request -- the same failure as a documented remedy sitting behind a
+  # code path that cannot reach it.
+  describe "an override for an identifier-shaped query parameter" do
+    it "is consulted, and beats a seeded value" do
+      config.path_param_overrides = { "widget_number" => "override-me" }
+      resolver = described_class.new(config: config, seeded_ids: { "widget" => %w[seeded] })
+
+      expect(resolver.resolve_query_param("widget_number")).to eq("override-me")
+    end
+
+    it "rotates a list of override values" do
+      config.path_param_overrides = { "widget_number" => %w[a b] }
+      resolver = described_class.new(config: config, seeded_ids: {})
+
+      expect(resolver.resolve_query_param("widget_number", index: 1)).to eq("b")
+    end
+
+    it "leaves an ordinary filter parameter alone" do
+      config.path_param_overrides = { "widget_number" => "x" }
+      resolver = described_class.new(config: config, seeded_ids: {})
+
+      expect(resolver.resolve_query_param("view")).to be_nil
+    end
+  end
 end

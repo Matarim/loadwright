@@ -926,6 +926,76 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     end
   end
 
+  # THE APPLICATION ALREADY SAYS WHERE MOST OF ITS TIME GOES and nothing read it. A
+  # `other` bucket that is 85% of the request names nothing, so a reader with a slow
+  # endpoint and a clean query count is told where the time is NOT.
+  describe "naming what is inside the `other` residual" do
+    before do
+      config.scale_factors = [10]
+      config.page_size_sweep = [5]
+      config.concurrency_levels = [1]
+      config.requests_per_endpoint_per_level = 20
+      config.warmup_requests = 0
+    end
+
+    let(:spans) do
+      { "instantiation.active_record" => { ms: 40.0, count: 300 },
+        "cache_read.active_support" => { ms: 12.0, count: 90 } }
+    end
+
+    # A findings endpoint, because a clean one renders as one line in the appendix and
+    # the breakdown block never appears -- which would make the rendering examples pass
+    # or fail on where the endpoint happened to land.
+    def result_with_spans
+      metrics = { query_count: 12, spans: spans,
+                  queries: Array.new(12) { { fingerprint: "SELECT * FROM widgets WHERE id = ?" } } }
+      # A scripted latency, so `other` is a realistic residual rather than the Null
+      # transport's near-zero elapsed time -- against which any span looks enormous and
+      # the remainder is correctly refused.
+      responder = ->(_) { { status: 200, body: '[{"id":1}]', latency_ms: 500.0 } }
+      runner(context: build_context(responder: responder, metrics: metrics)).run(endpoints: [endpoint])
+    end
+
+    it "names the largest announced spans on the endpoint" do
+      attribution = result_with_spans.time_breakdowns[endpoint.to_s][:other_attribution]
+
+      expect(attribution[:top].map { |s| s[:name] }).to include("instantiation.active_record")
+    end
+
+    it "renders them, with the call count that separates one slow call from many cheap ones" do
+      text = Loadwright::Reporting::MarkdownReport.new(config: config).render(result_with_spans)
+
+      expect(text).to include("Inside \"everything else\"")
+      expect(text).to include("instantiation.active_record")
+    end
+
+    # THE MORE IMPORTANT HALF. A large remainder on a slow endpoint points at plain
+    # Ruby -- serialisation, object building -- which is what no notification sees.
+    it "says how much of the residual nothing announced at all" do
+      text = Loadwright::Reporting::MarkdownReport.new(config: config).render(result_with_spans)
+
+      expect(text).to include("announced by nothing at all")
+    end
+
+    it "renders nothing when the application announced nothing" do
+      result = runner(context: build_context(responder: ->(_) { { status: 200, body: '[{"id":1}]' } },
+                                             metrics: { query_count: 2 })).run(endpoints: [endpoint])
+      text = Loadwright::Reporting::MarkdownReport.new(config: config).render(result)
+
+      expect(text).not_to include("Inside \"everything else\"")
+    end
+
+    it "can be switched off" do
+      config.attribute_other_time = false
+      tracker = Loadwright::Analysis::TimeBreakdown.new(config: config)
+      tracker.start!
+
+      expect(tracker.instance_variable_get(:@span_subscriber)).to be_nil
+    ensure
+      tracker&.stop!
+    end
+  end
+
   describe "the circuit breaker mid-run" do
     it "aborts the remaining matrix and marks it skipped rather than omitting it" do
       config.scale_factors = [10, 100]

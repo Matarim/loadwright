@@ -84,6 +84,9 @@ module Loadwright
         # The exception the application rescued and rendered, per distinct class.
         # :in_process only -- we are in the same process there and already have it.
         :app_exceptions,
+        # event name -> { ms:, count: }, summed across the cell's requests. What the
+        # application announced it was doing inside the `other` residual.
+        :spans,
         # Fingerprints of SELECTs that matched no rows, one exemplar each.
         :zero_row_queries,
         keyword_init: true
@@ -759,6 +762,7 @@ module Loadwright
         cell.jobs_enqueued << metrics.jobs_enqueued.value_or(nil)
         cell.view_runtimes << metrics.view_runtime_ms.value_or(nil)
         cell.gc_times << metrics.gc_time_ms.value_or(nil)
+        accumulate_spans(cell, metrics)
 
         # The WORST SINGLE REQUEST, not the total across requests. Concatenating turned
         # "the same query ran 26 times in a single request" into "ran 1170 times",
@@ -1080,7 +1084,34 @@ module Loadwright
           view_ms: median_across(cells, :view_runtimes),
           gc_ms: median_across(cells, :gc_times)
         )
-        breakdown&.to_h
+        return nil if breakdown.nil?
+
+        breakdown.to_h.merge(other_attribution: other_attribution(cells, breakdown))
+      end
+
+      # PER REQUEST, like every other figure in this breakdown. Spans are summed across
+      # a cell's requests, so dividing by the requests that produced them is what makes
+      # the number comparable with `other_ms` -- which is a median of single requests.
+      # Without that the top offender reads a hundred times larger than the residual it
+      # is supposed to sit inside.
+      def other_attribution(cells, breakdown)
+        spans = cells.each_with_object({}) do |cell, out|
+          Hash(cell.spans).each do |name, span|
+            into = (out[name] ||= { ms: 0.0, count: 0 })
+            into[:ms] += span[:ms].to_f
+            into[:count] += span[:count].to_i
+          end
+        end
+        return nil if spans.empty?
+
+        requests = cells.sum { |cell| Array(cell.latencies).compact.length }
+        top = Analysis::TimeBreakdown.top_spans(
+          spans, breakdown.other_ms, limit: @config.other_time_top_n.to_i, requests: requests
+        )
+        return nil if top.empty?
+
+        { top: top.map(&:to_h),
+          unattributed_ms: Analysis::TimeBreakdown.unattributed_ms(top, breakdown.other_ms)&.round(3) }
       end
 
       def median_across(cells, field)
@@ -1444,7 +1475,10 @@ module Loadwright
 
         " This request carried #{names.join(', ')} replayed verbatim from a recording, because " \
           "nothing seeded could resolve #{names.length == 1 ? 'it' : 'them'} -- so this status may be " \
-          "ours rather than the endpoint's. Seed the resource, or name the value in path_param_overrides."
+          "ours rather than the endpoint's. Seed the resource, or name the value in path_param_overrides " \
+          "-- which is consulted for an identifier-shaped QUERY parameter as well as for a path segment. " \
+          "Where one resource is addressed by a different column per parameter, factory_map `values:` " \
+          "publishes one per parameter name from the same seeded row."
       end
 
       # THE SWEEP DROVE IT OUT OF RANGE.
@@ -1650,6 +1684,20 @@ module Loadwright
         cells = @cells.select { |cell| cell.endpoint_key == endpoint.to_s }
 
         "#{pre_data_layer_note(cells)}#{app_exception_note(cells)}"
+      end
+
+      # Summed, and the count with it. One request's spans are noise; a cell's are a
+      # profile, and the count is what separates "one slow call" from "four hundred
+      # cheap ones" -- which have completely different fixes.
+      def accumulate_spans(cell, metrics)
+        return unless metrics.respond_to?(:spans)
+
+        cell.spans ||= {}
+        Hash(metrics.spans).each do |name, span|
+          into = (cell.spans[name] ||= { ms: 0.0, count: 0 })
+          into[:ms] += span[:ms].to_f
+          into[:count] += span[:count].to_i
+        end
       end
 
       def quarantine_detail(key)

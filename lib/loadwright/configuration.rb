@@ -129,6 +129,18 @@ module Loadwright
     setting :abort_if_containment_unavailable, true, section: :containment
 
     # RESPONSE ANALYSIS — references/response-analysis.md
+    # NAME WHAT IS IN THE RESIDUAL. `other` is where everything that is not database,
+    # view or GC ends up, and on a serialisation-heavy endpoint it is most of the
+    # request. A residual names nothing, so a reader with a slow endpoint and a clean
+    # query count is told where the time is NOT and left to guess where it is.
+    #
+    # Rails, its neighbours, and the application's own custom instrumentation already
+    # announce much of that time through ActiveSupport::Notifications. This reads it.
+    # It costs one extra subscriber for the run; turn it off if that subscriber is
+    # itself unwelcome on a very chatty application.
+    setting :attribute_other_time, true, section: :instrumentation
+    setting :other_time_top_n, 3, section: :instrumentation
+
     setting :require_successful_response, true, section: :response_analysis
     setting :require_schema_valid_response, true, section: :response_analysis
     setting :warn_on_empty_response_with_seeded_data, true, section: :response_analysis

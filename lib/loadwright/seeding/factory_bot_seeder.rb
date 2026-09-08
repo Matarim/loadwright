@@ -61,6 +61,8 @@ module Loadwright
         @seeded = []
         @failures = []
         @warnings = []
+        # parameter name -> values, for a resource addressed differently per parameter.
+        @parameter_values = {}
         @created_ids = {}
         @path_values = {}
         @models = {}
@@ -225,6 +227,7 @@ module Loadwright
           end
 
           track(resource, records, spec[:value] || spec[:param] || :id)
+          track_by_parameter(resource, records, spec[:values])
           created += records.length
           remaining -= batch
 
@@ -274,11 +277,37 @@ module Loadwright
         records.each { |record| @models[resource] ||= record.class }
       end
 
-      def routing_values(resource, records, param)
-        return records.filter_map { |record| record.public_send(param) if record.respond_to?(param) } unless
-          param.respond_to?(:call)
+      # ONE RESOURCE, TWO IDENTIFIER COLUMNS, CHOSEN BY PARAMETER NAME.
+      #
+      # A record addressed by a GUID on one mount and a number on another cannot be
+      # expressed by `param:` or `value:`, which publish ONE value for the resource --
+      # and both `{resource_id}` and `resource_number` derive to "resource", so setting
+      # it for one mount breaks the other. Observed for real: making the shared resource
+      # publish the number fixed a lookup mount and would have fed numbers to the
+      # primary mount's GUID paths.
+      #
+      #   "resource" => { factory: :thing,
+      #                   values: { resource_id: :guid,
+      #                             resource_number: ->(r) { r.detail.number } } }
+      #
+      # CORRELATION IS PRESERVED BY CONSTRUCTION. Every list is built from the same
+      # records in the same order, and resolution rotates by a shared index -- so the
+      # GUID and the number handed to one request come from the SAME row. Selecting
+      # them independently would produce two valid values from two different graphs,
+      # which is still a 404 and looks like the application's fault.
+      def track_by_parameter(resource, records, values)
+        return unless values.is_a?(Hash)
 
-        records.filter_map { |record| param.call(record) }
+        values.each do |parameter, source|
+          key = parameter.to_s
+          (@parameter_values[key] ||= []).concat(routing_values(resource, records, source))
+        end
+      end
+
+      def routing_values(resource, records, param)
+        return records.filter_map { |record| param.call(record) } if param.respond_to?(:call)
+
+        records.filter_map { |record| record.public_send(param) if record.respond_to?(param) }
       rescue StandardError => e
         # NOT FATAL, AND NOT SILENT. The seeded rows are real and every other resource
         # is still usable; what is lost is this resource's routing values, and the
@@ -292,11 +321,21 @@ module Loadwright
       # What the resolver substitutes into a path. Falls back to ids for a resource
       # whose param yielded nothing, so an unknown column degrades to today's
       # behaviour rather than to no endpoints at all.
+      # Merged INTO path_values under the parameter's own name, so resolution finds it
+      # by the same lookup it already does -- no second code path, and a parameter with
+      # no entry falls through to the resource's shared value exactly as before.
+      public def parameter_values = @parameter_values
+
       public def path_values
-        @created_ids.keys.to_h do |resource|
+        base = @created_ids.keys.to_h do |resource|
           values = @path_values[resource]
           [resource, values.nil? || values.empty? ? @created_ids[resource] : values]
         end
+
+        # Parameter-keyed entries win where they exist. A parameter with no entry falls
+        # through to its resource's shared value exactly as before, so adding `values:`
+        # for one mount cannot disturb another.
+        base.merge(@parameter_values.reject { |_, list| list.empty? })
       end
 
       private

@@ -89,13 +89,17 @@ module Loadwright
         private
 
         def timing_metrics(bucket)
-          breakdown = @time_breakdown.metrics_for(request_id_of(bucket))
+          # BEFORE forget: the spans live on the same Breakdown, and forgetting first
+          # would drop them.
+          spans = @time_breakdown.for_request(request_id_of(bucket))&.spans
+          breakdown = @time_breakdown.metrics_for(request_id_of(bucket)).merge(spans: spans)
           @time_breakdown.forget(request_id_of(bucket))
 
           {
             db_runtime_ms: breakdown[:db_runtime_ms].available? ? breakdown[:db_runtime_ms]
                                                                 : sum_query_duration(bucket),
-            view_runtime_ms: breakdown[:view_runtime_ms]
+            view_runtime_ms: breakdown[:view_runtime_ms],
+            spans: breakdown[:spans] || {}
           }
         end
 

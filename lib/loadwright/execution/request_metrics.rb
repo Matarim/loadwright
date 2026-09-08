@@ -38,11 +38,11 @@ module Loadwright
         unattributed_query_count
       ].freeze
 
-      attr_reader :request_id, :capability_epoch, :queries, :collector
+      attr_reader :request_id, :capability_epoch, :queries, :collector, :spans
 
       MEASURED_FIELDS.each { |field| attr_reader field }
 
-      def initialize(request_id:, collector: nil, capability_epoch: 0, queries: [], **measured)
+      def initialize(request_id:, collector: nil, capability_epoch: 0, queries: [], spans: {}, **measured)
         unknown = measured.keys - MEASURED_FIELDS
         raise ArgumentError, "unknown metric(s): #{unknown.join(', ')}" if unknown.any?
 
@@ -50,6 +50,10 @@ module Loadwright
         @collector = collector
         @capability_epoch = capability_epoch
         @queries = queries.freeze
+        # PLAIN DETAIL, not a Measurement. A span map is evidence about where time went,
+        # not a measured quantity with a tri-state -- an empty map means "the app
+        # announced nothing", which is a true and unremarkable answer.
+        @spans = Hash(spans).freeze
 
         MEASURED_FIELDS.each do |field|
           value = measured.fetch(field) do

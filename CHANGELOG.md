@@ -5,6 +5,59 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.14] — 2026-09-08
+
+### Added
+
+- **`other` names its own top offenders.** The time breakdown splits a request into
+  db / view / GC / **other**, and `other` is a residual — everything the first three do
+  not cover. On a serialization-heavy endpoint it is routinely 80–90% of the request,
+  which tells a reader where the time is *not* and leaves them guessing where it is.
+
+  Rails, its neighbours, and **the application's own instrumentation** already announce
+  much of that time through `ActiveSupport::Notifications` — object instantiation, cache
+  reads, mailer deliveries, job enqueues, any `instrument("render.my_serializer")` the
+  app emits. Nothing read a single one of them. The endpoint block now names the largest
+  spans inside `other`, with the **call count and per-call cost**, because one slow call
+  and four hundred cheap ones have entirely different fixes.
+
+  **The unattributed remainder is the more important half, and is printed as such.**
+  Spans nest inside one another, so they are shown as observed durations and explicitly
+  *not* as a partition of `other`; where a span exceeds the residual, the remainder is
+  reported unavailable rather than clamped to zero, because a zero would read as "all
+  accounted for" — the opposite of true. A large remainder is plain Ruby that emits no
+  event at all, which on a serialization problem is where the time actually is.
+
+  Events already counted elsewhere are excluded, so the parts can never exceed the
+  whole: the `process_action` wrapper *is* the total, `sql.active_record` is `db`, and
+  the render events are `view`. `attribute_other_time` (default true) and
+  `other_time_top_n` (default 3). 110 config keys.
+
+- **`factory_map` can publish a different identifier per parameter.** A record addressed
+  by a GUID on one mount and a business number on another could not be expressed:
+  `{resource_id}` and `resource_number` both derive to `"resource"`, and `param:`/`value:`
+  publish one value for it, so configuring one mount broke the other.
+
+  ```ruby
+  "resource" => { factory: :thing,
+                  values: { resource_id: :guid, resource_number: ->(r) { r.detail.number } } }
+  ```
+
+  **Correlation is preserved by construction.** Every list is built from the same records
+  in the same order and resolution rotates on a shared index, so the GUID and the number
+  sent in one request come from the *same row*. Selecting them independently would
+  produce two valid values from two different graphs — still a 404, and it reads as the
+  application's fault. A parameter with no entry falls through to the resource's shared
+  value, so adding `values:` for one mount cannot disturb another.
+
+### Fixed
+
+- **`path_param_overrides` is consulted for identifier-shaped query parameters.** The
+  report advised it as the remedy for an unresolved query parameter and the query
+  resolver never read it, so the prescribed fix could not affect the request — the same
+  failure as a documented remedy sitting behind a code path that cannot reach it. It is
+  now read, it beats a seeded value, and the advice says what it actually does.
+
 ## [0.0.13] — 2026-09-02
 
 ### Fixed

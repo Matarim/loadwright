@@ -47,6 +47,7 @@ module ExecutionHelpers
         collector: collector_name,
         capability_epoch: capability_epoch,
         queries: (metrics || {}).fetch(:queries, []),
+        spans: (metrics || {}).fetch(:spans, {}),
         **default_measurements(metrics || {})
       )
     end

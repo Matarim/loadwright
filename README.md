@@ -479,6 +479,8 @@ config.track_connection_pool = true
 config.disable_query_cache_during_run = true # the query cache hides textbook N+1s
 config.track_time_breakdown = true
 config.track_gc_stats = true
+config.attribute_other_time = true           # name the biggest spans inside "other"
+config.other_time_top_n = 3
 config.run_explain_on_slow_queries = true    # ANALYZE is SELECT-only, behind a whitelist
 config.explain_top_n_queries = 5
 config.seq_scan_row_threshold = 10_000
@@ -489,6 +491,39 @@ config.min_samples_for_percentiles = { p50: 20, p95: 100, p99: 500 }
 config.check_pool_vs_server_threads = true
 config.jobs_enqueued_warning_threshold = 10
 ```
+
+#### When "other" is most of the request
+
+The time breakdown splits a request into db / view / GC / **other**, and `other` is a
+residual — everything that is not the first three. On a serialization-heavy endpoint it
+is routinely 80–90% of the request, which tells you where the time is *not*.
+
+`attribute_other_time` names the largest spans inside it, read from
+ActiveSupport::Notifications — Rails' own events (object instantiation, cache reads,
+mailer delivery, job enqueues) and **any custom instrumentation your app already
+emits**. If you `ActiveSupport::Notifications.instrument("render.my_serializer")`
+anywhere, it shows up here without further configuration.
+
+```
+Inside "everything else" — the largest spans the application announced, per request:
+
+| Event                           | Time    | Share of other | Calls | Per call |
+|---------------------------------|---------|----------------|-------|----------|
+| `instantiation.active_record`   | 41.20ms | 8.3%           | 312   | 0.132ms  |
+| `cache_read.active_support`     | 12.05ms | 2.4%           | 96    | 0.126ms  |
+| `render.my_serializer`          |  9.60ms | 1.9%           | 1     | 9.600ms  |
+
+At least 434.75ms of `other` is announced by nothing at all — no instrumentation
+covers it. That is ordinarily Ruby doing work: serialisation, object building,
+computation in the controller.
+```
+
+**Read the last line first.** Spans can nest inside one another, so they are observed
+durations rather than a partition of `other`, and the unattributed remainder is usually
+the larger and more interesting number — it is the plain Ruby no notification sees. A
+large remainder on a slow endpoint points at computation, not at anything the framework
+is doing. The `Calls` column is what separates one slow call from four hundred cheap
+ones, which have entirely different fixes.
 
 `min_samples_for_percentiles` is why a default run reports p50 and not p99: 25
 samples cannot support a 99th percentile, and printing one anyway is noise with a
@@ -827,6 +862,25 @@ the column whose value goes into the path:
 ```ruby
 "widget" => { factory: :widget, param: "widget_guid" }
 ```
+
+**When one resource is addressed by a different column per parameter** — a GUID on one
+mount, a business number on another — `values:` publishes one per parameter name:
+
+```ruby
+"resource" => { factory: :thing,
+                values: { resource_id: :guid,
+                          resource_number: ->(r) { r.detail.number } } }
+```
+
+Both lists are built from the same records in the same order and rotate on a shared
+index, so the GUID and the number sent in one request come from the **same row**. That
+correlation is the point: selecting them independently would produce two valid values
+from two different graphs, which is still a 404 and reads as your endpoint's fault. A
+parameter with no entry falls through to the resource's shared value, so adding `values:`
+for one mount cannot disturb another.
+
+`path_param_overrides` is also consulted for identifier-shaped **query** parameters, not
+only for path segments.
 
 **When the routing value is not a column on the seeded record at all** — it lives an
 association or two away — `value:` takes a callable given the created record:

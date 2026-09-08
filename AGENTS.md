@@ -1328,6 +1328,53 @@ DIAG-34:
     saying plainly what it does: real writes against a real database, on every request
     of every cell. It is a deliberate decision, not a coverage tweak.
 
+DIAG-49:
+  symptom: >
+    "the endpoint is slow but the query count is fine" / "`other` is 85% of the request
+    and I do not know what is in it"
+  cause: >
+    `other` is a RESIDUAL -- everything that is not db, view or GC. It names nothing by
+    construction, and on a serialization-heavy endpoint it is most of the request.
+  fix: |
+    0.0.14+ prints the largest spans inside it, read from ActiveSupport::Notifications:
+    Rails' own events AND any custom instrument() the application emits.
+    Read it in this order:
+      1. The UNATTRIBUTED line first. That is the part nothing announced -- ordinarily
+         plain Ruby: serialization, object building, computation. On a large residual
+         it is usually where the time actually is.
+      2. The CALL COUNT, not just the total. 40ms over 300 calls and 40ms over 1 are
+         completely different problems with completely different fixes.
+      3. The span names, worst first.
+  do_not: >
+    Do NOT present the spans as a breakdown of `other`. They nest inside one another,
+    so they are observed durations and not a partition, and their sum can exceed the
+    residual. When the remainder is reported as unavailable that is why -- do not read
+    it as "fully accounted for".
+  say_this: >
+    An application that instruments its own hot paths gets more out of this for free.
+    Suggesting `ActiveSupport::Notifications.instrument` around a suspected serializer
+    is a legitimate next step when the remainder is large.
+
+DIAG-50:
+  symptom: >
+    "one record is addressed by a GUID on one mount and a number on another, and
+    factory_map can only publish one" / "setting factory_map for one mount broke another"
+  cause: >
+    `{resource_id}` and `resource_number` both derive to the key "resource", and
+    `param:`/`value:` publish ONE value for that resource.
+  fix: |
+    0.0.14+: `values:` publishes one per parameter name from the same seeded row.
+      "resource" => { factory: :thing,
+                      values: { resource_id: :guid,
+                                resource_number: ->(r) { r.detail.number } } }
+    `path_param_overrides` is also consulted for identifier-shaped QUERY parameters now,
+    not only path segments.
+  say_this: >
+    Correlation is the point and it is preserved by construction: both lists come from
+    the same records in the same order and rotate on a shared index, so one request gets
+    one row. Values selected independently would be two valid ids from two different
+    graphs -- still a 404, and it reads as the application's fault.
+
 DIAG-47:
   symptom: >
     "loadwright says our response does not match its schema, but the property is

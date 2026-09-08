@@ -203,4 +203,85 @@ RSpec.describe Loadwright::Analysis::TimeBreakdown do
       expect(result.action).to eq("index")
     end
   end
+
+  # `other` IS A RESIDUAL AND A RESIDUAL NAMES NOTHING. On a serialisation-heavy endpoint
+  # it is most of the request, so a reader with a slow endpoint and a clean query count
+  # has been told where the time is NOT and left to guess where it is. Rails and the
+  # app's own instrumentation already announce much of it; nothing read any of it.
+  describe ".top_spans" do
+    let(:spans) do
+      { "instantiation.active_record" => { ms: 40.0, count: 300 },
+        "cache_read.active_support" => { ms: 12.0, count: 90 },
+        "render.my_serializer" => { ms: 9.0, count: 1 },
+        "tiny.event" => { ms: 0.5, count: 2 } }
+    end
+
+    it "names the largest spans, worst first" do
+      top = described_class.top_spans(spans, 500.0, limit: 3)
+
+      expect(top.map(&:name)).to eq(["instantiation.active_record", "cache_read.active_support",
+                                     "render.my_serializer"])
+    end
+
+    # PER REQUEST, like every other figure in the breakdown. Spans are summed across a
+    # cell's requests while `other_ms` is a median of single requests, so without
+    # dividing, the top offender reads a hundred times larger than the residual it is
+    # supposed to sit inside.
+    it "divides by the requests that produced them" do
+      top = described_class.top_spans(spans, 500.0, limit: 1, requests: 100)
+
+      expect(top.first.ms).to be_within(0.001).of(0.4)
+    end
+
+    # One slow call and four hundred cheap ones have entirely different fixes.
+    it "carries the call count and the per-call cost" do
+      top = described_class.top_spans(spans, 500.0, limit: 3)
+      serializer = top.find { |span| span.name == "render.my_serializer" }
+
+      expect(serializer.count).to eq(1)
+      expect(serializer.per_call_ms).to be_within(0.001).of(9.0)
+    end
+
+    it "says nothing when the application announced nothing" do
+      expect(described_class.top_spans({}, 500.0, limit: 3)).to be_empty
+    end
+
+    it "says nothing when there is no residual to explain" do
+      expect(described_class.top_spans(spans, 0.0, limit: 3)).to be_empty
+    end
+  end
+
+  # THE UNATTRIBUTED HALF IS THE MORE IMPORTANT ONE. It is the pure Ruby that emits no
+  # event at all, which on a serialisation problem is where the time actually is.
+  describe ".unattributed_ms" do
+    it "reports what nothing announced" do
+      top = described_class.top_spans({ "a.b" => { ms: 40.0, count: 1 } }, 500.0, limit: 3)
+
+      expect(described_class.unattributed_ms(top, 500.0)).to be_within(0.001).of(460.0)
+    end
+
+    it "is the whole residual when no span was announced" do
+      expect(described_class.unattributed_ms([], 500.0)).to be_within(0.001).of(500.0)
+    end
+
+    # SPANS NEST -- a cache read containing a query, a serializer containing a cache
+    # read -- so a span can legitimately exceed the residual it sits in. Saying "we
+    # cannot apportion this" is honest; a zero-clamped remainder would read as "all
+    # accounted for", which is the opposite of true.
+    it "refuses to invent a remainder when a span exceeds the residual" do
+      top = described_class.top_spans({ "a.b" => { ms: 900.0, count: 1 } }, 500.0, limit: 3)
+
+      expect(described_class.unattributed_ms(top, 500.0)).to be_nil
+    end
+  end
+
+  # ATTRIBUTING AN ALREADY-COUNTED EVENT WOULD LET THE PARTS EXCEED THE WHOLE, which is
+  # the one thing a breakdown must never do.
+  describe "which events are eligible at all" do
+    it "excludes the wrapper, the queries and the renders" do
+      expect(described_class::ACCOUNTED_EVENTS)
+        .to include("process_action.action_controller", "sql.active_record",
+                    "render_template.action_view")
+    end
+  end
 end

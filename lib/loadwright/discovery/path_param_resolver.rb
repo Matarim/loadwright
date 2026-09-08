@@ -111,7 +111,24 @@ module Loadwright
       # failure here: the caller keeps the recorded value, because a request missing a
       # required parameter is a worse outcome than one carrying a stale id, and says
       # what it did.
+      # AN OVERRIDE IS CONSULTED HERE TOO, and it was not -- which made the report's own
+      # advice untrue. An unresolved identifier-shaped query parameter was told to use
+      # path_param_overrides, and this resolver never read it, so the prescribed fix
+      # could not affect the request. Same failure as 0.0.2's: the documented remedy
+      # sitting behind a code path that could not reach it.
+      #
+      # It also answers the case that needs it. One resource can be addressed by a GUID
+      # on one mount and a number on another -- `{resource_id}` and `resource_number`
+      # both derive to "resource" -- and factory_map publishes one value per resource.
+      # An override keyed by the PARAMETER NAME picks per parameter without disturbing
+      # path segments that derive to the same resource.
       def resolve_query_param(name, index: 0)
+        override = query_override_for(name, index)
+        return override unless override.nil?
+
+        by_parameter = Array(@seeded_ids[name.to_s] || @seeded_ids[name.to_sym])
+        return by_parameter[index % by_parameter.length] unless by_parameter.empty?
+
         resource = resource_from_name(name)
         return nil if resource.nil?
 
@@ -119,6 +136,19 @@ module Loadwright
         return nil if ids.empty?
 
         ids[index % ids.length]
+      end
+
+      # By bare parameter name only. The template-keyed form addresses a path, and a
+      # query parameter has no template of its own to be keyed by.
+      def query_override_for(name, index)
+        overrides = @config.path_param_overrides
+        value = overrides[name.to_sym] || overrides[name.to_s]
+        return nil if value.nil? || value.is_a?(Hash)
+
+        return value.call(index) if value.respond_to?(:call) && value.arity == 1
+        return value.call if value.respond_to?(:call)
+
+        value.is_a?(Array) ? value[index % value.length] : value
       end
 
       # True for `widget_id`, `account_guid`, `order_ref`. False for `view`, `page`,
@@ -174,6 +204,13 @@ module Loadwright
       # resource — the segment immediately preceding the parameter, singularised.
       # `{post_id}` resolves against "post" directly.
       def from_seeded(endpoint, param, index)
+        # BY PARAMETER NAME FIRST, for a resource addressed by a different column per
+        # parameter (`factory_map` `values:`). A parameter with no entry falls straight
+        # through to its resource's shared value, so this cannot disturb what already
+        # works.
+        by_parameter = Array(@seeded_ids[param.to_s] || @seeded_ids[param.to_sym])
+        return by_parameter[index % by_parameter.length] unless by_parameter.empty?
+
         resource = resource_for(endpoint, param)
         return nil if resource.nil?
 

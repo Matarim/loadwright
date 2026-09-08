@@ -532,9 +532,41 @@ module Loadwright
             <h4>Where the time went — #{h(breakdown[:total_ms].to_f.round(2))}ms total</h4>
             <div class="bar">#{bars.join}</div>
             <ul class="legend">#{legend.join}</ul>
+            #{other_attribution(breakdown)}
             #{breakdown_disclosure(breakdown)}
           </div>
         HTML
+      end
+
+      # `other` IS A RESIDUAL AND A RESIDUAL NAMES NOTHING. These are spans the
+      # application announced, through Rails' own instrumentation or its own; they may
+      # nest, so they are observed durations rather than a partition. The unattributed
+      # line is the more important half -- it is the pure Ruby no notification sees,
+      # which is usually where a serialisation problem actually lives.
+      def other_attribution(breakdown)
+        attribution = breakdown[:other_attribution]
+        return "" if attribution.nil?
+
+        rows = Array(attribution[:top]).map do |span|
+          per_call = span[:per_call_ms] ? "#{h(span[:per_call_ms].to_f.round(3))}ms" : "&mdash;"
+          "<tr><td><code>#{h(span[:name])}</code></td><td>#{h(span[:ms].to_f.round(2))}ms</td>" \
+            "<td>#{h((span[:share].to_f * 100).round(1))}%</td><td>#{h(span[:count])}</td>" \
+            "<td>#{per_call}</td></tr>"
+        end
+        return "" if rows.empty?
+
+        remainder = attribution[:unattributed_ms]
+        note = if remainder.nil?
+                 "These spans can nest inside one another, so they do not add up to “other”."
+               else
+                 "At least #{h(remainder.to_f.round(2))}ms of “other” is announced by nothing at all. " \
+                   "That is ordinarily Ruby doing work: serialisation, object building, computation."
+               end
+
+        "<details class=\"other-attribution\"><summary>Inside “everything else”</summary>" \
+          "<table><thead><tr><th>Event</th><th>Time</th><th>Share of other</th><th>Calls</th>" \
+          "<th>Per call</th></tr></thead><tbody>#{rows.join}</tbody></table>" \
+          "<p class=\"note\">#{note}</p></details>"
       end
 
       # The SHORT form here. The full disclosure is in the header; repeating four

@@ -266,7 +266,43 @@ module Loadwright
         headline = endpoint.dig(:time_breakdown, :containment, :headline)
 
         ["", "**Where the time went** — #{endpoint.dig(:time_breakdown, :total_ms).to_f.round(2)}ms total", "",
-         table(%w[Component Time Share], rows), headline ? "_#{headline}_" : nil].compact.join("\n")
+         table(%w[Component Time Share], rows), headline ? "_#{headline}_" : nil,
+         other_attribution_block(endpoint)].compact.reject(&:empty?).join("\n")
+      end
+
+      # `other` IS A RESIDUAL AND A RESIDUAL NAMES NOTHING. On a serialisation-heavy
+      # endpoint it is most of the request, so a reader with a slow endpoint and a clean
+      # query count has been told where the time is NOT.
+      #
+      # These are spans the application ANNOUNCED, through Rails' own instrumentation or
+      # its own. They may nest inside one another, so they are shown as observed
+      # durations rather than as a partition -- and the unattributed line is the more
+      # important half: it is the pure Ruby that emits no event at all, which is usually
+      # where a serialisation problem actually lives.
+      def other_attribution_block(endpoint)
+        attribution = endpoint.dig(:time_breakdown, :other_attribution)
+        return "" if attribution.nil?
+
+        rows = Array(attribution[:top]).map do |span|
+          ["`#{span[:name]}`", "#{span[:ms].to_f.round(2)}ms",
+           "#{(span[:share].to_f * 100).round(1)}%",
+           span[:count], span[:per_call_ms] ? "#{span[:per_call_ms].to_f.round(3)}ms" : "—"]
+        end
+        return "" if rows.empty?
+
+        ["", "**Inside \"everything else\"** — the largest spans the application announced, per request:", "",
+         table(["Event", "Time", "Share of other", "Calls", "Per call"], rows),
+         unattributed_note(attribution)].compact.join("\n")
+      end
+
+      def unattributed_note(attribution)
+        remainder = attribution[:unattributed_ms]
+        return "_These spans can nest inside one another, so they do not add up to `other`._" if remainder.nil?
+
+        "_At least #{remainder.to_f.round(2)}ms of `other` is announced by nothing at all — no " \
+          "instrumentation covers it. That is ordinarily Ruby doing work: serialisation, " \
+          "object building, computation in the controller. These spans can nest, so they are " \
+          "observed durations rather than a partition of `other`._"
       end
 
       def latency_block(endpoint)

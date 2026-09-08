@@ -43,7 +43,7 @@ module Loadwright
       # attribute further, and saying so beats silently dropping the time.
       COMPONENTS = %i[db view gc other].freeze
 
-      Breakdown = Struct.new(:total_ms, :db_ms, :view_ms, :gc_ms, :other_ms, :controller, :action,
+      Breakdown = Struct.new(:total_ms, :db_ms, :view_ms, :gc_ms, :other_ms, :controller, :action, :spans,
                              keyword_init: true) do
         def share(component)
           value = public_send(:"#{component}_ms")
@@ -76,6 +76,52 @@ module Loadwright
       # `other` stays a named residual. Middleware, authentication, controller Ruby, and
       # any outbound HTTP that was not blocked all live there, and a large `other` is a
       # real finding -- it is just not one this breakdown can attribute further.
+      # THE TOP OFFENDERS INSIDE `other`, AND WHAT IS STILL UNNAMED.
+      #
+      # Both halves are the point. The named spans say what the application announced it
+      # was doing; the remainder says how much of the residual nothing announced at all,
+      # which on a serialisation-heavy endpoint is usually the majority and is exactly
+      # the pure Ruby a notification cannot see.
+      #
+      # SPANS MAY NEST -- a cache read containing a query, a serializer containing a
+      # cache read -- so they are reported as observed durations and NOT as a partition.
+      # The remainder is therefore computed against the largest single span rather than
+      # against their sum, because summing overlapping spans can exceed `other` and a
+      # negative remainder would be nonsense. Where even that exceeds `other`, the
+      # remainder is unavailable rather than invented.
+      Span = Struct.new(:name, :ms, :count, :share, keyword_init: true) do
+        def per_call_ms = count.to_i.positive? ? ms / count : nil
+
+        def to_h
+          { name: name, ms: ms&.round(3), count: count, share: share&.round(4),
+            per_call_ms: per_call_ms&.round(3) }.compact
+        end
+      end
+
+      def self.top_spans(spans, other_ms, limit:, requests: 1)
+        return [] if other_ms.nil? || other_ms.to_f <= 0 || Hash(spans).empty?
+
+        divisor = [requests, 1].max
+        Hash(spans)
+          .map { |name, span| [name, span[:ms].to_f / divisor, span[:count].to_i] }
+          .reject { |_, ms, _| ms <= 0 }
+          .sort_by { |_, ms, _| -ms }
+          .first(limit)
+          .map { |name, ms, count| Span.new(name: name, ms: ms, count: count, share: ms / other_ms.to_f) }
+      end
+
+      # nil rather than a number when the spans overlap enough to exceed the residual:
+      # saying "we cannot apportion this" is honest, and a negative or zero-clamped
+      # remainder would read as "all accounted for", which is the opposite of true.
+      def self.unattributed_ms(top, other_ms)
+        return nil if other_ms.nil?
+        largest = top.map(&:ms).max
+        return other_ms.to_f if largest.nil?
+        return nil if largest > other_ms.to_f
+
+        other_ms.to_f - largest
+      end
+
       def self.from_totals(total_ms:, db_ms: nil, view_ms: nil, gc_ms: nil, controller: nil, action: nil)
         return nil if total_ms.nil?
 
@@ -93,8 +139,12 @@ module Loadwright
       def initialize(config: Loadwright.configuration)
         @config = config
         @breakdowns = {}
+        # request id -> { event name => { ms:, count: } }, accumulated while the request
+        # runs and folded into its Breakdown when process_action closes it.
+        @spans = {}
         @mutex = Mutex.new
         @subscriber = nil
+        @span_subscriber = nil
       end
 
       def enabled? = @config.track_time_breakdown
@@ -108,13 +158,42 @@ module Loadwright
         @subscriber = ::ActiveSupport::Notifications.subscribe(EVENT) do |*args|
           record(::ActiveSupport::Notifications::Event.new(*args))
         end
+        subscribe_spans!
 
         self
       end
 
+      # WHAT ELSE THE APPLICATION SAID IT WAS DOING.
+      #
+      # `other` is a residual, and on a serialisation-heavy endpoint it is most of the
+      # request -- 85% in one real case. A residual names nothing, so a reader with a
+      # slow endpoint and a clean query count has been told where the time is NOT and
+      # left to guess where it is.
+      #
+      # Rails and its neighbours already announce a great deal of that time through
+      # ActiveSupport::Notifications, and so does the application's own custom
+      # instrumentation. Nothing read any of it. Object instantiation, cache reads,
+      # serializer runs, mailer delivery, job enqueues, HTTP clients that instrument
+      # themselves -- all of it arrives here for free and all of it landed in `other`
+      # anonymously.
+      #
+      # THE FIVE-ARGUMENT BLOCK, deliberately. The Event object form allocates one
+      # object per event, and this subscriber sees EVERY event in the process; on a load
+      # run that allocation is itself a measurable cost, which would distort the very
+      # number being attributed.
+      def subscribe_spans!
+        return unless @config.respond_to?(:attribute_other_time) && @config.attribute_other_time
+
+        @span_subscriber = ::ActiveSupport::Notifications.subscribe(/.*/) do |name, start, finish, _id, _p|
+          record_span(name, (finish - start) * 1000.0)
+        end
+      end
+
       def stop!
         ::ActiveSupport::Notifications.unsubscribe(@subscriber) if @subscriber
+        ::ActiveSupport::Notifications.unsubscribe(@span_subscriber) if @span_subscriber
         @subscriber = nil
+        @span_subscriber = nil
         self
       end
 
@@ -143,7 +222,38 @@ module Loadwright
         }
       end
 
+      # ALREADY COUNTED SOMEWHERE ELSE. The wrapper IS the total; SQL is `db`; the
+      # render events are `view`. Attributing them again would let the parts exceed the
+      # whole, which is the one thing a breakdown must never do.
+      ACCOUNTED_EVENTS = [
+        "process_action.action_controller",
+        "sql.active_record",
+        "render_template.action_view",
+        "render_partial.action_view",
+        "render_collection.action_view",
+        "render_layout.action_view"
+      ].freeze
+
+      # Events that fire per run rather than per request, or that describe the harness
+      # rather than the application.
+      IGNORED_SPAN_PREFIXES = %w[loadwright. !].freeze
+
       private
+
+      def record_span(name, duration_ms)
+        return if ACCOUNTED_EVENTS.include?(name)
+        return if IGNORED_SPAN_PREFIXES.any? { |prefix| name.start_with?(prefix) }
+
+        request_id = Instrumentation::CurrentRequest.id
+        return if request_id.nil?
+
+        @mutex.synchronize do
+          bucket = (@spans[request_id] ||= {})
+          span = (bucket[name] ||= { ms: 0.0, count: 0 })
+          span[:ms] += duration_ms
+          span[:count] += 1
+        end
+      end
 
       def record(event)
         request_id = Instrumentation::CurrentRequest.id
@@ -162,9 +272,14 @@ module Loadwright
         accounted = [db, view, gc].compact.sum
         other = [total - accounted, 0.0].max
 
+        # The spans were accumulated as the request ran, so they are collected here and
+        # cleared -- the request is over and nothing else will add to them.
+        spans = @mutex.synchronize { @spans.delete(request_id) } || {}
+
         breakdown = Breakdown.new(
           total_ms: total, db_ms: db&.to_f, view_ms: view&.to_f, gc_ms: gc,
-          other_ms: other, controller: payload[:controller], action: payload[:action]
+          other_ms: other, controller: payload[:controller], action: payload[:action],
+          spans: spans
         )
 
         @mutex.synchronize { @breakdowns[request_id] = breakdown }

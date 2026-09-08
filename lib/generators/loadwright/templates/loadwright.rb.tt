@@ -487,6 +487,18 @@ if defined?(Loadwright)
     config.track_time_breakdown = true
     config.track_gc_stats = true
 
+    # NAME WHAT IS IN THE RESIDUAL. `other` is everything that is not db, view or GC,
+    # and on a serialization-heavy endpoint it is most of the request -- which tells you
+    # where the time is NOT and leaves you guessing where it is. Rails, its neighbours,
+    # and your own ActiveSupport::Notifications instrumentation already announce much of
+    # it; this reads them and names the largest spans, plus how much of `other` nothing
+    # announced at all (usually plain Ruby, which is the interesting part).
+    #
+    # Costs one extra notification subscriber for the run. Turn it off if that is
+    # unwelcome on a very chatty application.
+    config.attribute_other_time = true
+    config.other_time_top_n = 3
+
     # EXPLAIN runs after the load phase, never during it. ANALYZE is used only
     # on SELECTs — EXPLAIN ANALYZE executes the statement, so running it on a
     # write would perform the write.
