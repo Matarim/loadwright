@@ -31,7 +31,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Events already counted elsewhere are excluded, so the parts can never exceed the
   whole: the `process_action` wrapper *is* the total, `sql.active_record` is `db`, and
   the render events are `view`. `attribute_other_time` (default true) and
-  `other_time_top_n` (default 3). 110 config keys.
+  `other_time_top_n` (default 3). 109 config keys.
 
 - **`factory_map` can publish a different identifier per parameter.** A record addressed
   by a GUID on one mount and a business number on another could not be expressed:
@@ -264,7 +264,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   seeding, so a toggle it flips can decide which routes exist. `after_run` is
   registered with the interrupt handler. Neither runs on a dry run, and a `before_seed`
   that raises refuses the run rather than measuring an application in a state the user
-  said it should not be in. 108 config keys.
+  said it should not be in. 107 config keys.
 
 ## [0.0.10] — 2026-08-28
 
@@ -334,7 +334,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   that mount was unauthenticated on every request, which surfaces as a block of
   endpoints failing identically for a reason the report attributes to the application.
   `auth_header_name` also makes the `:header` strategy's header configurable; it was
-  hardcoded to `X-Api-Key`, one convention among many. 105 config keys.
+  hardcoded to `X-Api-Key`, one convention among many. 104 config keys.
 
 - **Each endpoint says which source discovered it.** The run line counts operations
   per source and never said which source produced a given endpoint, so a reader
