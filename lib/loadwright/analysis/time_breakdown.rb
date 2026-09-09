@@ -201,7 +201,32 @@ module Loadwright
 
       def for_request(request_id) = @mutex.synchronize { @breakdowns[request_id] }
 
-      def forget(request_id) = @mutex.synchronize { @breakdowns.delete(request_id) }
+      # THE SPANS ARE NOT THE CONTROLLER'S TO GATE. They used to be readable only off a
+      # folded Breakdown, and a Breakdown exists only where `process_action` fired --
+      # so on a Grape or Rack mount, or any request that errored before its action, the
+      # spans were collected correctly and then stranded. That is the whole feature
+      # silently producing nothing on exactly the stacks whose residual is largest,
+      # with no warning and no unavailable-reason: the reader concludes there is
+      # nothing inside `other` when nothing was ever read.
+      #
+      # AS::N events do not need a controller. Neither does this.
+      def spans_for(request_id)
+        @mutex.synchronize do
+          breakdown = @breakdowns[request_id]
+          spans = breakdown && breakdown.spans
+          spans.nil? || spans.empty? ? (@spans[request_id] || {}) : spans
+        end
+      end
+
+      # BOTH MAPS. `forget` cleared the breakdown and left the span buffer, so every
+      # request on a stack that never folds one leaked its spans for the length of the
+      # run -- ~52k orphaned hashes on an 87-endpoint run, invisible and growing.
+      def forget(request_id)
+        @mutex.synchronize do
+          @spans.delete(request_id)
+          @breakdowns.delete(request_id)
+        end
+      end
 
       # Keyed to RequestMetrics' field names.
       def metrics_for(request_id)

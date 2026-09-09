@@ -118,4 +118,36 @@ RSpec.describe Loadwright::Execution::Collector::Direct do
       end
     end
   end
+
+  # WHERE THE ATTRIBUTION WAS LOST. The spans reached this collector through the
+  # Breakdown that `process_action` folds, so a request that never reached a controller
+  # -- a Grape or Rack mount, or one that errored early -- handed back an empty span map
+  # and the report said nothing at all about its residual.
+  describe "the spans that name what is inside `other`" do
+    before do
+      config.attribute_other_time = true
+      collector.start_run!
+    end
+
+    it "carries them for a request that emitted no controller event" do
+      request = build_request
+      collector.begin_request(request)
+      Loadwright::Instrumentation::CurrentRequest.with(request.request_id) do
+        ActiveSupport::Notifications.instrument("calculate.my_app") { nil }
+      end
+
+      expect(collector.collect(request, nil).spans.keys).to include("calculate.my_app")
+    end
+
+    it "releases them, so a run does not retain every request's spans" do
+      request = build_request
+      collector.begin_request(request)
+      Loadwright::Instrumentation::CurrentRequest.with(request.request_id) do
+        ActiveSupport::Notifications.instrument("calculate.my_app") { nil }
+      end
+      collector.collect(request, nil)
+
+      expect(collector.time_breakdown.spans_for(request.request_id)).to be_empty
+    end
+  end
 end

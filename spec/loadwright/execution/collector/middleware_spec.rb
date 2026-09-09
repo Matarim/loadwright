@@ -106,6 +106,33 @@ RSpec.describe Loadwright::Execution::Collector::Middleware do
     end
   end
 
+  # UNDER :http THE ATTRIBUTION HAD NO WAY HOME. The spans are collected in the
+  # server's process by the same subscriber; without this they simply never arrived,
+  # and the endpoint block said nothing about the residual in the one mode where the
+  # residual is measured over a real socket.
+  describe "the spans that name what is inside `other`" do
+    it "reads them out of the detail payload" do
+      detail = { "queries" => [],
+                 "spans" => { "calculate.my_app" => { "ms" => 41.5, "count" => 3 } } }
+
+      metrics = collector(detail: detail).collect(
+        request,
+        response_with(Loadwright::Execution::CollectorMiddleware::QUERY_COUNT_HEADER => "0")
+      )
+
+      expect(metrics.spans).to eq("calculate.my_app" => { ms: 41.5, count: 3 })
+    end
+
+    it "is empty, not nil, when the target returned none" do
+      metrics = collector.collect(
+        request,
+        response_with(Loadwright::Execution::CollectorMiddleware::QUERY_COUNT_HEADER => "0")
+      )
+
+      expect(metrics.spans).to eq({})
+    end
+  end
+
   describe "mid-run degradation" do
     # THE CASE THAT MATTERS. If the middleware stops answering, this collector must
     # not keep producing plausible numbers and must not produce zeroes. It records

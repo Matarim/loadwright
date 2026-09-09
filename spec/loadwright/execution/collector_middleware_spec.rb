@@ -189,6 +189,33 @@ RSpec.describe Loadwright::Execution::CollectorMiddleware do
       expect(payload["queries"].length).to eq(2)
     end
 
+    # SPANS CROSSED THIS BOUNDARY NOT AT ALL. `other` attribution was collected
+    # app-side and read only in-process, so under :http the endpoint block said nothing
+    # about the residual however much the application announced -- and the payload was
+    # additionally gated on a breakdown, which a non-controller mount never produces.
+    it "returns the spans that name what is inside `other`, with no controller event" do
+      breakdown = Loadwright::Analysis::TimeBreakdown.new(config: config)
+      described_class.unmount!
+      config.attribute_other_time = true
+      spans_secret = described_class.mount!(tracker: tracker, time_breakdown: breakdown)
+      tracker.begin_request("req-2")
+      Loadwright::Instrumentation::CurrentRequest.with("req-2") do
+        ActiveSupport::Notifications.instrument("calculate.my_app") { nil }
+      end
+      tracker.end_request("req-2")
+
+      _, _, body = described_class.new(->(_) { raise }).call(
+        rack_env(path: described_class::COLLECTION_PATH, secret: spans_secret,
+                 remote: "127.0.0.1", query: "request_id=req-2")
+      )
+
+      payload = JSON.parse(body.join)
+      expect(payload["spans"]).to include("calculate.my_app")
+      expect(payload["spans"]["calculate.my_app"]).to include("count" => 1)
+    ensure
+      breakdown&.stop!
+    end
+
     it "requires the per-run secret" do
       expect(collect(secret_header: "wrong-but-same-length-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").first).to eq(403)
       expect(collect(secret_header: "short").first).to eq(403)

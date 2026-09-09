@@ -168,17 +168,38 @@ module Loadwright
       # the process_action event fires in the SERVER's process, so this is the only
       # place it can be observed -- the harness never sees it. Timings only; nothing
       # here can carry a value.
+      #
+      # AND THE SPANS, which crossed this boundary not at all. `other` attribution was
+      # built app-side and read only in-process, so under :http the endpoint block said
+      # nothing about the residual no matter what the application announced. The same
+      # subscriber runs here; it only ever needed a way home.
+      #
+      # Independent of the breakdown, deliberately: a request that never reached a
+      # controller has no db/view figures and still has spans, and gating the spans on
+      # the breakdown is the defect this fixes rather than repeats.
       def timing_payload(request_id)
         breakdown = self.class.time_breakdown&.for_request(request_id)
+        spans = self.class.time_breakdown&.spans_for(request_id)
         self.class.time_breakdown&.forget(request_id)
-        return {} if breakdown.nil?
 
-        {
-          "db_runtime_ms" => breakdown.db_ms,
-          "view_runtime_ms" => breakdown.view_ms,
-          "gc_time_ms" => breakdown.gc_ms,
-          "total_runtime_ms" => breakdown.total_ms
-        }.compact
+        payload = spans.nil? || spans.empty? ? {} : { "spans" => spans_payload(spans) }
+        return payload if breakdown.nil?
+
+        payload.merge(
+          {
+            "db_runtime_ms" => breakdown.db_ms,
+            "view_runtime_ms" => breakdown.view_ms,
+            "gc_time_ms" => breakdown.gc_ms,
+            "total_runtime_ms" => breakdown.total_ms
+          }.compact
+        )
+      end
+
+      # Event NAMES and durations. No payloads cross this boundary: an AS::N payload
+      # can carry anything the application put in it, including record attributes, and
+      # nothing here needs more than the name to say where the time went.
+      def spans_payload(spans)
+        spans.to_h { |name, span| [name.to_s, { "ms" => span[:ms].to_f.round(3), "count" => span[:count].to_i }] }
       end
 
       # Bound to localhost. A remote peer cannot reach this even with the secret.

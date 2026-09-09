@@ -288,6 +288,7 @@ module Loadwright
            "#{(span[:share].to_f * 100).round(1)}%",
            span[:count], span[:per_call_ms] ? "#{span[:per_call_ms].to_f.round(3)}ms" : "—"]
         end
+        return ["", "_#{attribution[:unavailable_reason]}_"].join("\n") if rows.empty? && attribution[:unavailable_reason]
         return "" if rows.empty?
 
         ["", "**Inside \"everything else\"** — the largest spans the application announced, per request:", "",
@@ -295,14 +296,28 @@ module Loadwright
          unattributed_note(attribution)].compact.join("\n")
       end
 
+      # THE SUBTRAHEND IS NAMED, because the arithmetic must reconcile from what is on
+      # the page. The remainder is `other` minus the single LARGEST span, never minus
+      # the sum of the rows above -- they nest, so summing them can exceed `other`
+      # entirely. A reader who subtracts three rows and gets a fourth number concludes
+      # the tool cannot add up.
       def unattributed_note(attribution)
         remainder = attribution[:unattributed_ms]
         return "_These spans can nest inside one another, so they do not add up to `other`._" if remainder.nil?
 
-        "_At least #{remainder.to_f.round(2)}ms of `other` is announced by nothing at all — no " \
-          "instrumentation covers it. That is ordinarily Ruby doing work: serialisation, " \
-          "object building, computation in the controller. These spans can nest, so they are " \
-          "observed durations rather than a partition of `other`._"
+        basis = attribution[:unattributed_basis]
+        arithmetic = if basis
+                       " — that is `other` minus the single largest span (`#{basis[:name]}`, " \
+                         "#{basis[:ms].to_f.round(2)}ms), which is the most that can be subtracted without " \
+                         "double-counting nested spans. Do not subtract the rows above from each other"
+                     else
+                       ""
+                     end
+
+        "_At least #{remainder.to_f.round(2)}ms of `other` is announced by nothing at all#{arithmetic}. " \
+          "That is ordinarily Ruby doing work: serialisation, object building, computation in the " \
+          "controller. These spans can nest, so they are observed durations rather than a partition " \
+          "of `other`._"
       end
 
       def latency_block(endpoint)

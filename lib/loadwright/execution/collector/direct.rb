@@ -89,9 +89,11 @@ module Loadwright
         private
 
         def timing_metrics(bucket)
-          # BEFORE forget: the spans live on the same Breakdown, and forgetting first
-          # would drop them.
-          spans = @time_breakdown.for_request(request_id_of(bucket))&.spans
+          # BEFORE forget, and NOT off the Breakdown: a request that never reached a
+          # controller has no Breakdown and still has spans, and reading them through
+          # one is what made the attribution silent on every non-ActionController
+          # mount.
+          spans = @time_breakdown.spans_for(request_id_of(bucket))
           breakdown = @time_breakdown.metrics_for(request_id_of(bucket)).merge(spans: spans)
           @time_breakdown.forget(request_id_of(bucket))
 

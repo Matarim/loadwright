@@ -284,4 +284,56 @@ RSpec.describe Loadwright::Analysis::TimeBreakdown do
                     "render_template.action_view")
     end
   end
+
+  # THE STACK THAT NEVER EMITS process_action. A Grape or Rack mount, or any request
+  # that errors before its action, produces no controller event -- and the spans used to
+  # be readable only off the Breakdown that event folds. They were collected correctly
+  # and then stranded, so the whole attribution said nothing on exactly the mounts whose
+  # residual is largest, with no warning and no unavailable-reason.
+  describe "#spans_for on a request that never reached a controller" do
+    before do
+      config.attribute_other_time = true
+      breakdown.start!
+    end
+
+    def emit_spans(request_id)
+      Loadwright::Instrumentation::CurrentRequest.with(request_id) do
+        ActiveSupport::Notifications.instrument("calculate.my_app") { nil }
+        ActiveSupport::Notifications.instrument("instantiation.active_record") { nil }
+      end
+    end
+
+    it "returns the spans even though no breakdown exists" do
+      emit_spans("grape-1")
+
+      expect(breakdown.for_request("grape-1")).to be_nil
+      expect(breakdown.spans_for("grape-1").keys).to include("calculate.my_app")
+    end
+
+    it "still returns the folded spans when the controller event did fire" do
+      Loadwright::Instrumentation::CurrentRequest.with("rails-1") do
+        ActiveSupport::Notifications.instrument("calculate.my_app") { nil }
+        ActiveSupport::Notifications.instrument(described_class::EVENT, db_runtime: 1.0) { nil }
+      end
+
+      expect(breakdown.spans_for("rails-1").keys).to include("calculate.my_app")
+    end
+
+    it "keeps requests apart" do
+      emit_spans("grape-1")
+
+      expect(breakdown.spans_for("grape-2")).to be_empty
+    end
+
+    # THE LEAK THAT RODE ALONG WITH THE GATE. `forget` cleared the breakdown map and
+    # left the span buffer, so on such a stack every request's spans were retained for
+    # the length of the run -- tens of thousands of unreachable hashes on a full run.
+    it "releases the span buffer on forget" do
+      10.times { |i| emit_spans("grape-#{i}") }
+
+      10.times { |i| breakdown.forget("grape-#{i}") }
+
+      expect(breakdown.instance_variable_get(:@spans)).to be_empty
+    end
+  end
 end

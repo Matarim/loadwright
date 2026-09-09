@@ -1107,16 +1107,37 @@ module Loadwright
             into[:count] += span[:count].to_i
           end
         end
-        return nil if spans.empty?
+        return nothing_announced if spans.empty?
 
         requests = cells.sum { |cell| Array(cell.latencies).compact.length }
         top = Analysis::TimeBreakdown.top_spans(
           spans, breakdown.other_ms, limit: @config.other_time_top_n.to_i, requests: requests
         )
-        return nil if top.empty?
+        return nothing_announced if top.empty?
 
+        # WHAT THE REMAINDER WAS COMPUTED AGAINST, named. It is `other` minus the single
+        # LARGEST span, not minus the sum of the rows shown -- because the rows nest and
+        # summing them can exceed `other`. A reader shown three rows will subtract three
+        # rows and get a different number, so the subtrahend has to be on the page: a
+        # figure that cannot be reconciled from what is printed reads as an error in the
+        # tool even when it is the more careful answer.
         { top: top.map(&:to_h),
-          unattributed_ms: Analysis::TimeBreakdown.unattributed_ms(top, breakdown.other_ms)&.round(3) }
+          unattributed_ms: Analysis::TimeBreakdown.unattributed_ms(top, breakdown.other_ms)&.round(3),
+          unattributed_basis: { name: top.first.name, ms: top.first.ms.to_f.round(3) } }
+      end
+
+      # A SECTION THAT SAYS WHY, rather than one that is silently absent. "No section"
+      # and "nothing to report" look identical to a reader, and they were not: the
+      # attribution used to disappear entirely wherever it could not be collected, which
+      # is how a feature can be broken for two thirds of an API and look like an answer.
+      def nothing_announced
+        return nil unless @config.attribute_other_time
+
+        { top: [],
+          unavailable_reason: "nothing this endpoint did announced itself through " \
+                              "ActiveSupport::Notifications, so the residual cannot be broken down further. " \
+                              "Plain Ruby emits no events: wrapping the suspected work in " \
+                              "ActiveSupport::Notifications.instrument makes it appear here." }
       end
 
       def median_across(cells, field)

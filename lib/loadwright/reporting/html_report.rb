@@ -553,14 +553,25 @@ module Loadwright
             "<td>#{h((span[:share].to_f * 100).round(1))}%</td><td>#{h(span[:count])}</td>" \
             "<td>#{per_call}</td></tr>"
         end
-        return "" if rows.empty?
+        if rows.empty?
+          reason = attribution[:unavailable_reason]
+          return reason ? "<p class=\"note\">#{h(reason)}</p>" : ""
+        end
 
         remainder = attribution[:unattributed_ms]
+        basis = attribution[:unattributed_basis]
         note = if remainder.nil?
                  "These spans can nest inside one another, so they do not add up to “other”."
                else
-                 "At least #{h(remainder.to_f.round(2))}ms of “other” is announced by nothing at all. " \
-                   "That is ordinarily Ruby doing work: serialisation, object building, computation."
+                 # The subtrahend is named so the arithmetic reconciles from the page:
+                 # this is `other` minus the LARGEST span, never minus the sum of the
+                 # rows, which nest and can exceed `other`.
+                 basis_note = basis ? " &mdash; “other” minus the single largest span " \
+                                      "(#{h(basis[:name])}, #{h(basis[:ms].to_f.round(2))}ms), not minus " \
+                                      "the rows above added together" : ""
+                 "At least #{h(remainder.to_f.round(2))}ms of “other” is announced by nothing at all" \
+                   "#{basis_note}. That is ordinarily Ruby doing work: serialisation, object building, " \
+                   "computation."
                end
 
         "<details class=\"other-attribution\"><summary>Inside “everything else”</summary>" \

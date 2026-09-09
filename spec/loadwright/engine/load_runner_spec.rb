@@ -977,12 +977,34 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(text).to include("announced by nothing at all")
     end
 
-    it "renders nothing when the application announced nothing" do
-      result = runner(context: build_context(responder: ->(_) { { status: 200, body: '[{"id":1}]' } },
-                                             metrics: { query_count: 2 })).run(endpoints: [endpoint])
+    # THE ARITHMETIC HAS TO RECONCILE FROM THE PAGE. The remainder is `other` minus the
+    # single LARGEST span, never minus the sum of the rows shown -- they nest, and
+    # summing them can exceed `other` outright. A reader who subtracts three rows and
+    # gets a fourth number concludes the tool cannot add up, so the subtrahend is named.
+    it "names what the remainder was computed against" do
+      attribution = result_with_spans.time_breakdowns[endpoint.to_s][:other_attribution]
+      text = Loadwright::Reporting::MarkdownReport.new(config: config).render(result_with_spans)
+
+      expect(attribution[:unattributed_basis][:name]).to eq(attribution[:top].first[:name])
+      expect(text).to include("minus the single largest span")
+      expect(text).to include("Do not subtract the rows above from each other")
+    end
+
+    # A SECTION THAT IS SILENTLY ABSENT AND ONE WITH NOTHING TO REPORT LOOK IDENTICAL,
+    # and they are not. The attribution disappearing entirely is how a feature can be
+    # unavailable for two thirds of an API and still read as an answer.
+    it "says why there is nothing to show, rather than omitting the section" do
+      # A findings endpoint, for the same reason the block above uses one: a clean
+      # endpoint renders as one appendix line and no breakdown block appears at all.
+      metrics = { query_count: 12,
+                  queries: Array.new(12) { { fingerprint: "SELECT * FROM widgets WHERE id = ?" } } }
+      responder = ->(_) { { status: 200, body: '[{"id":1}]', latency_ms: 500.0 } }
+      result = runner(context: build_context(responder: responder, metrics: metrics)).run(endpoints: [endpoint])
       text = Loadwright::Reporting::MarkdownReport.new(config: config).render(result)
 
       expect(text).not_to include("Inside \"everything else\"")
+      expect(text).to include("announced itself through ActiveSupport::Notifications")
+      expect(text).to include("ActiveSupport::Notifications.instrument")
     end
 
     it "can be switched off" do

@@ -77,12 +77,23 @@ module Loadwright
             view_runtime_ms: timing(raw_response, detail, CollectorMiddleware::VIEW_RUNTIME_HEADER,
                                     "view_runtime_ms"),
             gc_time_ms: detail_measurement(detail, "gc_time_ms"),
+            spans: spans_from(detail),
             allocations: header_measurement(raw_response, CollectorMiddleware::ALLOCATIONS_HEADER),
             **response_derived(raw_response, request)
           )
         end
 
         private
+
+        # What the application announced it was doing, per request. Empty is not a
+        # claim that nothing happened -- the endpoint block says so in words when no
+        # span arrived, rather than omitting the section and reading as "nothing here".
+        def spans_from(detail)
+          raw = detail && detail["spans"]
+          return {} unless raw.is_a?(Hash)
+
+          raw.to_h { |name, span| [name.to_s, { ms: span["ms"].to_f, count: span["count"].to_i }] }
+        end
 
         def timing(raw_response, detail, header, detail_key)
           from_header = header_measurement(raw_response, header)
