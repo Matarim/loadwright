@@ -1354,6 +1354,49 @@ DIAG-49:
     An application that instruments its own hot paths gets more out of this for free.
     Suggesting `ActiveSupport::Notifications.instrument` around a suspected serializer
     is a legitimate next step when the remainder is large.
+  note: |
+    The remainder is `other` minus the SINGLE LARGEST span, and the report names which
+    span that was. It is never `other` minus the sum of the rows shown -- they nest, so
+    summing them can exceed `other`. Do not reconcile the figure by adding up the rows.
+
+DIAG-51:
+  symptom: >
+    "the `other` attribution section is not in my report" / "loadwright says nothing
+    about the residual on our Grape/Sinatra/Roda endpoints" / "only some endpoints have
+    a view row"
+  cause: >
+    On 0.0.14 the spans were readable only off the breakdown that
+    `process_action.action_controller` folds, and a mounted Rack app emits no such
+    event. The spans were collected and stranded; the section was omitted silently. The
+    same gate is why only ActionController endpoints carried a view-runtime row.
+  fix: >
+    0.0.15+ reads the spans without a controller event, and carries them over the
+    collection endpoint so `:http` gets them too. An endpoint with nothing to show now
+    says why instead of omitting the section.
+  do_not: >
+    Do NOT tell a user on 0.0.14 that an absent section means their residual holds
+    nothing interesting. It means nothing was read. A missing view-runtime row on the
+    same endpoints is the corroborating signal, not a second problem.
+  note: >
+    0.0.14 also never released the span buffer for such requests -- `forget` cleared the
+    breakdown map only -- so a long run retained every request's spans. Fixed in the
+    same place. If a user reports growing memory on 0.0.14 with a mounted API, that is
+    a real cause.
+
+DIAG-52:
+  symptom: >
+    "loadwright reported no findings for this endpoint and no reason either" / "is the
+    section missing because there is nothing to report, or because it could not
+    measure?"
+  rule: |
+    A silently absent section and a section with nothing to report are identical to a
+    reader and are not the same thing. Whenever a signal is absent, look for the stated
+    reason before concluding the endpoint is fine -- and if there is no reason given,
+    say the tool did not state one rather than filling it in.
+  say_this: >
+    Three outcome states exist for exactly this: healthy / has findings / inconclusive.
+    "No finding" is not "healthy" unless the endpoint's coverage says the class was
+    checked.
 
 DIAG-50:
   symptom: >
@@ -1370,10 +1413,19 @@ DIAG-50:
     `path_param_overrides` is also consulted for identifier-shaped QUERY parameters now,
     not only path segments.
   say_this: >
-    Correlation is the point and it is preserved by construction: both lists come from
-    the same records in the same order and rotate on a shared index, so one request gets
-    one row. Values selected independently would be two valid ids from two different
-    graphs -- still a 404, and it reads as the application's fault.
+    Correlation is the point. 0.0.15+ builds the lists ROW BY ROW and uses a row only if
+    every parameter yields a value for it, so they stay aligned by position and one
+    request gets one row. Values selected independently would be two valid ids from two
+    different graphs -- still a 404, and it reads as the application's fault.
+  note: |
+    0.0.14 documented that correlation and did not provide it: the lists were built with
+    a nil-dropping map and rotated modulo their own lengths, so ONE nil desynchronised
+    them (one missing value = 4 mis-correlated requests in 6). If a user reports 404s on
+    0.0.14 with `values:` configured, that is the cause -- not their data.
+    A row that misses one value is dropped from every parameter, and the run says how
+    many and why. A configured parameter that produced NO values is reported unresolved
+    rather than falling through to the resource's shared value; only
+    `path_param_overrides` can satisfy it, by either key form.
 
 DIAG-47:
   symptom: >

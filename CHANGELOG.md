@@ -5,6 +5,95 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.15] — 2026-09-09
+
+Round 13, and both findings are the same shape: something stated confidently that was
+not true of the reader's situation, in a place the reader had no cheap way to check.
+
+### Fixed
+
+- **`factory_map` `values:` promised correlation "by construction" and did not provide
+  it.** The comment beside the implementation said every value list was built from the
+  same records in the same order, so a shared rotation index handed one request one row.
+  The lists were actually built with a nil-dropping map and rotated modulo *their own*
+  lengths — so a single record yielding nil for one parameter shortened one list and put
+  the two out of step. Three records with one missing value produced **four
+  mis-correlated requests out of six**: two individually-valid values from two different
+  rows, which is a 404 that reads as the application's own defect. That is precisely the
+  failure the comment argued the design prevents.
+
+  It is worse than an ordinary bug because of where it was asserted. A code comment
+  adjacent to the implementation is where a careful reader goes *to verify*, and this one
+  told them the check was unnecessary.
+
+  Lists are now built **row by row, all or nothing**: a row is used only if every
+  parameter of the resource yields a value for it, so the lists stay equal in length and
+  aligned by position, which is what makes the shared index true rather than
+  aspirational. The rescue moved inside the per-record block — it used to wrap the whole
+  mapping, so one raising callable discarded every value already collected and left an
+  empty list. The run now says how many rows it dropped, for which parameter, and with
+  the exception if there was one.
+
+  **A configured parameter that could not be filled now refuses.** An empty list used to
+  fall through to the resource's shared value, which is how a mount routing on a number
+  was handed another mount's GUID on every request. It is reported unresolved instead,
+  naming the parameter; `path_param_overrides` still satisfies it, by either key form.
+
+  Related: a bare-name `path_param_overrides` entry was read symbol-only for a path
+  parameter and both ways for a query parameter, so a string key was silently ignored on
+  one of them. Both forms now work everywhere — it matters more than it did, since an
+  override is the only source left for a refused parameter.
+
+  The existing correlation spec asserted the rotation across two equal-length lists. That
+  is true, and it is about the resolver; nothing specced the half that builds them.
+
+- **The `other` attribution was gated behind a framework event that many APIs never
+  emit.** 0.0.14's headline feature collected spans correctly — the subscriber installs,
+  records call counts, excludes the already-counted events — and then stranded them. The
+  only path from the per-request buffer to a readable breakdown ran through
+  `process_action.action_controller`, which a mounted Grape, Sinatra or Roda app does not
+  emit. So the feature answered the question everywhere except on the kind of endpoint
+  whose residual is largest, and it did so **silently**: no warning, no
+  unavailable-reason, no note. A reader on such a mount concludes their residual holds
+  nothing interesting when nothing was ever read. The same gate is why only
+  ActionController endpoints carried a view-runtime row — the corroborating signal was
+  in an earlier report and went unread.
+
+  Spans are now read without a controller event, and they **cross the collection
+  endpoint**, so `:http` gets the attribution too — it was built app-side and read only
+  in-process, so the feature was silent in that mode regardless of framework. Event names
+  and durations only; no notification payloads cross that boundary.
+
+- **The span buffer was never released for those requests.** `forget` cleared the
+  breakdown map and left the buffer, so on any stack that never folds one, every
+  request's spans were retained for the length of the run — on the order of 52,000
+  orphaned hashes on an 87-endpoint run, invisible and growing. It also affected
+  ActionController requests that errored before their action.
+
+- **An attribution with nothing to show now says why.** A silently absent section and a
+  section with nothing to report are identical to a reader, and they are not the same
+  thing — that is how a feature can be broken for most of an API and still read as an
+  answer.
+
+### Changed
+
+- **The unattributed remainder names its subtrahend.** It is `other` minus the *single
+  largest* span, never minus the sum of the rows shown, because spans nest and summing
+  them can exceed `other` outright. The conservative arithmetic is right; the label
+  invited exactly the addition that will not reconcile, so the figure it was computed
+  against is now printed beside it, with a line saying not to add up the rows.
+
+- **The seeder's warnings reach the report.** They landed in the JSON metadata's seeding
+  block, which no rendered format reads — and they are the half that explains a
+  resolution failure. They now join the run's warnings.
+
+- **The fixture's mounted Rack app announces its own work** through
+  `ActiveSupport::Notifications`, the way an application instruments a calculation it
+  suspects. It gives the end-to-end case a live fixture: a real run through a stack with
+  no controller, whose only account of its own time is an event.
+
+No config keys were added or removed. 109 config keys.
+
 ## [0.0.14] — 2026-09-08
 
 ### Added

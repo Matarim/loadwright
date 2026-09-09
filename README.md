@@ -872,12 +872,20 @@ mount, a business number on another — `values:` publishes one per parameter na
                           resource_number: ->(r) { r.detail.number } } }
 ```
 
-Both lists are built from the same records in the same order and rotate on a shared
-index, so the GUID and the number sent in one request come from the **same row**. That
+Every list is built row by row from the same records, and a row is used only if **every**
+parameter yields a value for it — so the lists stay the same length, aligned by position,
+and the GUID and the number sent in one request come from the **same row**. That
 correlation is the point: selecting them independently would produce two valid values
-from two different graphs, which is still a 404 and reads as your endpoint's fault. A
-parameter with no entry falls through to the resource's shared value, so adding `values:`
-for one mount cannot disturb another.
+from two different graphs, which is still a 404 and reads as your endpoint's fault.
+
+A row that misses one value is dropped from all of them, and the run says how many rows
+it dropped and why. (If your factory `build`s an association rather than creating it, the
+callback that populates it never fires, and a callable reaching through it finds nothing —
+that is the usual cause.) A parameter with no entry at all falls through to the resource's
+shared value, so adding `values:` for one mount cannot disturb another; a parameter you
+configured that produced **no** values does not fall through — it is reported unresolved,
+because sending another mount's identifier 404s every request and reads as your bug.
+Fix it with `path_param_overrides`, which is consulted first.
 
 `path_param_overrides` is also consulted for identifier-shaped **query** parameters, not
 only for path segments.
