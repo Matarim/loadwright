@@ -77,6 +77,21 @@ not true of the reader's situation, in a place the reader had no cheap way to ch
 
 ### Changed
 
+- **A span's share is of the whole request, not of `other`** — and this is arithmetic,
+  not presentation. A span nests inside the request by construction; it does **not** nest
+  inside the residual, because the residual excludes database and view time while the
+  span includes them. An instrumented method that queries — most of what an application
+  chooses to instrument — is therefore routinely *longer* than `other`. Measured against
+  the residual, that printed a share of **691%**, which tells a reader the tool is
+  broken. It would have landed on exactly the endpoint round 13 was pointed at.
+
+- **When the largest span exceeds the residual, the report says which span and why.**
+  The remainder is still refused rather than invented — a zero would read as "fully
+  accounted for" — but "unavailable" with no cause reads as a shrug, and the cause is
+  ordinary: the instrumented block contains its own SQL, which sits inside the span and
+  outside `other`. This is the answer to the question 0.0.14 shipped without knowing:
+  it happens *often*, and the exclusion list is not what was wrong.
+
 - **The unattributed remainder names its subtrahend.** It is `other` minus the *single
   largest* span, never minus the sum of the rows shown, because spans nest and summing
   them can exceed `other` outright. The conservative arithmetic is right; the label

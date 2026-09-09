@@ -285,14 +285,14 @@ module Loadwright
 
         rows = Array(attribution[:top]).map do |span|
           ["`#{span[:name]}`", "#{span[:ms].to_f.round(2)}ms",
-           "#{(span[:share].to_f * 100).round(1)}%",
+           span[:share] ? "#{(span[:share].to_f * 100).round(1)}%" : "—",
            span[:count], span[:per_call_ms] ? "#{span[:per_call_ms].to_f.round(3)}ms" : "—"]
         end
         return ["", "_#{attribution[:unavailable_reason]}_"].join("\n") if rows.empty? && attribution[:unavailable_reason]
         return "" if rows.empty?
 
         ["", "**Inside \"everything else\"** — the largest spans the application announced, per request:", "",
-         table(["Event", "Time", "Share of other", "Calls", "Per call"], rows), "",
+         table(["Event", "Time", "Share of request", "Calls", "Per call"], rows), "",
          unattributed_note(attribution)].compact.join("\n")
       end
 
@@ -303,7 +303,11 @@ module Loadwright
       # the tool cannot add up.
       def unattributed_note(attribution)
         remainder = attribution[:unattributed_ms]
-        return "_These spans can nest inside one another, so they do not add up to `other`._" if remainder.nil?
+        if remainder.nil?
+          reason = attribution[:unattributed_reason]
+          return "_These spans can nest inside one another, so they do not add up to `other`." \
+                 "#{reason ? " #{reason.tr('`', "'")}" : ''}_"
+        end
 
         basis = attribution[:unattributed_basis]
         arithmetic = if basis

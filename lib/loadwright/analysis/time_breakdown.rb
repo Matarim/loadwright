@@ -98,16 +98,25 @@ module Loadwright
         end
       end
 
-      def self.top_spans(spans, other_ms, limit:, requests: 1)
+      # THE SHARE IS OF THE REQUEST, NOT OF `other`, and that is not a presentation
+      # choice. A span is guaranteed to nest inside the request; it is NOT guaranteed to
+      # nest inside the residual, because the residual excludes db and view time and the
+      # span does not. An instrumented method that queries -- which is most of what an
+      # application chooses to instrument -- contains its own SQL, so its duration
+      # routinely exceeds `other` outright. Measured against the residual that printed a
+      # share of 691%, which is a number that tells a reader the tool is broken, on
+      # exactly the endpoint they were told to look at.
+      def self.top_spans(spans, other_ms, limit:, requests: 1, total_ms: nil)
         return [] if other_ms.nil? || other_ms.to_f <= 0 || Hash(spans).empty?
 
         divisor = [requests, 1].max
+        basis = total_ms.to_f.positive? ? total_ms.to_f : nil
         Hash(spans)
           .map { |name, span| [name, span[:ms].to_f / divisor, span[:count].to_i] }
           .reject { |_, ms, _| ms <= 0 }
           .sort_by { |_, ms, _| -ms }
           .first(limit)
-          .map { |name, ms, count| Span.new(name: name, ms: ms, count: count, share: ms / other_ms.to_f) }
+          .map { |name, ms, count| Span.new(name: name, ms: ms, count: count, share: basis && (ms / basis)) }
       end
 
       # nil rather than a number when the spans overlap enough to exceed the residual:
@@ -120,6 +129,23 @@ module Loadwright
         return nil if largest > other_ms.to_f
 
         other_ms.to_f - largest
+      end
+
+      # AND WHY IT COULD NOT BE COMPUTED, which is the half that stops "unavailable"
+      # reading as a shrug. There is one dominant cause and it is not exotic: an
+      # instrumented block that issues queries contains its own SQL, and `other` excludes
+      # SQL -- so the span is longer than the residual it is being shown inside. That is
+      # the normal shape for anything an application chooses to instrument, not an edge
+      # case, and a reader who is not told this concludes the numbers disagree.
+      def self.unattributed_reason(top, other_ms)
+        return nil if other_ms.nil? || top.empty?
+        largest = top.max_by(&:ms)
+        return nil unless largest && largest.ms > other_ms.to_f
+
+        "the largest span (`#{largest.name}`, #{largest.ms.round(2)}ms) is longer than the residual " \
+          "itself, so the residual cannot be apportioned. That is ordinarily because the instrumented " \
+          "block contains work already counted as database or view time -- its queries are inside the " \
+          "span and outside `other`. It is not a disagreement between the numbers."
       end
 
       def self.from_totals(total_ms:, db_ms: nil, view_ms: nil, gc_ms: nil, controller: nil, action: nil)

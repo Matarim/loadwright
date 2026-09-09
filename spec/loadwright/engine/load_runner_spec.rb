@@ -990,6 +990,39 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(text).to include("Do not subtract the rows above from each other")
     end
 
+    # THE CASE ROUND 13 ASKED ABOUT AND COULD NOT REACH: a span longer than the residual
+    # it is shown inside. It is not exotic -- an instrumented block that queries contains
+    # its own SQL, and `other` excludes SQL -- so the remainder is correctly refused, and
+    # refusing it without saying why is the same silence this round is about.
+    it "says why the remainder could not be computed, when a span exceeds the residual" do
+      metrics = { query_count: 12, spans: { "calculate_payoff.my_app" => { ms: 480.0, count: 1 } },
+                  queries: Array.new(12) { { fingerprint: "SELECT * FROM widgets WHERE id = ?" } },
+                  db_runtime_ms: Loadwright::Measurement.value(460.0) }
+      responder = ->(_) { { status: 200, body: '[{"id":1}]', latency_ms: 500.0 } }
+      result = runner(context: build_context(responder: responder, metrics: metrics)).run(endpoints: [endpoint])
+
+      attribution = result.time_breakdowns[endpoint.to_s][:other_attribution]
+      text = Loadwright::Reporting::MarkdownReport.new(config: config).render(result)
+
+      expect(attribution[:unattributed_ms]).to be_nil
+      expect(text).to include("calculate_payoff.my_app")
+      expect(text).to include("database or view time")
+    end
+
+    # A share measured against the residual can exceed 100% for the same reason, and a
+    # 691% share reads as a broken tool. A span nests inside the REQUEST by construction.
+    it "states each span's share of the request, never of the residual" do
+      metrics = { query_count: 12, spans: { "calculate_payoff.my_app" => { ms: 480.0, count: 1 } },
+                  queries: Array.new(12) { { fingerprint: "SELECT * FROM widgets WHERE id = ?" } },
+                  db_runtime_ms: Loadwright::Measurement.value(460.0) }
+      responder = ->(_) { { status: 200, body: '[{"id":1}]', latency_ms: 500.0 } }
+      result = runner(context: build_context(responder: responder, metrics: metrics)).run(endpoints: [endpoint])
+
+      shares = result.time_breakdowns[endpoint.to_s][:other_attribution][:top].map { |span| span[:share] }
+
+      expect(shares).to all(be <= 1.0)
+    end
+
     # A SECTION THAT IS SILENTLY ABSENT AND ONE WITH NOTHING TO REPORT LOOK IDENTICAL,
     # and they are not. The attribution disappearing entirely is how a feature can be
     # unavailable for two thirds of an API and still read as an answer.

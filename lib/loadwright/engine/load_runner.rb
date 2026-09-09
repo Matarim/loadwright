@@ -1111,7 +1111,8 @@ module Loadwright
 
         requests = cells.sum { |cell| Array(cell.latencies).compact.length }
         top = Analysis::TimeBreakdown.top_spans(
-          spans, breakdown.other_ms, limit: @config.other_time_top_n.to_i, requests: requests
+          spans, breakdown.other_ms, limit: @config.other_time_top_n.to_i, requests: requests,
+          total_ms: breakdown.total_ms
         )
         return nothing_announced if top.empty?
 
@@ -1123,7 +1124,8 @@ module Loadwright
         # tool even when it is the more careful answer.
         { top: top.map(&:to_h),
           unattributed_ms: Analysis::TimeBreakdown.unattributed_ms(top, breakdown.other_ms)&.round(3),
-          unattributed_basis: { name: top.first.name, ms: top.first.ms.to_f.round(3) } }
+          unattributed_reason: Analysis::TimeBreakdown.unattributed_reason(top, breakdown.other_ms),
+          unattributed_basis: { name: top.first.name, ms: top.first.ms.to_f.round(3) } }.compact
       end
 
       # A SECTION THAT SAYS WHY, rather than one that is silently absent. "No section"

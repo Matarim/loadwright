@@ -1358,6 +1358,12 @@ DIAG-49:
     The remainder is `other` minus the SINGLE LARGEST span, and the report names which
     span that was. It is never `other` minus the sum of the rows shown -- they nest, so
     summing them can exceed `other`. Do not reconcile the figure by adding up the rows.
+    A span's SHARE is of the whole request, not of the residual. A span nests inside the
+    request by construction and NOT inside `other`, which excludes db and view time while
+    the span includes them -- so an instrumented method that queries is routinely longer
+    than `other` itself. When that happens the remainder is unavailable and the report
+    says which span and why. That is expected, not a contradiction: 0.0.14 measured the
+    share against the residual and could print 691%.
 
 DIAG-51:
   symptom: >

@@ -242,6 +242,24 @@ RSpec.describe Loadwright::Analysis::TimeBreakdown do
       expect(serializer.per_call_ms).to be_within(0.001).of(9.0)
     end
 
+    # THE SHARE IS OF THE REQUEST, NOT OF THE RESIDUAL. A span nests inside the request
+    # by construction; it does not nest inside `other`, which excludes db and view time
+    # while the span includes them. An instrumented method that queries -- most of what
+    # an application chooses to instrument -- therefore exceeds the residual outright,
+    # and measured against it the share printed 691%: a number that tells a reader the
+    # tool is broken, on the endpoint they were told to look at.
+    it "computes the share against the whole request" do
+      top = described_class.top_spans(spans, 40.0, limit: 1, total_ms: 400.0)
+
+      expect(top.first.share).to be_within(0.0001).of(0.1)
+    end
+
+    it "has no share to state when the total is unknown, rather than inventing a basis" do
+      top = described_class.top_spans(spans, 500.0, limit: 1)
+
+      expect(top.first.share).to be_nil
+    end
+
     it "says nothing when the application announced nothing" do
       expect(described_class.top_spans({}, 500.0, limit: 3)).to be_empty
     end
@@ -272,6 +290,29 @@ RSpec.describe Loadwright::Analysis::TimeBreakdown do
       top = described_class.top_spans({ "a.b" => { ms: 900.0, count: 1 } }, 500.0, limit: 3)
 
       expect(described_class.unattributed_ms(top, 500.0)).to be_nil
+    end
+  end
+
+  # THE QUESTION ROUND 13 ASKED AND COULD NOT ANSWER: how often is a span larger than
+  # `other` itself? Often, and for one dominant reason -- an instrumented block that
+  # issues queries contains its own SQL, which `other` excludes. The remainder is
+  # correctly refused; refusing it WITHOUT saying why is the silence this round is about.
+  describe ".unattributed_reason" do
+    it "names the span and the reason when the residual cannot be apportioned" do
+      top = described_class.top_spans({ "calculate.my_app" => { ms: 70.0, count: 1 } }, 10.0,
+                                      limit: 3, total_ms: 100.0)
+
+      reason = described_class.unattributed_reason(top, 10.0)
+
+      expect(reason).to include("calculate.my_app")
+      expect(reason).to include("database or view time")
+    end
+
+    it "is silent when the remainder was computable, since there is nothing to explain" do
+      top = described_class.top_spans({ "calculate.my_app" => { ms: 4.0, count: 1 } }, 100.0,
+                                      limit: 3, total_ms: 200.0)
+
+      expect(described_class.unattributed_reason(top, 100.0)).to be_nil
     end
   end
 

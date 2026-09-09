@@ -549,8 +549,9 @@ module Loadwright
 
         rows = Array(attribution[:top]).map do |span|
           per_call = span[:per_call_ms] ? "#{h(span[:per_call_ms].to_f.round(3))}ms" : "&mdash;"
+          share = span[:share] ? "#{h((span[:share].to_f * 100).round(1))}%" : "&mdash;"
           "<tr><td><code>#{h(span[:name])}</code></td><td>#{h(span[:ms].to_f.round(2))}ms</td>" \
-            "<td>#{h((span[:share].to_f * 100).round(1))}%</td><td>#{h(span[:count])}</td>" \
+            "<td>#{share}</td><td>#{h(span[:count])}</td>" \
             "<td>#{per_call}</td></tr>"
         end
         if rows.empty?
@@ -561,7 +562,9 @@ module Loadwright
         remainder = attribution[:unattributed_ms]
         basis = attribution[:unattributed_basis]
         note = if remainder.nil?
-                 "These spans can nest inside one another, so they do not add up to “other”."
+                 reason = attribution[:unattributed_reason]
+                 "These spans can nest inside one another, so they do not add up to “other”." \
+                   "#{reason ? " #{h(reason.tr('`', "’"))}" : ''}"
                else
                  # The subtrahend is named so the arithmetic reconciles from the page:
                  # this is `other` minus the LARGEST span, never minus the sum of the
@@ -575,7 +578,7 @@ module Loadwright
                end
 
         "<details class=\"other-attribution\"><summary>Inside “everything else”</summary>" \
-          "<table><thead><tr><th>Event</th><th>Time</th><th>Share of other</th><th>Calls</th>" \
+          "<table><thead><tr><th>Event</th><th>Time</th><th>Share of request</th><th>Calls</th>" \
           "<th>Per call</th></tr></thead><tbody>#{rows.join}</tbody></table>" \
           "<p class=\"note\">#{note}</p></details>"
       end

@@ -507,15 +507,17 @@ anywhere, it shows up here without further configuration.
 ```
 Inside "everything else" — the largest spans the application announced, per request:
 
-| Event                           | Time    | Share of other | Calls | Per call |
-|---------------------------------|---------|----------------|-------|----------|
-| `instantiation.active_record`   | 41.20ms | 8.3%           | 312   | 0.132ms  |
-| `cache_read.active_support`     | 12.05ms | 2.4%           | 96    | 0.126ms  |
-| `render.my_serializer`          |  9.60ms | 1.9%           | 1     | 9.600ms  |
+| Event                           | Time    | Share of request | Calls | Per call |
+|---------------------------------|---------|------------------|-------|----------|
+| `instantiation.active_record`   | 41.20ms | 8.3%             | 312   | 0.132ms  |
+| `cache_read.active_support`     | 12.05ms | 2.4%             | 96    | 0.126ms  |
+| `render.my_serializer`          |  9.60ms | 1.9%             | 1     | 9.600ms  |
 
-At least 434.75ms of `other` is announced by nothing at all — no instrumentation
-covers it. That is ordinarily Ruby doing work: serialisation, object building,
-computation in the controller.
+At least 434.75ms of `other` is announced by nothing at all — that is `other` minus
+the single largest span (`instantiation.active_record`, 41.20ms), which is the most
+that can be subtracted without double-counting nested spans. Do not subtract the rows
+above from each other. That is ordinarily Ruby doing work: serialisation, object
+building, computation in the controller.
 ```
 
 **Read the last line first.** Spans can nest inside one another, so they are observed
@@ -524,6 +526,14 @@ the larger and more interesting number — it is the plain Ruby no notification 
 large remainder on a slow endpoint points at computation, not at anything the framework
 is doing. The `Calls` column is what separates one slow call from four hundred cheap
 ones, which have entirely different fixes.
+
+**The share is of the whole request, not of `other`.** A span nests inside the request
+by construction; it does not nest inside the residual, which excludes database and view
+time while the span includes them. An instrumented method that queries — most of what an
+application chooses to instrument — is therefore routinely *longer* than `other`. When
+the largest span exceeds the residual, the remainder is reported as unavailable rather
+than invented, and the report says which span and why. That is not the numbers
+disagreeing.
 
 `min_samples_for_percentiles` is why a default run reports p50 and not p99: 25
 samples cannot support a 99th percentile, and printing one anyway is noise with a

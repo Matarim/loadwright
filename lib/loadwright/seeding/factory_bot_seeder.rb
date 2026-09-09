@@ -310,6 +310,14 @@ module Loadwright
       # them. The lists then stay equal in length and aligned by position, which is what
       # makes the shared rotation index true rather than aspirational.
       #
+      # AND THE DROP HAS TO HAPPEN HERE, not at resolution. Padding the lists with nil
+      # and having the resolver skip a nil entry sounds equivalent and is not: the
+      # resolver handles ONE parameter at a time and does not know which others belong to
+      # the same resource, so it would advance one list past the gap and leave the other
+      # where it was. Demonstrated on three records with one missing value -- skipping at
+      # resolve time pairs row 1's guid with row 2's number, which is the original bug
+      # wearing a different hat. Only the seeder knows what a row is.
+      #
       # A CONFIGURED PARAMETER THAT PRODUCES NOTHING REFUSES, and does not fall through
       # to the resource's shared value. Falling through is how a lookup mount expecting
       # a number was handed the primary mount's GUID on every request -- a wrong value
