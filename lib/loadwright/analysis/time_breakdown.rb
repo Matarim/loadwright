@@ -263,10 +263,17 @@ module Loadwright
       # rather than the application.
       IGNORED_SPAN_PREFIXES = %w[loadwright. !].freeze
 
+      # LIFECYCLE MARKERS, NOT WORK. `start_processing` is the "a request began" signal
+      # that Rails fires immediately before the action; its duration is the cost of
+      # announcing itself and nothing else. It appears on every ActionController request,
+      # so left in it takes a permanent seat in the top offenders while naming no work at
+      # all -- and a 0.0ms row in a list of the largest spans reads as a broken list.
+      MARKER_EVENTS = ["start_processing.action_controller"].freeze
+
       private
 
       def record_span(name, duration_ms)
-        return if ACCOUNTED_EVENTS.include?(name)
+        return if ACCOUNTED_EVENTS.include?(name) || MARKER_EVENTS.include?(name)
         return if IGNORED_SPAN_PREFIXES.any? { |prefix| name.start_with?(prefix) }
 
         request_id = Instrumentation::CurrentRequest.id

@@ -292,7 +292,7 @@ module Loadwright
         return "" if rows.empty?
 
         ["", "**Inside \"everything else\"** — the largest spans the application announced, per request:", "",
-         table(["Event", "Time", "Share of other", "Calls", "Per call"], rows),
+         table(["Event", "Time", "Share of other", "Calls", "Per call"], rows), "",
          unattributed_note(attribution)].compact.join("\n")
       end
 

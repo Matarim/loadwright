@@ -319,6 +319,19 @@ RSpec.describe Loadwright::Analysis::TimeBreakdown do
       expect(breakdown.spans_for("rails-1").keys).to include("calculate.my_app")
     end
 
+    # A LIFECYCLE MARKER IS NOT WORK. `start_processing` fires on every
+    # ActionController request and its duration is the cost of announcing itself, so
+    # left in it holds a permanent seat in the top offenders while naming nothing --
+    # observed on a real run as a 0.0ms row in a list of the largest spans.
+    it "ignores the request-started marker" do
+      Loadwright::Instrumentation::CurrentRequest.with("rails-2") do
+        ActiveSupport::Notifications.instrument("start_processing.action_controller") { nil }
+        ActiveSupport::Notifications.instrument("calculate.my_app") { nil }
+      end
+
+      expect(breakdown.spans_for("rails-2").keys).to eq(["calculate.my_app"])
+    end
+
     it "keeps requests apart" do
       emit_spans("grape-1")
 
