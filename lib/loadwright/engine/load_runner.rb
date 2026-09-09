@@ -504,6 +504,11 @@ module Loadwright
         # path_values, not created_ids: what the API routes on, which is the primary
         # key unless factory_map named another column.
         @resolver&.seeded_ids = @seeder.path_values
+        # And what it could NOT fill. A `values:` parameter with no usable row must
+        # resolve to nothing rather than to another mount's identifier.
+        if @resolver.respond_to?(:unresolvable_parameters=) && @seeder.respond_to?(:unresolvable_parameters)
+          @resolver.unresolvable_parameters = @seeder.unresolvable_parameters
+        end
         scale
       end
 
@@ -974,7 +979,7 @@ module Loadwright
           guard: @guard,
           seeder: @seeder,
           identities: @identities,
-          warnings: @warnings + query_cache_warnings + resolver_warnings,
+          warnings: @warnings + query_cache_warnings + resolver_warnings + seeder_warnings,
           aborted_reason: aborted_reason,
           explain: @explain,
           latency: @latency,
@@ -1594,6 +1599,17 @@ module Loadwright
       # miss looks exactly like having no factory_map entry. Naming both sides (what was
       # seeded, what endpoints actually asked for) turns a cross-round investigation
       # into one line.
+      # THE SEEDER'S WARNINGS BELONG IN THE REPORT, not only in the JSON metadata's
+      # seeding block, which no rendered format reads. They are the half that explains a
+      # resolution failure -- "this parameter produced no value for 100 of 100 rows" is
+      # the answer to the question the unresolved endpoint raises, and it was on disk
+      # and unread.
+      def seeder_warnings
+        return [] unless @seeder.respond_to?(:warnings)
+
+        Array(@seeder.warnings)
+      end
+
       def resolver_warnings
         [@resolver.respond_to?(:unconsumed_warning) ? @resolver.unconsumed_warning : nil].compact
       end

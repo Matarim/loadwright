@@ -50,17 +50,29 @@ module Loadwright
       # path parameter was looked up under, which is the half a silent miss hides.
       attr_reader :looked_up
 
-      def initialize(config: Loadwright.configuration, seeded_ids: {})
+      def initialize(config: Loadwright.configuration, seeded_ids: {}, unresolvable_parameters: [])
         @config = config
         @looked_up = {}
         # { "post" => [1, 2, 3] } — resource name to ids the seeder just created.
         @seeded_ids = seeded_ids
+        @unresolvable_parameters = Array(unresolvable_parameters).map(&:to_s)
         @cursors = {}
       end
 
       def seeded_ids=(mapping)
         @seeded_ids = mapping
         @cursors = {}
+      end
+
+      # PARAMETERS THE SEEDER CONFIGURED AND COULD NOT FILL. `factory_map` `values:`
+      # names how to address one resource per parameter; when not one seeded row could
+      # produce a value, the honest answer is that the parameter is unresolved. The
+      # answer it used to give was the resource's SHARED value -- a GUID handed to a
+      # mount that routes on a number, on every request, reported as that endpoint's
+      # 404. An explicit override still satisfies it, because an override is the user
+      # stating a fact rather than the tool inferring one.
+      def unresolvable_parameters=(names)
+        @unresolvable_parameters = Array(names).map(&:to_s)
       end
 
       # Returns a Resolution, or an Unresolved. Deliberately not nil: an unresolved
@@ -125,6 +137,7 @@ module Loadwright
       def resolve_query_param(name, index: 0)
         override = query_override_for(name, index)
         return override unless override.nil?
+        return nil if unresolvable_parameter?(name)
 
         by_parameter = Array(@seeded_ids[name.to_s] || @seeded_ids[name.to_sym])
         return by_parameter[index % by_parameter.length] unless by_parameter.empty?
@@ -192,13 +205,21 @@ module Loadwright
       private
 
       def candidates_for(endpoint, param, index)
-        SOURCE_ORDER.each do |source|
+        # An override, and nothing else, for a parameter the seeder configured and could
+        # not fill. Inference is exactly what must not happen here: every remaining
+        # source would substitute a value belonging to a different mount or a different
+        # database, and each of those reads as the endpoint being broken.
+        sources = unresolvable_parameter?(param) ? %i[override] : SOURCE_ORDER
+
+        sources.each do |source|
           value = send(:"from_#{source}", endpoint, param, index)
           return [value, source] unless value.nil?
         end
 
         [nil, nil]
       end
+
+      def unresolvable_parameter?(name) = @unresolvable_parameters.include?(name.to_s)
 
       # `/api/v1/posts/{id}/comments` with param :id resolves against the "post"
       # resource — the segment immediately preceding the parameter, singularised.
@@ -244,7 +265,13 @@ module Loadwright
         overrides = @config.path_param_overrides
         by_template = overrides[endpoint.path] || overrides[endpoint.to_s]
         value = by_template.is_a?(Hash) ? (by_template[param] || by_template[param.to_s]) : nil
-        value ||= overrides[param] if overrides[param] && !overrides[param].is_a?(Hash)
+        # EITHER KEY FORM. A bare-name override was read symbol-only here and both ways
+        # for a query parameter, so `"resource_id" => ...` in an initializer worked on
+        # one and was silently ignored on the other -- the documented remedy behind a
+        # code path that could not reach it, again. It matters more now than it did:
+        # for a parameter the seeder configured and could not fill, an override is the
+        # ONLY source left.
+        value ||= [param, param.to_s].filter_map { |key| overrides[key] unless overrides[key].is_a?(Hash) }.first
 
         return value unless value.respond_to?(:call)
 

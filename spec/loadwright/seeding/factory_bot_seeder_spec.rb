@@ -500,4 +500,99 @@ RSpec.describe Loadwright::Seeding::FactoryBotSeeder, :sample_app do
       expect(seeder.path_values["post"].first).to eq(Post.last.title)
     end
   end
+
+  # ONE RESOURCE ADDRESSED BY A DIFFERENT COLUMN PER PARAMETER, and the guarantee the
+  # feature rests on: the value lists are ROW-ALIGNED, so a shared rotation index hands
+  # one request one row. The old build dropped nils per list and rotated each list
+  # modulo its own length, so a single missing value desynchronised them and produced
+  # two individually-valid values from two different rows -- a 404 that reads as the
+  # application's fault, which is the exact failure the design claims to prevent.
+  describe "a resource addressed differently per parameter" do
+    def pairs(seeder)
+      values = seeder.path_values
+      ids = values["post_id"]
+      titles = values["post_title"]
+      ids.zip(titles)
+    end
+
+    it "keeps every parameter's list aligned to the same rows" do
+      config.factory_map = {
+        "post" => { factory: :post, count: 4,
+                    values: { post_id: :id, post_title: ->(post) { post.title } } }
+      }
+
+      seeder.seed!(4)
+
+      expect(pairs(seeder)).to all(satisfy { |id, title| Post.find(id).title == title })
+    end
+
+    # THE DEFECT, REPRODUCED. One row with no value for one parameter used to shorten
+    # that list alone; both lists must lose the same row instead.
+    it "drops the whole row when one parameter has no value for it" do
+      config.factory_map = {
+        "post" => { factory: :post, count: 4,
+                    values: { post_id: :id,
+                              post_title: ->(post) { post.id.even? ? post.title : nil } } }
+      }
+
+      seeder.seed!(4)
+
+      expect(pairs(seeder)).to all(satisfy { |id, title| Post.find(id).title == title })
+      expect(seeder.path_values["post_id"].length).to eq(seeder.path_values["post_title"].length)
+      expect(seeder.path_values["post_id"]).to all(be_even)
+    end
+
+    # ONE BAD ROW COSTS ONE ROW. The rescue used to wrap the whole mapping, so the
+    # first raise discarded every value already collected and left an empty list --
+    # which then fell through to the resource's shared value, i.e. to the wrong
+    # identifier on every request.
+    it "loses only the rows whose callable raised" do
+      config.factory_map = {
+        "post" => { factory: :post, count: 4,
+                    values: { post_id: :id,
+                              post_title: ->(post) { post.id.odd? ? raise("no detail row") : post.title } } }
+      }
+
+      seeder.seed!(4)
+
+      expect(seeder.path_values["post_id"].length).to eq(2)
+      expect(pairs(seeder)).to all(satisfy { |id, title| Post.find(id).title == title })
+    end
+
+    it "says how many rows it dropped and why, once per parameter" do
+      config.factory_map = {
+        "post" => { factory: :post, count: 4,
+                    values: { post_id: :id, post_title: ->(_) { raise "no detail row" } } }
+      }
+
+      seeder.seed!(4)
+
+      expect(seeder.warnings.grep(/post_title/).length).to eq(1)
+      expect(seeder.warnings.join).to include("4 of 4 seeded row(s)")
+      expect(seeder.warnings.join).to include("no detail row")
+    end
+
+    # CONFIGURED AND EMPTY IS NOT THE SAME AS UNCONFIGURED. Falling through to the
+    # resource's shared value is how a mount that routes on one column gets handed
+    # another mount's identifier on every request.
+    it "reports a parameter it could not fill, rather than publishing a value for it" do
+      config.factory_map = {
+        "post" => { factory: :post, count: 2,
+                    values: { post_id: :id, post_title: ->(_) { nil } } }
+      }
+
+      seeder.seed!(2)
+
+      expect(seeder.unresolvable_parameters).to include("post_title")
+      expect(seeder.path_values).not_to have_key("post_title")
+    end
+
+    it "leaves a parameter that was never configured out of the refusal list" do
+      config.factory_map = { "post" => { factory: :post, count: 2 } }
+
+      seeder.seed!(2)
+
+      expect(seeder.unresolvable_parameters).to be_empty
+    end
+  end
 end

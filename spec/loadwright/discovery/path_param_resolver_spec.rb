@@ -313,6 +313,60 @@ RSpec.describe Loadwright::Discovery::PathParamResolver do
 
       expect(resolver.resolve(endpoint).path).to eq("/api/v1/resources/shared-1")
     end
+
+    # CONFIGURED AND UNFILLABLE IS NOT "NO ENTRY". The user said how to address this
+    # resource for this parameter and no seeded row could produce a value; the shared
+    # value belongs to a different mount, and sending it 404s every request and reports
+    # it as this endpoint's failure. Unresolved is the honest answer.
+    context "when the seeder configured the parameter and could not fill it" do
+      let(:seeded) { { "resource" => %w[shared-1] } }
+
+      it "refuses rather than substituting the resource's shared value" do
+        resolver = described_class.new(config: config, seeded_ids: seeded,
+                                       unresolvable_parameters: %w[resource_id])
+
+        expect(resolver.resolve(endpoint)).to be_a(described_class::Unresolved)
+      end
+
+      it "refuses for a query parameter too" do
+        resolver = described_class.new(config: config, seeded_ids: seeded,
+                                       unresolvable_parameters: %w[resource_number])
+
+        expect(resolver.resolve_query_param("resource_number")).to be_nil
+      end
+
+      it "does not fall back to a recorded value either, which is a different database's" do
+        recorded = Loadwright::Discovery::Endpoint.new(
+          path: "/api/v1/resources/{resource_id}", verb: :get, source: :route,
+          recorded_path_values: { resource_id: %w[from-a-spec] }
+        )
+        resolver = described_class.new(config: config, seeded_ids: seeded,
+                                       unresolvable_parameters: %w[resource_id])
+
+        expect(resolver.resolve(recorded)).to be_a(described_class::Unresolved)
+      end
+
+      # An override is the user stating a fact rather than the tool inferring one, and
+      # it is the documented way out of this state -- so it must still work, and by
+      # EITHER key form: a bare-name override was read symbol-only for a path parameter
+      # and both ways for a query parameter, so a string key was silently ignored on
+      # exactly the parameters that now depend on it.
+      it "still accepts an explicit override keyed by a string" do
+        config.path_param_overrides = { "resource_id" => "stated-by-hand" }
+        resolver = described_class.new(config: config, seeded_ids: seeded,
+                                       unresolvable_parameters: %w[resource_id])
+
+        expect(resolver.resolve(endpoint).path).to eq("/api/v1/resources/stated-by-hand")
+      end
+
+      it "still accepts an explicit override keyed by a symbol" do
+        config.path_param_overrides = { resource_id: "stated-by-hand" }
+        resolver = described_class.new(config: config, seeded_ids: seeded,
+                                       unresolvable_parameters: %w[resource_id])
+
+        expect(resolver.resolve(endpoint).path).to eq("/api/v1/resources/stated-by-hand")
+      end
+    end
   end
 
   # THE REPORT ADVISED A SETTING THIS RESOLVER NEVER READ, so the prescribed fix could

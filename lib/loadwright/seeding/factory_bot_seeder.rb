@@ -62,7 +62,13 @@ module Loadwright
         @failures = []
         @warnings = []
         # parameter name -> values, for a resource addressed differently per parameter.
+        # Every list for one resource is the same length and aligned by position; see
+        # #track_by_parameter for why that is the whole point.
         @parameter_values = {}
+        # parameter name -> the resource that configured it, so a parameter that ended
+        # up with no values can refuse rather than fall through to another mount's.
+        @parameter_resources = {}
+        @value_errors = {}
         @created_ids = {}
         @path_values = {}
         @models = {}
@@ -290,17 +296,85 @@ module Loadwright
       #                   values: { resource_id: :guid,
       #                             resource_number: ->(r) { r.detail.number } } }
       #
-      # CORRELATION IS PRESERVED BY CONSTRUCTION. Every list is built from the same
-      # records in the same order, and resolution rotates by a shared index -- so the
-      # GUID and the number handed to one request come from the SAME row. Selecting
-      # them independently would produce two valid values from two different graphs,
-      # which is still a 404 and looks like the application's fault.
+      # CORRELATION IS PRESERVED BY CONSTRUCTION, AND "BY CONSTRUCTION" HAS TO MEAN
+      # SOMETHING. It did not. Every list used to be built independently with a
+      # nil-dropping map, and resolution rotates each list modulo ITS OWN length -- so
+      # the moment one record yielded nil for one parameter that list shortened and the
+      # rotations fell out of step. Three records with one missing number produced four
+      # mis-correlated requests out of six: two individually-valid values from two
+      # different rows, which is a 404 that looks exactly like the application's fault.
+      # That is the precise failure the comment claimed the design prevented.
+      #
+      # ROW AT A TIME, ALL OR NOTHING. A row is usable only if EVERY parameter of the
+      # resource yields a value for it; a row that misses one is dropped from all of
+      # them. The lists then stay equal in length and aligned by position, which is what
+      # makes the shared rotation index true rather than aspirational.
+      #
+      # A CONFIGURED PARAMETER THAT PRODUCES NOTHING REFUSES, and does not fall through
+      # to the resource's shared value. Falling through is how a lookup mount expecting
+      # a number was handed the primary mount's GUID on every request -- a wrong value
+      # is worse than no value, because no value is reported as unresolved and a wrong
+      # one is reported as the endpoint's failure.
       def track_by_parameter(resource, records, values)
         return unless values.is_a?(Hash)
 
+        parameters = values.keys.map(&:to_s)
+        parameters.each { |parameter| @parameter_values[parameter] ||= [] }
+        parameters.each { |parameter| @parameter_resources[parameter] = resource }
+
+        dropped = Hash.new(0)
+        records.each do |record|
+          row = correlated_row(resource, record, values, dropped)
+          next if row.nil?
+
+          row.each { |parameter, value| @parameter_values[parameter] << value }
+        end
+
+        warn_dropped_rows(resource, records.length, dropped)
+      end
+
+      # nil for the whole row when any parameter has no value for this record. The
+      # rescue is PER RECORD AND PER PARAMETER: it used to wrap the entire mapping, so
+      # one bad record discarded every value already collected and left an empty list --
+      # which then fell through to the wrong identifier on every request. One bad row
+      # costs one row.
+      def correlated_row(resource, record, values, dropped)
+        row = {}
+
         values.each do |parameter, source|
-          key = parameter.to_s
-          (@parameter_values[key] ||= []).concat(routing_values(resource, records, source))
+          value = parameter_value(resource, parameter, record, source)
+          if value.nil?
+            dropped[parameter.to_s] += 1
+            return nil
+          end
+
+          row[parameter.to_s] = value
+        end
+
+        row
+      end
+
+      def parameter_value(resource, parameter, record, source)
+        return source.call(record) if source.respond_to?(:call)
+
+        record.public_send(source) if record.respond_to?(source)
+      rescue StandardError => e
+        @value_errors[[resource, parameter.to_s]] ||= "#{e.class}: #{e.message}"
+        nil
+      end
+
+      # ONE LINE PER PARAMETER, NOT PER ROW. A hundred seeded records with the same
+      # missing association would otherwise write a hundred identical warnings, and the
+      # count is the part that matters: it says whether this is one odd row or the whole
+      # graph.
+      def warn_dropped_rows(resource, seeded, dropped)
+        dropped.each do |parameter, count|
+          error = @value_errors.delete([resource, parameter])
+          @warnings << "factory_map[#{resource.inspect}] values: #{parameter} produced no value for " \
+                       "#{count} of #{seeded} seeded row(s)#{error ? " (#{error})" : ''}. Those rows were " \
+                       "dropped from EVERY parameter of #{resource.inspect} so the values that remain stay " \
+                       "correlated -- one request gets one row. If the factory BUILDS the association " \
+                       "rather than creating it, the callback that populates it never fires."
         end
       end
 
@@ -332,10 +406,21 @@ module Loadwright
           [resource, values.nil? || values.empty? ? @created_ids[resource] : values]
         end
 
-        # Parameter-keyed entries win where they exist. A parameter with no entry falls
-        # through to its resource's shared value exactly as before, so adding `values:`
-        # for one mount cannot disturb another.
+        # Parameter-keyed entries win where they exist. A parameter with no entry at all
+        # falls through to its resource's shared value exactly as before, so adding
+        # `values:` for one mount cannot disturb another. A parameter that WAS
+        # configured and yielded nothing is a different case and is not merged here --
+        # see #unresolvable_parameters.
         base.merge(@parameter_values.reject { |_, list| list.empty? })
+      end
+
+      # CONFIGURED, AND EMPTY. The user named how to address this resource for this
+      # parameter and not one seeded row could produce a value. Substituting the
+      # resource's shared value would hand a lookup mount the primary mount's
+      # identifier on every request and report the resulting 404 as the endpoint's
+      # failure; an override may still satisfy it, and nothing else may.
+      public def unresolvable_parameters
+        @parameter_resources.keys.select { |parameter| Array(@parameter_values[parameter]).empty? }
       end
 
       private
