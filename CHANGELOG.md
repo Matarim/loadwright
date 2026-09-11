@@ -5,10 +5,13 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.0.17] — 2026-09-11
+## [0.0.16] — 2026-09-11
 
-A follow-up to 0.0.16's wrapper exclusion, from a reader who noticed the excluded layer
-was still doing damage on the way out.
+Rounds 14 and 15, plus one question asked while reading a 0.0.15 report. Round 14's
+finding is in the newest surface and is a false statement about the reader's own code;
+round 15's two are in surface that has been here for many releases, which breaks the
+pattern the previous round was confident about; and the reader's question found the defect
+underneath the one this release had already fixed.
 
 ### Fixed
 
@@ -29,34 +32,6 @@ was still doing damage on the way out.
   Worth naming: Rails installs the middleware instrumentation only when something is
   subscribed to that event, and subscribing to everything is what this gem does — so the
   tool was switching on the events that then masked the application's own.
-
-- **More events that are the request rather than a part of it.** Added
-  `process_middleware.action_dispatch` and GraphQL's `execute_multiplex`,
-  `execute_query` and `execute_query_lazy`. GraphQL's per-**field** events stay rankable,
-  because that is where a resolver problem shows up.
-
-### Changed
-
-- **The excluded wrapper is now named rather than silently dropped.** Excluding it frees
-  the ranking slots it was holding, which was the point — but "nothing announced itself"
-  is a different statement from "the outer layer covered 98% of the request and nothing
-  inside it announced itself". The second tells a reader the unnamed time is inside their
-  own handler, and where to put an `instrument` call. The wrapper crosses the collection
-  endpoint too, so `:http` says it as well.
-
-- **The README documents what the attribution cannot do.**
-  `ActiveSupport::Notifications` is the ceiling: it can only name work that announced
-  itself, and a large unattributed remainder means the time is in plain Ruby no
-  notification sees. The remedy is three lines of `instrument` around the suspected call,
-  which is how one integration turned a log-line datum into a ranked span.
-
-## [0.0.16] — 2026-09-11
-
-Rounds 14 and 15. Round 14's finding is in the newest surface and is a false statement
-about the reader's own code; round 15's two are in surface that has been here for many
-releases, which breaks the pattern the previous round was confident about.
-
-### Fixed
 
 - **`Per call` was understated by exactly the request count, which inverted the
   diagnosis it exists to give.** The span's duration was divided by the requests that
@@ -83,6 +58,12 @@ releases, which breaks the pattern the previous round was confident about.
   not know. Matched by name and never by size: a genuine single span at 95% of a request
   is exactly what this feature exists to surface, so a size heuristic would hide the
   finding it is for. **110 config keys.**
+
+  Also excluded as request-shaped rather than part-shaped:
+  `process_middleware.action_dispatch` and GraphQL's `execute_multiplex`,
+  `execute_query` and `execute_query_lazy`. GraphQL's per-**field** events stay rankable,
+  because that is where a resolver problem shows up. Sinatra, Roda and Hanami emit nothing
+  to exclude.
 
 - **A quarantined endpoint's later requests kept counting against the run.** `quarantine!`
   subtracts a quarantined endpoint's errors and clears the trip — correctly — but
@@ -120,6 +101,20 @@ releases, which breaks the pattern the previous round was confident about.
   wrong, which is the worse half: the diagnosis is what a user acts on.
 
 ### Changed
+
+- **The excluded wrapper is named rather than silently dropped.** Excluding it frees the
+  ranking slots it was holding, which was the point — but "nothing announced itself" is a
+  different statement from "the outer layer covered 98% of the request and nothing inside
+  it announced itself". The second tells a reader the unnamed time is inside their own
+  handler, and where to put an `instrument` call. The wrapper crosses the collection
+  endpoint too, so `:http` says it as well.
+
+- **The README documents what the attribution cannot do.**
+  `ActiveSupport::Notifications` is the ceiling: it can only name work that announced
+  itself, and a large unattributed remainder means the time is in plain Ruby no
+  notification sees. The remedy is three lines of `instrument` around the suspected call,
+  which is how one integration turned a log-line datum into a ranked span. Getting past
+  that ceiling needs a sampling profiler, which is deliberately not built.
 
 - **"No findings" is now a claim the tool only makes about an API it measured.** A run
   that aborted before reaching a single endpoint rendered the same two words a clean sweep
