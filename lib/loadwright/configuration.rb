@@ -141,6 +141,18 @@ module Loadwright
     setting :attribute_other_time, true, section: :instrumentation
     setting :other_time_top_n, 3, section: :instrumentation
 
+    # EVENTS THAT ARE THE REQUEST RATHER THAN A PART OF IT, for a framework this gem does
+    # not know by name. Rails' `process_action` is excluded because it IS the total, and so
+    # are the render events; a mounted framework emits its own equivalents, and the ones
+    # shipped in ACCOUNTED_EVENTS cover the common gems. Anything else goes here.
+    #
+    # The symptom that needs it: a span sitting at 90-100% of the request, on every
+    # endpoint, holding a permanent seat in the top offenders -- and making the
+    # unattributed remainder unavailable, since a span the size of the request is always
+    # larger than the residual inside it. One integration lost two of three ranking slots
+    # on every endpoint to a wrapper and a renderer, and its own instrumented calculation
+    # reached a table once in a full run.
+    setting :accounted_span_events, [].freeze, section: :instrumentation
 
     setting :require_successful_response, true, section: :response_analysis
     setting :require_schema_valid_response, true, section: :response_analysis

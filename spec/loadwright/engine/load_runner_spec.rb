@@ -1051,6 +1051,53 @@ RSpec.describe Loadwright::Engine::LoadRunner do
     end
   end
 
+  # AN ARTIFACT MUST BE ABLE TO ANSWER "DID THIS RUN REACH THE API AT ALL". A cell whose
+  # endpoint could not be resolved sent nothing and recorded the planned count anyway, so
+  # reconstructing an abort from the run record required knowing that `requests: 100`
+  # sometimes means zero. The empty status map was the only tell.
+  # THE NUMBER SOMEONE USED TO DECIDE WHETHER TO WAIT. The pre-run estimate has to
+  # assume a per-request cost, and on a real API it was low by about half -- 22 minutes
+  # announced, 44 taken. The first cell knows better than the assumption.
+  describe "the runtime estimate, once there are real latencies" do
+    it "restates it when the first cell is much slower than the assumption" do
+      responder = ->(_) { { status: 200, body: '[{"id":1}]', latency_ms: 250.0 } }
+      runner(context: build_context(responder: responder)).run(endpoints: [endpoint])
+
+      expect(stdout.string).to include("revised estimate")
+      expect(stdout.string).to include("250ms a request")
+    end
+
+    it "stays quiet when the assumption was close enough to be worth nobody's attention" do
+      responder = ->(_) { { status: 200, body: '[{"id":1}]', latency_ms: 26.0 } }
+      runner(context: build_context(responder: responder)).run(endpoints: [endpoint])
+
+      expect(stdout.string).not_to include("revised estimate")
+    end
+
+    it "says it once, not once a cell" do
+      responder = ->(_) { { status: 200, body: '[{"id":1}]', latency_ms: 250.0 } }
+      runner(context: build_context(responder: responder)).run(endpoints: [endpoint])
+
+      expect(stdout.string.scan("revised estimate").length).to eq(1)
+    end
+  end
+
+  describe "what a cell says it sent" do
+    it "records what actually went out, not what was planned" do
+      unresolvable = Loadwright::Discovery::Endpoint.new(
+        path: "/api/v1/widgets/{widget_id}", verb: :get, source: :openapi
+      )
+      result = runner(
+        context: build_context(responder: ->(_) { { status: 200, body: '[{"id":1}]' } }),
+        resolver: Loadwright::Discovery::PathParamResolver.new(config: config)
+      ).run(endpoints: [unresolvable])
+
+      cells = result.cells.map(&:to_h)
+      expect(cells.map { |cell| cell[:requests] }).to all(eq(0))
+      expect(cells.map { |cell| cell[:requests_planned] }).to all(be_positive)
+    end
+  end
+
   describe "the circuit breaker mid-run" do
     it "aborts the remaining matrix and marks it skipped rather than omitting it" do
       config.scale_factors = [10, 100]

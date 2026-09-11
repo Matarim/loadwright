@@ -59,6 +59,21 @@ module Loadwright
 
       private
 
+      def no_findings_note
+        return "_No findings._" unless @result.measured_nothing?
+
+        detail = if @result.aborted?
+                   "this run **stopped before measuring a single endpoint**, so there was nothing " \
+                     "to find anything in"
+                 else
+                   "**not one endpoint reached a verdict**, so there was nothing to find anything in"
+                 end
+
+        "> **No findings, because nothing was measured.** There are no findings below because " \
+          "#{detail}. This is not a clean result and must not be read as one: every endpoint is " \
+          "unmeasured, not clean. Fix what stopped the run and run it again."
+      end
+
       def partial_banner
         return "" unless @metadata[:aborted]
 
@@ -128,9 +143,15 @@ module Loadwright
         lines.join("\n")
       end
 
+      # "NO FINDINGS" IS A CLAIM ABOUT AN API. It is only true if the API was measured, and
+      # the two cases where it was not used to print the identical sentence: a run that
+      # aborted before reaching anything, and a run whose every endpoint came back
+      # inconclusive. One integration's run stopped after 15 seconds having measured zero
+      # of 87 endpoints and rendered "No findings." -- indistinguishable, on its face,
+      # from a clean sweep of the same API.
       def ranked_table
         rows = @result.ranked_findings
-        return "_No findings._" if rows.empty?
+        return no_findings_note if rows.empty?
 
         table(
           %w[Endpoint Finding Confidence Detail],
@@ -286,14 +307,28 @@ module Loadwright
         rows = Array(attribution[:top]).map do |span|
           ["`#{span[:name]}`", "#{span[:ms].to_f.round(2)}ms",
            span[:share] ? "#{(span[:share].to_f * 100).round(1)}%" : "—",
-           span[:count], span[:per_call_ms] ? "#{span[:per_call_ms].to_f.round(3)}ms" : "—"]
+           calls_per_request(span), span[:per_call_ms] ? "#{span[:per_call_ms].to_f.round(3)}ms" : "—"]
         end
         return ["", "_#{attribution[:unavailable_reason]}_"].join("\n") if rows.empty? && attribution[:unavailable_reason]
         return "" if rows.empty?
 
         ["", "**Inside \"everything else\"** — the largest spans the application announced, per request:", "",
-         table(["Event", "Time", "Share of request", "Calls", "Per call"], rows), "",
+         table(["Event", "Time", "Share of request", "Calls/req", "Per call"], rows), "",
          unattributed_note(attribution)].compact.join("\n")
+      end
+
+      # PER REQUEST, LIKE THE TIME BESIDE IT. The column used to print the run total next
+      # to a per-request duration, and the per-call figure divided one by the other -- so a
+      # calculation running once per request over 600 requests read as 600 calls at a six-
+      # hundredth of its cost. A whole number is printed whole; a fractional rate (a span
+      # that only some requests reach) keeps its decimals rather than rounding to an
+      # integer that would imply every request reached it.
+      def calls_per_request(span)
+        rate = span[:calls_per_request]
+        return span[:calls] if rate.nil?
+        return rate.round if (rate - rate.round).abs < 0.005
+
+        rate.round(2)
       end
 
       # THE SUBTRAHEND IS NAMED, because the arithmetic must reconcile from what is on

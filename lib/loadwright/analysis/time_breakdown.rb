@@ -89,11 +89,24 @@ module Loadwright
       # against their sum, because summing overlapping spans can exceed `other` and a
       # negative remainder would be nonsense. Where even that exceeds `other`, the
       # remainder is unavailable rather than invented.
-      Span = Struct.new(:name, :ms, :count, :share, keyword_init: true) do
-        def per_call_ms = count.to_i.positive? ? ms / count : nil
+      # `calls` IS THE RUN TOTAL AND `ms` IS PER REQUEST, so per-call cost must divide one
+      # by the other in the SAME units. It did not: `ms` was divided by the requests that
+      # produced it and `calls` was left as the raw total, so the per-call figure came out
+      # understated by exactly the request count -- 600 requests reported a 65ms once-per-
+      # request calculation as 600 calls at 0.108ms.
+      #
+      # AND IT INVERTED THE DIAGNOSIS, which is why it mattered more than its size. The
+      # whole point of this column is that 40ms over 300 calls and 40ms over one are
+      # different problems: the first wants a loop hoisted, the second wants caching or a
+      # better algorithm. Reporting one expensive call as hundreds of cheap ones sends the
+      # reader to look for the wrong thing, in a column they have no independent way to
+      # check. It was caught only because that application logs the same quantity itself.
+      Span = Struct.new(:name, :ms, :calls, :calls_per_request, :share, keyword_init: true) do
+        def per_call_ms = calls_per_request.to_f.positive? ? ms / calls_per_request : nil
 
         def to_h
-          { name: name, ms: ms&.round(3), count: count, share: share&.round(4),
+          { name: name, ms: ms&.round(3), calls: calls,
+            calls_per_request: calls_per_request&.round(2), share: share&.round(4),
             per_call_ms: per_call_ms&.round(3) }.compact
         end
       end
@@ -116,7 +129,10 @@ module Loadwright
           .reject { |_, ms, _| ms <= 0 }
           .sort_by { |_, ms, _| -ms }
           .first(limit)
-          .map { |name, ms, count| Span.new(name: name, ms: ms, count: count, share: basis && (ms / basis)) }
+          .map do |name, ms, calls|
+            Span.new(name: name, ms: ms, calls: calls, calls_per_request: calls.to_f / divisor,
+                     share: basis && (ms / basis))
+          end
       end
 
       # nil rather than a number when the spans overlap enough to exceed the residual:
@@ -143,9 +159,13 @@ module Loadwright
         return nil unless largest && largest.ms > other_ms.to_f
 
         "the largest span (`#{largest.name}`, #{largest.ms.round(2)}ms) is longer than the residual " \
-          "itself, so the residual cannot be apportioned. That is ordinarily because the instrumented " \
-          "block contains work already counted as database or view time -- its queries are inside the " \
-          "span and outside `other`. It is not a disagreement between the numbers."
+          "itself, so the residual cannot be apportioned. Two things cause that, and the second is " \
+          "more likely on a span this size: the instrumented block contains work already counted as " \
+          "database or view time (its queries are inside the span and outside `other`), or the span " \
+          "IS the request rather than a part of it -- a framework's own endpoint wrapper, which sits " \
+          "at 90-100% of every request. If it is the latter, name it in `accounted_span_events` and " \
+          "it will stop competing with your own instrumentation. It is not a disagreement between " \
+          "the numbers."
       end
 
       def self.from_totals(total_ms:, db_ms: nil, view_ms: nil, gc_ms: nil, controller: nil, action: nil)
@@ -282,7 +302,23 @@ module Loadwright
         "render_template.action_view",
         "render_partial.action_view",
         "render_collection.action_view",
-        "render_layout.action_view"
+        "render_layout.action_view",
+        # THE SAME ARGUMENT, FOR A MOUNTED FRAMEWORK. Rails' `process_action` is excluded
+        # because it IS the request; Grape's `endpoint_run` is exactly that event under
+        # another name, and `endpoint_render` is the analogue of the render events above.
+        # Left in, they sat at 93% of every request, took two of the three ranking slots
+        # on 63 endpoints, and made the unattributed remainder unavailable everywhere --
+        # a span the size of the request is always larger than the residual inside it. The
+        # application's own instrumented calculation reached a table once in a full run.
+        #
+        # Worth knowing WHY this is not a heuristic on share: a genuine single span at 95%
+        # of a request is the exact case this feature exists to surface, so "large means
+        # wrapper" would hide the finding. Only the name distinguishes them.
+        "endpoint_run.grape",
+        "endpoint_render.grape",
+        "endpoint_run_filters.grape",
+        "endpoint_run_validators.grape",
+        "format_response.grape"
       ].freeze
 
       # Events that fire per run rather than per request, or that describe the harness
@@ -300,6 +336,7 @@ module Loadwright
 
       def record_span(name, duration_ms)
         return if ACCOUNTED_EVENTS.include?(name) || MARKER_EVENTS.include?(name)
+        return if configured_accounted_events.include?(name)
         return if IGNORED_SPAN_PREFIXES.any? { |prefix| name.start_with?(prefix) }
 
         request_id = Instrumentation::CurrentRequest.id
@@ -311,6 +348,17 @@ module Loadwright
           span[:ms] += duration_ms
           span[:count] += 1
         end
+      end
+
+      # Read once per run rather than per event: this method is on the path of EVERY
+      # notification in the process, and a config lookup there is not free.
+      def configured_accounted_events
+        @configured_accounted_events ||=
+          if @config.respond_to?(:accounted_span_events)
+            Array(@config.accounted_span_events).map(&:to_s).freeze
+          else
+            [].freeze
+          end
       end
 
       def record(event)

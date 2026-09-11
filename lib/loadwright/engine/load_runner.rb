@@ -103,7 +103,13 @@ module Loadwright
           {
             endpoint: endpoint_key, sweep: sweep, scale_factor: scale_factor, page_size: page_size,
             requested_concurrency: requested_concurrency, actual_concurrency: actual_concurrency,
-            stepped_down: stepped_down?, requests: requests,
+            # PLANNED AND SENT ARE DIFFERENT NUMBERS, and the record only carried the
+            # first. A cell whose endpoint could not be resolved sent nothing and still
+            # reported `requests: 100` with an empty status map -- so an abort could not
+            # be reconstructed from the artifact without knowing that `requests`
+            # sometimes means zero. `requests` is now what actually went out.
+            stepped_down: stepped_down?, requests: Array(latencies).length,
+            requests_planned: requests,
             latency_ms: { p50: percentile(latencies, 0.5), min: latencies&.min, max: latencies&.max },
             records: median_records, queries: median_queries, bytes: median_bytes,
             statuses: Array(statuses).tally, errors: Array(errors).length,
@@ -177,6 +183,8 @@ module Loadwright
         # endpoint key -> what the request actually carried, and where each value came
         # from. See #request_shape_for.
         @request_shapes = {}
+        @estimated_seconds = nil
+        @estimate_revised = false
         reset!
         arm_run_history!
       end
@@ -246,6 +254,15 @@ module Loadwright
           "page_size_sweep."
       end
 
+      # Concurrency divides wall time; the estimate uses the level each cell will
+      # actually attempt.
+      def estimated_seconds(planned)
+        planned.sum do |cell|
+          per_cell = cell.requests + @config.warmup_requests
+          (per_cell * ASSUMED_LATENCY_MS / 1000.0) / [cell.requested_concurrency, 1].max
+        end
+      end
+
       def estimate(endpoints)
         planned = matrix(endpoints).reject(&:skipped?)
         requests = planned.sum { |cell| cell.requests + @config.warmup_requests }
@@ -255,12 +272,7 @@ module Loadwright
         mutating_keys = endpoints.select(&:mutating?).map(&:to_s)
         mutating = planned.count { |cell| mutating_keys.include?(cell.endpoint_key) }
 
-        # Concurrency divides wall time; the estimate uses the level each cell will
-        # actually attempt.
-        seconds = planned.sum do |cell|
-          per_cell = cell.requests + @config.warmup_requests
-          (per_cell * ASSUMED_LATENCY_MS / 1000.0) / [cell.requested_concurrency, 1].max
-        end
+        seconds = estimated_seconds(planned)
 
         Estimate.new(
           cells: planned.length, requests: requests, estimated_seconds: seconds,
@@ -290,6 +302,11 @@ module Loadwright
         # was probably misconfigured -- the tool's own doing, and the single most
         # common first-run failure it documents.
         resolve_identities!
+
+        # Kept so the first cell can say whether the figure the user was shown before
+        # they agreed to wait is anywhere near right. Just the seconds: the full Estimate
+        # asks the resource guard for its backoff budget, which this does not need.
+        @estimated_seconds = estimated_seconds(matrix(endpoints).reject(&:skipped?))
 
         run_seed_scale_sweep(endpoints)
         run_page_size_sweep(endpoints)
@@ -559,7 +576,37 @@ module Loadwright
         end
 
         @cells << cell
+        revise_estimate!(cell)
         cell
+      end
+
+      # THE NUMBER SOMEONE USED TO DECIDE WHETHER TO WAIT. The pre-run estimate assumes
+      # 25ms a request -- it has to assume something, since nothing has been measured
+      # yet -- and on a real API it was low by about half: 22 minutes announced, 44
+      # taken. The assumption is disclosed, which is not the same as being useful.
+      #
+      # The first cell knows better. Once real latencies exist the arithmetic is no
+      # longer a guess, so the figure is restated ONCE, only when it moved enough to
+      # change a decision. Repeating it every cell would train people to ignore it, and
+      # revising it downward by 4% is noise dressed as information.
+      REVISION_THRESHOLD = 0.3
+
+      def revise_estimate!(cell)
+        return if @estimate_revised || @estimated_seconds.nil?
+
+        observed = median_across([cell], :latencies)
+        return if observed.nil? || observed <= 0
+
+        ratio = observed / ASSUMED_LATENCY_MS
+        return if (ratio - 1.0).abs < REVISION_THRESHOLD
+
+        @estimate_revised = true
+        revised = (@estimated_seconds * ratio) / 60.0
+        @stdout.puts format(
+          "loadwright: revised estimate %<minutes>.1f minute(s) — the first cell measured " \
+          "%<observed>dms a request, not the %<assumed>dms the pre-run figure assumed",
+          minutes: revised, observed: observed.round, assumed: ASSUMED_LATENCY_MS
+        )
       end
 
       # Real threads, so :http concurrency means something. In :in_process the level is

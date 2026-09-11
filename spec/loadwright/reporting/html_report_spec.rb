@@ -7,6 +7,28 @@ RSpec.describe Loadwright::Reporting::HtmlReport do
 
   def render(**rest) = report.render(build_result(**rest))
 
+  # See MarkdownReport's equivalent: "No findings" is a claim about an API and is only
+  # true if the API was measured. A run that stopped after fifteen seconds having
+  # measured nothing printed the same words a clean sweep prints.
+  describe "a run that measured nothing" do
+    let(:unmeasured) do
+      build_outcome(endpoint: build_endpoint(path: "/api/v1/widgets"), state: :inconclusive,
+                    reason: :endpoint_erroring)
+    end
+
+    it "says so rather than reporting an absence of findings" do
+      html = render(outcomes: [unmeasured], aborted_reason: "circuit breaker tripped")
+
+      expect(visible_text(html)).to include("No findings, because nothing was measured")
+    end
+
+    it "leaves a measured, clean run with the short sentence" do
+      healthy = build_outcome(endpoint: build_endpoint(path: "/api/v1/posts"), state: :healthy)
+
+      expect(visible_text(render(outcomes: [healthy]))).to include("No findings.")
+    end
+  end
+
   describe "self-containment" do
     # A report gets emailed, attached to a ticket, and opened on a laptop on a train.
     # One that needs the network renders blank exactly when someone is trying to use it.

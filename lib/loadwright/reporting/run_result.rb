@@ -106,6 +106,21 @@ module Loadwright
 
       def aborted? = !aborted_reason.nil?
 
+      # DID THIS RUN REACH THE API AT ALL? The question a reader must be able to answer
+      # before believing anything else, and until now the artifact could not answer it.
+      #
+      # A run that aborted 15 seconds in, having measured NOTHING, rendered its findings
+      # section as "No findings." -- the same words a clean sweep prints. Nothing in that
+      # sentence is false and its plain reading is a clean bill of health for an API with
+      # a known N+1 and a p95 at twice its budget.
+      #
+      # "Measured" means an endpoint reached a verdict: healthy or has_findings. An
+      # inconclusive endpoint was not measured, whatever the reason -- that is the whole
+      # point of the third state.
+      def measured = healthy + with_findings
+
+      def measured_nothing? = measured.empty?
+
       def summary
         {
           endpoints: outcomes.length,

@@ -481,6 +481,7 @@ config.track_time_breakdown = true
 config.track_gc_stats = true
 config.attribute_other_time = true           # name the biggest spans inside "other"
 config.other_time_top_n = 3
+config.accounted_span_events = []            # events that ARE the request, not a part of it
 config.run_explain_on_slow_queries = true    # ANALYZE is SELECT-only, behind a whitelist
 config.explain_top_n_queries = 5
 config.seq_scan_row_threshold = 10_000
@@ -526,6 +527,15 @@ the larger and more interesting number — it is the plain Ruby no notification 
 large remainder on a slow endpoint points at computation, not at anything the framework
 is doing. The `Calls` column is what separates one slow call from four hundred cheap
 ones, which have entirely different fixes.
+
+**A span that IS the request is not a part of it.** Rails' `process_action` is excluded
+from this table for that reason, and so are the render events and Grape's `endpoint_run`
+and `endpoint_render`. If your framework emits its own equivalent, name it in
+`accounted_span_events`. The symptom is unmistakable: a span sitting at 90–100% of every
+request, on every endpoint, holding a permanent seat in the top offenders — and taking the
+unattributed remainder with it, because a span the size of the request is always larger
+than the residual inside it. This is matched by name and never by size, because a genuine
+single span at 95% of a request is exactly what this feature exists to find.
 
 **The share is of the whole request, not of `other`.** A span nests inside the request
 by construction; it does not nest inside the residual, which excludes database and view

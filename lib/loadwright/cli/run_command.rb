@@ -434,15 +434,46 @@ module Loadwright
         @stdout.puts "loadwright: #{summary[:endpoints]} endpoint(s) — " \
                      "#{summary[:healthy]} healthy, #{summary[:has_findings]} with findings, " \
                      "#{summary[:inconclusive]} inconclusive"
+        # THE RUN OPENED WITH ONE NUMBER AND CLOSED WITH ANOTHER. "87 endpoint(s) to
+        # exercise" then "163 endpoint(s)" -- reconcilable (the difference is the ones
+        # never requested, folded into inconclusive) and never reconciled, so 163 was not
+        # a number anyone could hand on without explaining it. One clause does it.
+        @stdout.puts reconciliation_line(result, summary) if summary[:declined].positive?
         @stdout.puts "  PARTIAL RUN: #{result.aborted_reason}" if result.aborted?
+        # THE LINE ABOVE READS AS A CLEAN SWEEP WHEN IT IS NOT. "0 healthy, 0 with
+        # findings, 163 inconclusive" is the summary of a run that reached none of the
+        # API, and it is the first and often only thing anyone reads.
+        @stdout.puts "  NOTHING WAS MEASURED: no endpoint reached a verdict, so this run says " \
+                     "nothing about the API. It is not a clean result." if result.measured_nothing?
         top_findings(result)
         paths.each { |path| @stdout.puts "  report: #{path}" }
       end
 
+      def reconciliation_line(result, summary)
+        exercised = summary[:endpoints] - summary[:declined]
+        "  that is #{exercised} exercised plus #{summary[:declined]} never requested " \
+          "(#{declined_causes(result)}), all counted in the #{summary[:inconclusive]} inconclusive"
+      end
+
+      def declined_causes(result)
+        reasons = result.declined.map(&:reason).tally.sort_by { |_, count| -count }
+        reasons.map { |reason, count| "#{count} #{reason}" }.join(", ")
+      end
+
+      # THREE, AND IT SAYS SO WHEN THERE ARE MORE. It printed three under a headline
+      # reading "4 with findings" with no indication that a fourth existed, and the one
+      # it dropped was the worst endpoint in the run -- a 17-repeat N+1 at twice its
+      # latency budget. A reader who trusts the console and does not open the report
+      # never learns it is there.
+      CONSOLE_FINDING_LIMIT = 3
+
       def top_findings(result)
-        result.ranked_findings.first(3).each do |entry|
+        ranked = result.ranked_findings
+        ranked.first(CONSOLE_FINDING_LIMIT).each do |entry|
           @stdout.puts "  #{entry[:endpoint]}: #{entry[:finding].kind}"
         end
+        remaining = ranked.length - CONSOLE_FINDING_LIMIT
+        @stdout.puts "  ...and #{remaining} more finding(s) — see the report" if remaining.positive?
       end
 
       # reporting.md: the exit code is a convenience for someone scripting around it,

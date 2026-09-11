@@ -224,7 +224,7 @@ module Loadwright
       # put a 403 at whichever end its 4ms latency landed.
       def ranked_table
         rows = @result.ranked_findings
-        return "<p class=\"note\">No findings.</p>" if rows.empty?
+        return no_findings_note if rows.empty?
 
         body = rows.map do |entry|
           finding = entry[:finding]
@@ -550,8 +550,11 @@ module Loadwright
         rows = Array(attribution[:top]).map do |span|
           per_call = span[:per_call_ms] ? "#{h(span[:per_call_ms].to_f.round(3))}ms" : "&mdash;"
           share = span[:share] ? "#{h((span[:share].to_f * 100).round(1))}%" : "&mdash;"
+          # Per request, like the duration beside it. See MarkdownReport#calls_per_request.
+          rate = span[:calls_per_request] || span[:calls]
+          calls = rate.is_a?(Float) && (rate - rate.round).abs < 0.005 ? rate.round : rate
           "<tr><td><code>#{h(span[:name])}</code></td><td>#{h(span[:ms].to_f.round(2))}ms</td>" \
-            "<td>#{share}</td><td>#{h(span[:count])}</td>" \
+            "<td>#{share}</td><td>#{h(calls)}</td>" \
             "<td>#{per_call}</td></tr>"
         end
         if rows.empty?
@@ -578,9 +581,27 @@ module Loadwright
                end
 
         "<details class=\"other-attribution\"><summary>Inside “everything else”</summary>" \
-          "<table><thead><tr><th>Event</th><th>Time</th><th>Share of request</th><th>Calls</th>" \
+          "<table><thead><tr><th>Event</th><th>Time</th><th>Share of request</th><th>Calls/req</th>" \
           "<th>Per call</th></tr></thead><tbody>#{rows.join}</tbody></table>" \
           "<p class=\"note\">#{note}</p></details>"
+      end
+
+      # "NO FINDINGS" IS A CLAIM ABOUT AN API, and it is only true if the API was measured.
+      # A run that stopped after 15 seconds having measured nothing printed the same words
+      # a clean sweep prints. See MarkdownReport#no_findings_note.
+      def no_findings_note
+        return "<p class=\"note\">No findings.</p>" unless @result.measured_nothing?
+
+        detail = if @result.aborted?
+                   "this run stopped before measuring a single endpoint"
+                 else
+                   "not one endpoint reached a verdict"
+                 end
+
+        "<p class=\"note note-warn\"><strong>No findings, because nothing was measured.</strong> " \
+          "There are no findings below because #{detail}, so there was nothing to find anything in. " \
+          "This is not a clean result and must not be read as one: every endpoint is unmeasured, not " \
+          "clean. Fix what stopped the run and run it again.</p>"
       end
 
       # The SHORT form here. The full disclosure is in the header; repeating four

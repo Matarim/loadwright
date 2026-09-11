@@ -499,6 +499,11 @@ if defined?(Loadwright)
     config.attribute_other_time = true
     config.other_time_top_n = 3
 
+    # Events that ARE the request rather than a part of it. Rails' `process_action` and
+    # Grape's `endpoint_run` are excluded already; add your framework's equivalent if a
+    # span sits at 90-100% of every request and crowds out your own instrumentation.
+    config.accounted_span_events = []
+
     # EXPLAIN runs after the load phase, never during it. ANALYZE is used only
     # on SELECTs — EXPLAIN ANALYZE executes the statement, so running it on a
     # write would perform the write.

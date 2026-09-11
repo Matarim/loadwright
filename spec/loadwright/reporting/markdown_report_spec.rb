@@ -13,6 +13,48 @@ RSpec.describe Loadwright::Reporting::MarkdownReport do
   # THE HAZARD THIS FORMAT CARRIES. It is the one most likely to be pasted somewhere
   # without its context, and it has no colour to lean on -- so every distinction the
   # HTML report makes visually has to survive here as TEXT.
+  # "NO FINDINGS" IS A CLAIM ABOUT AN API, and it is only true if the API was measured.
+  # A run that aborted after fifteen seconds having measured ZERO of 87 endpoints
+  # rendered the same two words a clean sweep renders -- against an API with a known
+  # 17-repeat N+1 and a p95 at twice its budget. Nothing in the sentence was false and
+  # its plain reading was a clean bill of health.
+  describe "a run that measured nothing" do
+    let(:unmeasured) do
+      build_outcome(endpoint: build_endpoint(path: "/api/v1/widgets"), state: :inconclusive,
+                    reason: :endpoint_erroring)
+    end
+
+    it "says so where the findings would have been, rather than saying there are none" do
+      text = render(outcomes: [unmeasured], aborted_reason: "circuit breaker tripped: 26 of 126 requests failed")
+
+      expect(text).to include("No findings, because nothing was measured")
+      expect(text).to include("every endpoint is unmeasured, not clean")
+    end
+
+    it "names the abort as the reason when there was one" do
+      text = render(outcomes: [unmeasured], aborted_reason: "circuit breaker tripped")
+
+      expect(text).to include("stopped before measuring a single endpoint")
+    end
+
+    it "says it plainly when the run finished and still measured nothing" do
+      text = render(outcomes: [unmeasured])
+
+      expect(text).to include("not one endpoint reached a verdict")
+    end
+
+    # The ordinary case must stay ordinary: a run that measured the API and found
+    # nothing wrong is entitled to the short sentence.
+    it "still says just 'No findings' when endpoints were measured and were clean" do
+      healthy = build_outcome(endpoint: build_endpoint(path: "/api/v1/posts"), state: :healthy)
+
+      text = render(outcomes: [healthy])
+
+      expect(text).to include("_No findings._")
+      expect(text).not_to include("nothing was measured")
+    end
+  end
+
   describe "what has to survive being pasted" do
     it "spells out each state in words rather than relying on styling" do
       text = render(outcomes: [inconclusive])

@@ -238,8 +238,35 @@ RSpec.describe Loadwright::Analysis::TimeBreakdown do
       top = described_class.top_spans(spans, 500.0, limit: 3)
       serializer = top.find { |span| span.name == "render.my_serializer" }
 
-      expect(serializer.count).to eq(1)
+      expect(serializer.calls).to eq(1)
       expect(serializer.per_call_ms).to be_within(0.001).of(9.0)
+    end
+
+    # THE COLUMN'S WHOLE PURPOSE IS TO SEPARATE ONE EXPENSIVE CALL FROM MANY CHEAP ONES,
+    # and it did the opposite. `ms` was divided by the requests that produced it and the
+    # call count was not, so a calculation running ONCE per request over 600 requests read
+    # as 600 calls at a six-hundredth of its true cost -- understated by exactly the
+    # request count, in the direction that sends the reader hunting for a loop to hoist
+    # when the real answer is caching. Caught in the field only because that application
+    # logged the same quantity itself.
+    it "divides the call count by the requests too, so the per-call cost is per call" do
+      one_call_per_request = { "calculate_payoff.my_app" => { ms: 38_916.0, count: 600 } }
+
+      top = described_class.top_spans(one_call_per_request, 500.0, limit: 1, requests: 600,
+                                      total_ms: 200.0)
+
+      expect(top.first.calls_per_request).to be_within(0.001).of(1.0)
+      expect(top.first.ms).to be_within(0.01).of(64.86)
+      expect(top.first.per_call_ms).to be_within(0.01).of(64.86)
+    end
+
+    it "keeps the run total available beside the rate, so the arithmetic reconciles" do
+      top = described_class.top_spans({ "a.b" => { ms: 600.0, count: 1200 } }, 500.0, limit: 1,
+                                      requests: 600, total_ms: 200.0)
+
+      expect(top.first.calls).to eq(1200)
+      expect(top.first.calls_per_request).to be_within(0.001).of(2.0)
+      expect(top.first.per_call_ms).to be_within(0.001).of(0.5)
     end
 
     # THE SHARE IS OF THE REQUEST, NOT OF THE RESIDUAL. A span nests inside the request
@@ -323,6 +350,43 @@ RSpec.describe Loadwright::Analysis::TimeBreakdown do
       expect(described_class::ACCOUNTED_EVENTS)
         .to include("process_action.action_controller", "sql.active_record",
                     "render_template.action_view")
+    end
+
+    # A MOUNTED FRAMEWORK'S WRAPPER IS THE SAME EVENT UNDER ANOTHER NAME. Left in, it sat
+    # at 93% of every request across 63 endpoints, took two of three ranking slots, and
+    # made the unattributed remainder unavailable everywhere -- a span the size of the
+    # request is always larger than the residual inside it. The application's own
+    # instrumented calculation reached a table once in a full run.
+    it "excludes a mounted framework's endpoint wrapper and renderer" do
+      expect(described_class::ACCOUNTED_EVENTS)
+        .to include("endpoint_run.grape", "endpoint_render.grape")
+    end
+
+    it "excludes whatever else the user named, for a framework this gem does not know" do
+      config.attribute_other_time = true
+      config.accounted_span_events = ["endpoint_run.some_framework"]
+      breakdown.start!
+
+      Loadwright::Instrumentation::CurrentRequest.with("req-1") do
+        ActiveSupport::Notifications.instrument("endpoint_run.some_framework") { nil }
+        ActiveSupport::Notifications.instrument("calculate.my_app") { nil }
+      end
+
+      expect(breakdown.spans_for("req-1").keys).to eq(["calculate.my_app"])
+    end
+
+    # MATCHED BY NAME, NEVER BY SIZE. A genuine single span at 95% of a request is the
+    # case this whole feature exists to surface, so a "large means wrapper" heuristic
+    # would hide the finding it is supposed to find.
+    it "keeps a large application span, which is the finding rather than the noise" do
+      config.attribute_other_time = true
+      breakdown.start!
+
+      Loadwright::Instrumentation::CurrentRequest.with("req-2") do
+        ActiveSupport::Notifications.instrument("serialize.my_app") { sleep 0.01 }
+      end
+
+      expect(breakdown.spans_for("req-2").keys).to eq(["serialize.my_app"])
     end
   end
 
