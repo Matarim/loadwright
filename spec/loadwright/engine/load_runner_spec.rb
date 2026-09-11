@@ -1023,6 +1023,37 @@ RSpec.describe Loadwright::Engine::LoadRunner do
       expect(shares).to all(be <= 1.0)
     end
 
+    # THE OUTER LAYER, NAMED RATHER THAN ONLY EXCLUDED. A mounted framework's endpoint
+    # wrapper is the request and not a part of it, so it must not hold a ranking slot --
+    # but dropping it silently loses the fact that the handler body accounted for nearly
+    # the whole request and that nothing inside it announced itself. That sentence tells
+    # a reader where to put an `instrument` call; "nothing announced itself" reads as the
+    # tool having seen nothing at all.
+    it "names the framework wrapper it excluded, and its share of the request" do
+      metrics = { query_count: 12,
+                  queries: Array.new(12) { { fingerprint: "SELECT * FROM widgets WHERE id = ?" } },
+                  wrapper_span: { name: "endpoint_run.grape", ms: 490.0, count: 1 } }
+      responder = ->(_) { { status: 200, body: '[{"id":1}]', latency_ms: 500.0 } }
+      result = runner(context: build_context(responder: responder, metrics: metrics)).run(endpoints: [endpoint])
+
+      attribution = result.time_breakdowns[endpoint.to_s][:other_attribution]
+      text = Loadwright::Reporting::MarkdownReport.new(config: config).render(result)
+
+      expect(attribution[:wrapper][:name]).to eq("endpoint_run.grape")
+      expect(attribution[:wrapper][:share]).to be_within(0.05).of(0.98)
+      expect(text).to include("The outer layer `endpoint_run.grape`")
+      expect(text).to include("what happened inside your handler")
+    end
+
+    it "says nothing about a wrapper on a stack that has none" do
+      metrics = { query_count: 12,
+                  queries: Array.new(12) { { fingerprint: "SELECT * FROM widgets WHERE id = ?" } } }
+      responder = ->(_) { { status: 200, body: '[{"id":1}]', latency_ms: 500.0 } }
+      result = runner(context: build_context(responder: responder, metrics: metrics)).run(endpoints: [endpoint])
+
+      expect(result.time_breakdowns[endpoint.to_s][:other_attribution]).not_to have_key(:wrapper)
+    end
+
     # A SECTION THAT IS SILENTLY ABSENT AND ONE WITH NOTHING TO REPORT LOOK IDENTICAL,
     # and they are not. The attribution disappearing entirely is how a feature can be
     # unavailable for two thirds of an API and still read as an answer.

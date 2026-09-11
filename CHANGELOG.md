@@ -5,6 +5,51 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.17] — 2026-09-11
+
+A follow-up to 0.0.16's wrapper exclusion, from a reader who noticed the excluded layer
+was still doing damage on the way out.
+
+### Fixed
+
+- **Nested occurrences of one event were summed, so an event inside itself counted once
+  per level.** Rails fires `process_middleware.action_dispatch` once per middleware, each
+  wrapping the rest of the stack, under a single event name; a cache read around a cache
+  read, or a serializer that recurses, does the same. Three nested levels of a 50ms event
+  reported **159.9ms and a share of 307% of the request** — the same species as the 691%
+  share that measuring against the residual used to produce, and the same signal to a
+  reader that the tool cannot count.
+
+  Intervals are now **unioned**: what is reported is the wall time the event actually
+  covered. Notifications arrive in finish order, so the containing event arrives after
+  the ones it covers and replaces them, which is O(1) amortised on a path that sees every
+  event in the process. `Calls/req` still counts every occurrence, so the per-call figure
+  stays truthful.
+
+  Worth naming: Rails installs the middleware instrumentation only when something is
+  subscribed to that event, and subscribing to everything is what this gem does — so the
+  tool was switching on the events that then masked the application's own.
+
+- **More events that are the request rather than a part of it.** Added
+  `process_middleware.action_dispatch` and GraphQL's `execute_multiplex`,
+  `execute_query` and `execute_query_lazy`. GraphQL's per-**field** events stay rankable,
+  because that is where a resolver problem shows up.
+
+### Changed
+
+- **The excluded wrapper is now named rather than silently dropped.** Excluding it frees
+  the ranking slots it was holding, which was the point — but "nothing announced itself"
+  is a different statement from "the outer layer covered 98% of the request and nothing
+  inside it announced itself". The second tells a reader the unnamed time is inside their
+  own handler, and where to put an `instrument` call. The wrapper crosses the collection
+  endpoint too, so `:http` says it as well.
+
+- **The README documents what the attribution cannot do.**
+  `ActiveSupport::Notifications` is the ceiling: it can only name work that announced
+  itself, and a large unattributed remainder means the time is in plain Ruby no
+  notification sees. The remedy is three lines of `instrument` around the suspected call,
+  which is how one integration turned a log-line datum into a ranked span.
+
 ## [0.0.16] — 2026-09-11
 
 Rounds 14 and 15. Round 14's finding is in the newest surface and is a false statement

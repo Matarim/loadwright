@@ -94,6 +94,10 @@ module Loadwright
           # one is what made the attribution silent on every non-ActionController
           # mount.
           spans = @time_breakdown.spans_for(request_id_of(bucket))
+          # The outer layer, kept so the report can say "the handler body was 98% of the
+          # request and nothing inside it announced itself" -- which is a different
+          # statement from "nothing announced itself".
+          wrapper = @time_breakdown.wrapper_for(request_id_of(bucket))
           breakdown = @time_breakdown.metrics_for(request_id_of(bucket)).merge(spans: spans)
           @time_breakdown.forget(request_id_of(bucket))
 
@@ -101,7 +105,8 @@ module Loadwright
             db_runtime_ms: breakdown[:db_runtime_ms].available? ? breakdown[:db_runtime_ms]
                                                                 : sum_query_duration(bucket),
             view_runtime_ms: breakdown[:view_runtime_ms],
-            spans: breakdown[:spans] || {}
+            spans: breakdown[:spans] || {},
+            wrapper_span: wrapper
           }
         end
 

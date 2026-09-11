@@ -123,6 +123,27 @@ RSpec.describe Loadwright::Execution::Collector::Middleware do
       expect(metrics.spans).to eq("calculate.my_app" => { ms: 41.5, count: 3 })
     end
 
+    it "brings the framework wrapper back too, so the report can name what it excluded" do
+      detail = { "queries" => [],
+                 "wrapper_span" => { "name" => "endpoint_run.grape", "ms" => 490.0, "count" => 1 } }
+
+      metrics = collector(detail: detail).collect(
+        request,
+        response_with(Loadwright::Execution::CollectorMiddleware::QUERY_COUNT_HEADER => "0")
+      )
+
+      expect(metrics.wrapper_span).to eq(name: "endpoint_run.grape", ms: 490.0, count: 1)
+    end
+
+    it "has no wrapper when the target's stack has none" do
+      metrics = collector.collect(
+        request,
+        response_with(Loadwright::Execution::CollectorMiddleware::QUERY_COUNT_HEADER => "0")
+      )
+
+      expect(metrics.wrapper_span).to be_nil
+    end
+
     it "is empty, not nil, when the target returned none" do
       metrics = collector.collect(
         request,

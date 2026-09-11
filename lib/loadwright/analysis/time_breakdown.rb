@@ -188,6 +188,9 @@ module Loadwright
         # request id -> { event name => { ms:, count: } }, accumulated while the request
         # runs and folded into its Breakdown when process_action closes it.
         @spans = {}
+        # request id -> { event name => merged span }, for the events that ARE the request
+        # rather than a part of it. Kept out of the ranking and reported in one sentence.
+        @wrappers = {}
         @mutex = Mutex.new
         @subscriber = nil
         @span_subscriber = nil
@@ -231,7 +234,7 @@ module Loadwright
         return unless @config.respond_to?(:attribute_other_time) && @config.attribute_other_time
 
         @span_subscriber = ::ActiveSupport::Notifications.subscribe(/.*/) do |name, start, finish, _id, _p|
-          record_span(name, (finish - start) * 1000.0)
+          record_span(name, start, finish)
         end
       end
 
@@ -260,8 +263,32 @@ module Loadwright
         @mutex.synchronize do
           breakdown = @breakdowns[request_id]
           spans = breakdown && breakdown.spans
-          spans.nil? || spans.empty? ? (@spans[request_id] || {}) : spans
+          spans = @spans[request_id] if spans.nil? || spans.empty?
+          project(spans)
         end
+      end
+
+      # THE OUTER LAYER, NAMED. A mounted framework's wrapper span covers the whole
+      # request, so it can never be one of the largest things INSIDE the request -- but
+      # its absence from the table is not the same as its absence from the run. "The
+      # handler body took 98% of the request and nothing inside it announced itself" tells
+      # a reader where to put an `instrument` call; "nothing announced itself" tells them
+      # the tool saw nothing, which is not what happened.
+      def wrapper_for(request_id)
+        @mutex.synchronize do
+          projected = project(@wrappers[request_id])
+          next nil if projected.empty?
+
+          name, span = projected.max_by { |_, value| value[:ms] }
+          { name: name, ms: span[:ms], count: span[:count] }
+        end
+      end
+
+      # The merged intervals are working state and never leave this object: nothing
+      # downstream can do anything with them, they would cross the collection endpoint as
+      # noise, and they are the one part of a span that is not a measurement.
+      def project(spans)
+        Hash(spans).to_h { |name, span| [name, { ms: span[:ms], count: span[:count] }] }
       end
 
       # BOTH MAPS. `forget` cleared the breakdown and left the span buffer, so every
@@ -270,6 +297,7 @@ module Loadwright
       def forget(request_id)
         @mutex.synchronize do
           @spans.delete(request_id)
+          @wrappers.delete(request_id)
           @breakdowns.delete(request_id)
         end
       end
@@ -318,7 +346,22 @@ module Loadwright
         "endpoint_render.grape",
         "endpoint_run_filters.grape",
         "endpoint_run_validators.grape",
-        "format_response.grape"
+        "format_response.grape",
+        # EVERY MIDDLEWARE WRAPS THE REST OF THE STACK, and Rails fires this once per
+        # middleware under the same event name -- so the outermost one is the whole
+        # request and the rest nest inside it. It is also the clearest case for merging
+        # intervals rather than summing them, since summed it reported multiples of the
+        # request. Note that Rails only installs this instrumentation when something is
+        # subscribed to it, and subscribing to everything is what this class does: the
+        # tool was turning on the very events that then masked the application's own.
+        "process_middleware.action_dispatch",
+        # A GraphQL request under the ActiveSupport notifications trace. The multiplex is
+        # the whole HTTP request and the query is the whole operation; per-FIELD events
+        # (`graphql.execute_field`) are parts and stay rankable, which is where a
+        # resolver problem actually shows up.
+        "graphql.execute_multiplex",
+        "graphql.execute_query",
+        "graphql.execute_query_lazy"
       ].freeze
 
       # Events that fire per run rather than per request, or that describe the harness
@@ -334,20 +377,66 @@ module Loadwright
 
       private
 
-      def record_span(name, duration_ms)
-        return if ACCOUNTED_EVENTS.include?(name) || MARKER_EVENTS.include?(name)
-        return if configured_accounted_events.include?(name)
+      def record_span(name, start, finish)
+        return if MARKER_EVENTS.include?(name)
         return if IGNORED_SPAN_PREFIXES.any? { |prefix| name.start_with?(prefix) }
 
         request_id = Instrumentation::CurrentRequest.id
         return if request_id.nil?
 
+        # A WRAPPER IS KEPT, NOT DISCARDED. It cannot compete for a ranking slot -- it is
+        # the request, not a part of it -- but knowing that the handler body covered 98%
+        # of the request and that nothing inside it announced itself is a different and
+        # more useful statement than "nothing announced itself". See #wrapper_for.
+        store = accounted?(name) ? @wrappers : @spans
+
         @mutex.synchronize do
-          bucket = (@spans[request_id] ||= {})
-          span = (bucket[name] ||= { ms: 0.0, count: 0 })
-          span[:ms] += duration_ms
-          span[:count] += 1
+          bucket = (store[request_id] ||= {})
+          absorb_span(bucket, name, start, finish)
         end
+      end
+
+      def accounted?(name)
+        ACCOUNTED_EVENTS.include?(name) || configured_accounted_events.include?(name)
+      end
+
+      # WALL TIME IN AN EVENT, NOT THE SUM OF ITS DURATIONS, and the difference is not
+      # pedantic. An event nested inside ITSELF gets counted once per level: Rails fires
+      # `process_middleware.action_dispatch` once per middleware, each wrapping the rest
+      # of the stack, and a cache read around a cache read or a serializer that recurses
+      # does the same. Summed, three nested levels of a 50ms event reported 159.9ms and a
+      # share of 307% of the request -- the same species as the 691% share that measuring
+      # against the residual used to produce, and just as sure a signal to a reader that
+      # the tool cannot count.
+      #
+      # So the intervals are UNIONED. Notifications arrive in finish order, so an event
+      # containing earlier ones arrives after them: the trailing intervals it covers are
+      # dropped and it replaces them, which is O(1) amortised on a path that sees every
+      # event in the process. `count` still counts occurrences -- three nested middlewares
+      # really are three calls -- so the per-call figure stays truthful while the total
+      # stops double-counting.
+      def absorb_span(bucket, name, start, finish)
+        span = (bucket[name] ||= { ms: 0.0, count: 0, intervals: [] })
+        span[:count] += 1
+
+        from = start.to_f
+        to = finish.to_f
+        intervals = span[:intervals]
+
+        while (last = intervals.last) && last[0] >= from
+          span[:ms] -= (last[1] - last[0]) * 1000.0
+          intervals.pop
+        end
+
+        if (last = intervals.last) && from < last[1]
+          span[:ms] -= (last[1] - last[0]) * 1000.0
+          intervals.pop
+          from = last[0]
+          to = [to, last[1]].max
+        end
+
+        intervals << [from, to]
+        span[:ms] += (to - from) * 1000.0
       end
 
       # Read once per run rather than per event: this method is on the path of EVERY

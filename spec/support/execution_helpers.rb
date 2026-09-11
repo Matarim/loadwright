@@ -48,6 +48,7 @@ module ExecutionHelpers
         capability_epoch: capability_epoch,
         queries: (metrics || {}).fetch(:queries, []),
         spans: (metrics || {}).fetch(:spans, {}),
+        wrapper_span: (metrics || {})[:wrapper_span],
         **default_measurements(metrics || {})
       )
     end

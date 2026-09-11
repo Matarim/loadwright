@@ -180,9 +180,15 @@ module Loadwright
       def timing_payload(request_id)
         breakdown = self.class.time_breakdown&.for_request(request_id)
         spans = self.class.time_breakdown&.spans_for(request_id)
+        # BEFORE forget, like the spans: it lives in the same per-request state.
+        wrapper = self.class.time_breakdown&.wrapper_for(request_id)
         self.class.time_breakdown&.forget(request_id)
 
         payload = spans.nil? || spans.empty? ? {} : { "spans" => spans_payload(spans) }
+        if wrapper
+          payload["wrapper_span"] = { "name" => wrapper[:name].to_s, "ms" => wrapper[:ms].to_f.round(3),
+                                      "count" => wrapper[:count].to_i }
+        end
         return payload if breakdown.nil?
 
         payload.merge(

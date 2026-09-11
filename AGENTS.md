@@ -1383,6 +1383,11 @@ DIAG-51:
     Do NOT tell a user on 0.0.14 that an absent section means their residual holds
     nothing interesting. It means nothing was read. A missing view-runtime row on the
     same endpoints is the corroborating signal, not a second problem.
+  nested_events: >
+    Nested occurrences of ONE event are unioned rather than summed from 0.0.17. Before
+    that, `process_middleware` (once per middleware, nested) or a recursive serializer
+    reported multiples of the request: three nested levels of a 50ms event came back as
+    159.9ms and a share of 307%.
   note: >
     0.0.14 also never released the span buffer for such requests -- `forget` cleared the
     breakdown map only -- so a long run retained every request's spans. Fixed in the
@@ -1418,8 +1423,14 @@ DIAG-54:
     remainder cannot be computed.
   fix: |
     0.0.16+ excludes Grape's `endpoint_run` and `endpoint_render` alongside Rails'
-    `process_action`. For any other framework:
+    `process_action`. 0.0.17+ also excludes `process_middleware.action_dispatch` (each
+    middleware wraps the rest of the stack, under one event name) and GraphQL's
+    `execute_multiplex` / `execute_query` / `execute_query_lazy`; per-FIELD GraphQL events
+    stay rankable, which is where a resolver problem shows up. For any other framework:
       config.accounted_span_events = ["endpoint_run.my_framework"]
+    0.0.17+ also NAMES the excluded wrapper under the table -- "the outer layer X covered
+    188.8ms (93.3% of the request)" -- so an absent ranking row is not mistaken for an
+    absent measurement. What is unnamed is what happened inside the handler.
   do_not: >
     Do NOT suggest a size threshold instead. A genuine single span at 95% of a request is
     exactly the finding this feature exists to surface; matching on size would hide it.

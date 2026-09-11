@@ -87,6 +87,11 @@ module Loadwright
         # event name -> { ms:, count: }, summed across the cell's requests. What the
         # application announced it was doing inside the `other` residual.
         :spans,
+        # The event that IS the request on this stack -- a mounted framework's endpoint
+        # wrapper. Not a part of the request, so never ranked against the parts, and kept
+        # because "the handler body was 98% of this and nothing inside it announced
+        # itself" is a more useful sentence than "nothing announced itself".
+        :wrapper_span,
         # Fingerprints of SELECTs that matched no rows, one exemplar each.
         :zero_row_queries,
         keyword_init: true
@@ -815,6 +820,7 @@ module Loadwright
         cell.view_runtimes << metrics.view_runtime_ms.value_or(nil)
         cell.gc_times << metrics.gc_time_ms.value_or(nil)
         accumulate_spans(cell, metrics)
+        accumulate_wrapper(cell, metrics)
 
         # The WORST SINGLE REQUEST, not the total across requests. Concatenating turned
         # "the same query ran 26 times in a single request" into "ran 1170 times",
@@ -1154,14 +1160,14 @@ module Loadwright
             into[:count] += span[:count].to_i
           end
         end
-        return nothing_announced if spans.empty?
+        return nothing_announced(cells, breakdown) if spans.empty?
 
         requests = cells.sum { |cell| Array(cell.latencies).compact.length }
         top = Analysis::TimeBreakdown.top_spans(
           spans, breakdown.other_ms, limit: @config.other_time_top_n.to_i, requests: requests,
           total_ms: breakdown.total_ms
         )
-        return nothing_announced if top.empty?
+        return nothing_announced(cells, breakdown) if top.empty?
 
         # WHAT THE REMAINDER WAS COMPUTED AGAINST, named. It is `other` minus the single
         # LARGEST span, not minus the sum of the rows shown -- because the rows nest and
@@ -1172,21 +1178,43 @@ module Loadwright
         { top: top.map(&:to_h),
           unattributed_ms: Analysis::TimeBreakdown.unattributed_ms(top, breakdown.other_ms)&.round(3),
           unattributed_reason: Analysis::TimeBreakdown.unattributed_reason(top, breakdown.other_ms),
-          unattributed_basis: { name: top.first.name, ms: top.first.ms.to_f.round(3) } }.compact
+          unattributed_basis: { name: top.first.name, ms: top.first.ms.to_f.round(3) },
+          wrapper: wrapper_for(cells, breakdown) }.compact
       end
 
       # A SECTION THAT SAYS WHY, rather than one that is silently absent. "No section"
       # and "nothing to report" look identical to a reader, and they were not: the
       # attribution used to disappear entirely wherever it could not be collected, which
       # is how a feature can be broken for two thirds of an API and look like an answer.
-      def nothing_announced
+      def nothing_announced(cells = [], breakdown = nil)
         return nil unless @config.attribute_other_time
 
         { top: [],
+          wrapper: wrapper_for(cells, breakdown),
           unavailable_reason: "nothing this endpoint did announced itself through " \
                               "ActiveSupport::Notifications, so the residual cannot be broken down further. " \
                               "Plain Ruby emits no events: wrapping the suspected work in " \
-                              "ActiveSupport::Notifications.instrument makes it appear here." }
+                              "ActiveSupport::Notifications.instrument makes it appear here." }.compact
+      end
+
+      # THE OUTER LAYER, NAMED RATHER THAN ONLY EXCLUDED. A mounted framework's endpoint
+      # wrapper covers the whole request, so it cannot be one of the largest things INSIDE
+      # the request and must not hold a ranking slot. But dropping it silently loses a
+      # fact worth having: that the handler body accounted for nearly all of the request
+      # and that nothing inside it announced itself. That is the sentence that tells a
+      # reader where to put an `instrument` call; "nothing announced itself" reads as the
+      # tool having seen nothing at all.
+      def wrapper_for(cells, breakdown)
+        accumulated = Array(cells).filter_map(&:wrapper_span)
+        return nil if accumulated.empty? || breakdown.nil?
+
+        requests = accumulated.sum { |wrapper| wrapper[:requests].to_i }
+        return nil unless requests.positive?
+
+        ms = accumulated.sum { |wrapper| wrapper[:ms].to_f } / requests
+        total = breakdown.total_ms.to_f
+        { name: accumulated.first[:name], ms: ms.round(3),
+          share: total.positive? ? (ms / total).round(4) : nil }.compact
       end
 
       def median_across(cells, field)
@@ -1775,6 +1803,18 @@ module Loadwright
       # Summed, and the count with it. One request's spans are noise; a cell's are a
       # profile, and the count is what separates "one slow call" from "four hundred
       # cheap ones" -- which have completely different fixes.
+      def accumulate_wrapper(cell, metrics)
+        return unless metrics.respond_to?(:wrapper_span)
+
+        wrapper = metrics.wrapper_span
+        return if wrapper.nil?
+
+        into = (cell.wrapper_span ||= { name: wrapper[:name], ms: 0.0, count: 0, requests: 0 })
+        into[:ms] += wrapper[:ms].to_f
+        into[:count] += wrapper[:count].to_i
+        into[:requests] += 1
+      end
+
       def accumulate_spans(cell, metrics)
         return unless metrics.respond_to?(:spans)
 

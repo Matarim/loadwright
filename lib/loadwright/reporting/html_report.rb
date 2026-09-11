@@ -559,7 +559,9 @@ module Loadwright
         end
         if rows.empty?
           reason = attribution[:unavailable_reason]
-          return reason ? "<p class=\"note\">#{h(reason)}</p>" : ""
+          return "" if reason.nil?
+
+          return "<p class=\"note\">#{h(reason)}#{h(wrapper_sentence(attribution))}</p>"
         end
 
         remainder = attribution[:unattributed_ms]
@@ -577,13 +579,25 @@ module Loadwright
                                       "the rows above added together" : ""
                  "At least #{h(remainder.to_f.round(2))}ms of “other” is announced by nothing at all" \
                    "#{basis_note}. That is ordinarily Ruby doing work: serialisation, object building, " \
-                   "computation."
+                   "computation.#{h(wrapper_sentence(attribution))}"
                end
 
         "<details class=\"other-attribution\"><summary>Inside “everything else”</summary>" \
           "<table><thead><tr><th>Event</th><th>Time</th><th>Share of request</th><th>Calls/req</th>" \
           "<th>Per call</th></tr></thead><tbody>#{rows.join}</tbody></table>" \
           "<p class=\"note\">#{note}</p></details>"
+      end
+
+      # See MarkdownReport#wrapper_sentence: a mounted framework's wrapper is the request
+      # rather than a part of it, so it is kept out of the ranking and named here instead.
+      def wrapper_sentence(attribution)
+        wrapper = attribution[:wrapper]
+        return "" if wrapper.nil?
+
+        share = wrapper[:share] ? " (#{(wrapper[:share].to_f * 100).round(1)}% of the request)" : ""
+        " The outer layer #{wrapper[:name]} covered #{wrapper[:ms].to_f.round(2)}ms#{share} and is " \
+          "excluded from the ranking because it IS the request rather than a part of it, so what is " \
+          "unnamed here is what happened inside your handler."
       end
 
       # "NO FINDINGS" IS A CLAIM ABOUT AN API, and it is only true if the API was measured.

@@ -38,11 +38,12 @@ module Loadwright
         unattributed_query_count
       ].freeze
 
-      attr_reader :request_id, :capability_epoch, :queries, :collector, :spans
+      attr_reader :request_id, :capability_epoch, :queries, :collector, :spans, :wrapper_span
 
       MEASURED_FIELDS.each { |field| attr_reader field }
 
-      def initialize(request_id:, collector: nil, capability_epoch: 0, queries: [], spans: {}, **measured)
+      def initialize(request_id:, collector: nil, capability_epoch: 0, queries: [], spans: {},
+                     wrapper_span: nil, **measured)
         unknown = measured.keys - MEASURED_FIELDS
         raise ArgumentError, "unknown metric(s): #{unknown.join(', ')}" if unknown.any?
 
@@ -54,6 +55,9 @@ module Loadwright
         # not a measured quantity with a tri-state -- an empty map means "the app
         # announced nothing", which is a true and unremarkable answer.
         @spans = Hash(spans).freeze
+        # The event that IS the request on this stack, where there was one. Not a part of
+        # the request, so never ranked against the parts.
+        @wrapper_span = wrapper_span&.freeze
 
         MEASURED_FIELDS.each do |field|
           value = measured.fetch(field) do

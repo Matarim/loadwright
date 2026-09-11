@@ -216,6 +216,34 @@ RSpec.describe Loadwright::Execution::CollectorMiddleware do
       breakdown&.stop!
     end
 
+    # The wrapper is what the ranking excludes and the prose names, so it has to cross
+    # this boundary too or `:http` reports "nothing announced itself" on a stack where
+    # the outer layer was measured and dropped.
+    it "returns the framework wrapper alongside the spans" do
+      breakdown = Loadwright::Analysis::TimeBreakdown.new(config: config)
+      described_class.unmount!
+      config.attribute_other_time = true
+      wrapper_secret = described_class.mount!(tracker: tracker, time_breakdown: breakdown)
+      tracker.begin_request("req-3")
+      Loadwright::Instrumentation::CurrentRequest.with("req-3") do
+        ActiveSupport::Notifications.instrument("endpoint_run.grape") do
+          ActiveSupport::Notifications.instrument("calculate.my_app") { nil }
+        end
+      end
+      tracker.end_request("req-3")
+
+      _, _, body = described_class.new(->(_) { raise }).call(
+        rack_env(path: described_class::COLLECTION_PATH, secret: wrapper_secret,
+                 remote: "127.0.0.1", query: "request_id=req-3")
+      )
+
+      payload = JSON.parse(body.join)
+      expect(payload["wrapper_span"]).to include("name" => "endpoint_run.grape")
+      expect(payload["spans"].keys).to eq(["calculate.my_app"])
+    ensure
+      breakdown&.stop!
+    end
+
     it "requires the per-run secret" do
       expect(collect(secret_header: "wrong-but-same-length-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").first).to eq(403)
       expect(collect(secret_header: "short").first).to eq(403)

@@ -345,6 +345,137 @@ RSpec.describe Loadwright::Analysis::TimeBreakdown do
 
   # ATTRIBUTING AN ALREADY-COUNTED EVENT WOULD LET THE PARTS EXCEED THE WHOLE, which is
   # the one thing a breakdown must never do.
+  # WALL TIME IN AN EVENT, NOT THE SUM OF ITS DURATIONS. An event nested inside ITSELF
+  # gets counted once per level: Rails fires `process_middleware.action_dispatch` once
+  # per middleware, each wrapping the rest of the stack. Summed, three nested levels of a
+  # 50ms event reported 159.9ms and a share of 307% of the request -- the same species as
+  # the 691% share that measuring against the residual used to produce.
+  describe "an event nested inside itself" do
+    before do
+      config.attribute_other_time = true
+      breakdown.start!
+    end
+
+    # THE ARITHMETIC, WITH EXPLICIT INTERVALS. A `sleep`-based assertion on a merged
+    # duration is an assertion about the machine's load, and this repo already carries
+    # three clock-sensitive examples it regrets.
+    def absorb(bucket, name, from, to)
+      breakdown.send(:absorb_span, bucket, name, from, to)
+    end
+
+    it "counts the wall time once, not once per level" do
+      bucket = {}
+
+      absorb(bucket, "cache_read.active_support", 100.010, 100.020)
+      absorb(bucket, "cache_read.active_support", 100.005, 100.030)
+      absorb(bucket, "cache_read.active_support", 100.000, 100.040)
+
+      expect(bucket["cache_read.active_support"][:ms]).to be_within(0.001).of(40.0)
+      expect(bucket["cache_read.active_support"][:count]).to eq(3)
+    end
+
+    it "merges a partial overlap rather than counting the shared part twice" do
+      bucket = {}
+
+      absorb(bucket, "a.b", 100.000, 100.020)
+      absorb(bucket, "a.b", 100.010, 100.030)
+
+      expect(bucket["a.b"][:ms]).to be_within(0.001).of(30.0)
+    end
+
+    # The end-to-end version, asserted as a RELATIONSHIP rather than a figure: summed,
+    # three nested levels of the same event would report about three times the wall
+    # time, which no tolerance on a real clock can be mistaken for.
+    it "reports far less than the sum of its levels, through real notifications" do
+      Loadwright::Instrumentation::CurrentRequest.with("req-1") do
+        ActiveSupport::Notifications.instrument("cache_read.active_support") do
+          ActiveSupport::Notifications.instrument("cache_read.active_support") do
+            ActiveSupport::Notifications.instrument("cache_read.active_support") { sleep 0.03 }
+          end
+        end
+      end
+
+      span = breakdown.spans_for("req-1")["cache_read.active_support"]
+      expect(span[:ms]).to be >= 25.0
+      expect(span[:ms]).to be < 70.0
+    end
+
+    # Three nested middlewares really are three calls, so the per-call figure stays
+    # truthful even though the total stops double-counting.
+    it "still counts the occurrences" do
+      Loadwright::Instrumentation::CurrentRequest.with("req-1") do
+        ActiveSupport::Notifications.instrument("cache_read.active_support") do
+          ActiveSupport::Notifications.instrument("cache_read.active_support") { nil }
+        end
+      end
+
+      expect(breakdown.spans_for("req-1")["cache_read.active_support"][:count]).to eq(2)
+    end
+
+    it "adds up sequential occurrences of the same event as before" do
+      bucket = {}
+
+      absorb(bucket, "cache_read.active_support", 100.000, 100.010)
+      absorb(bucket, "cache_read.active_support", 100.020, 100.030)
+      absorb(bucket, "cache_read.active_support", 100.040, 100.050)
+
+      expect(bucket["cache_read.active_support"][:ms]).to be_within(0.001).of(30.0)
+      expect(bucket["cache_read.active_support"][:count]).to eq(3)
+    end
+
+    # The merged intervals are working state: nothing downstream can use them, they
+    # would cross the collection endpoint as noise, and they are the one part of a span
+    # that is not a measurement.
+    it "does not hand the intervals to anything downstream" do
+      Loadwright::Instrumentation::CurrentRequest.with("req-1") do
+        ActiveSupport::Notifications.instrument("cache_read.active_support") { nil }
+      end
+
+      expect(breakdown.spans_for("req-1")["cache_read.active_support"].keys).to contain_exactly(:ms, :count)
+    end
+  end
+
+  # THE OUTER LAYER IS KEPT, NOT DISCARDED. A wrapper cannot compete for a ranking slot
+  # -- it is the request, not a part of it -- but "the handler body was 98% of this and
+  # nothing inside it announced itself" points a reader at where to put an `instrument`
+  # call, where "nothing announced itself" reads as the tool having seen nothing.
+  describe "#wrapper_for" do
+    before do
+      config.attribute_other_time = true
+      breakdown.start!
+    end
+
+    it "names the wrapper and its cost, while keeping it out of the spans" do
+      Loadwright::Instrumentation::CurrentRequest.with("req-1") do
+        ActiveSupport::Notifications.instrument("endpoint_run.grape") do
+          ActiveSupport::Notifications.instrument("instantiation.active_record") { sleep 0.01 }
+        end
+      end
+
+      expect(breakdown.spans_for("req-1").keys).to eq(["instantiation.active_record"])
+      expect(breakdown.wrapper_for("req-1")[:name]).to eq("endpoint_run.grape")
+      expect(breakdown.wrapper_for("req-1")[:ms]).to be > 0
+    end
+
+    it "is nil on a stack with no wrapper, rather than inventing one" do
+      Loadwright::Instrumentation::CurrentRequest.with("req-1") do
+        ActiveSupport::Notifications.instrument("calculate.my_app") { nil }
+      end
+
+      expect(breakdown.wrapper_for("req-1")).to be_nil
+    end
+
+    it "is released with the request" do
+      Loadwright::Instrumentation::CurrentRequest.with("req-1") do
+        ActiveSupport::Notifications.instrument("endpoint_run.grape") { nil }
+      end
+
+      breakdown.forget("req-1")
+
+      expect(breakdown.wrapper_for("req-1")).to be_nil
+    end
+  end
+
   describe "which events are eligible at all" do
     it "excludes the wrapper, the queries and the renders" do
       expect(described_class::ACCOUNTED_EVENTS)
@@ -360,6 +491,22 @@ RSpec.describe Loadwright::Analysis::TimeBreakdown do
     it "excludes a mounted framework's endpoint wrapper and renderer" do
       expect(described_class::ACCOUNTED_EVENTS)
         .to include("endpoint_run.grape", "endpoint_render.grape")
+    end
+
+    # EVERY MIDDLEWARE WRAPS THE REST OF THE STACK, under one event name, so the
+    # outermost is the whole request. Rails only installs this instrumentation when
+    # something is subscribed to it -- and subscribing to everything is what this class
+    # does, so the tool was switching on the events that then masked the application's.
+    it "excludes the middleware and GraphQL wrappers" do
+      expect(described_class::ACCOUNTED_EVENTS)
+        .to include("process_middleware.action_dispatch", "graphql.execute_multiplex",
+                    "graphql.execute_query")
+    end
+
+    # Per-FIELD events are parts of a GraphQL request, not the request, and a resolver
+    # problem is exactly what they surface.
+    it "keeps GraphQL's per-field events rankable" do
+      expect(described_class::ACCOUNTED_EVENTS).not_to include("graphql.execute_field")
     end
 
     it "excludes whatever else the user named, for a framework this gem does not know" do

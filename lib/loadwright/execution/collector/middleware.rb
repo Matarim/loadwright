@@ -78,6 +78,7 @@ module Loadwright
                                     "view_runtime_ms"),
             gc_time_ms: detail_measurement(detail, "gc_time_ms"),
             spans: spans_from(detail),
+            wrapper_span: wrapper_from(detail),
             allocations: header_measurement(raw_response, CollectorMiddleware::ALLOCATIONS_HEADER),
             **response_derived(raw_response, request)
           )
@@ -93,6 +94,14 @@ module Loadwright
           return {} unless raw.is_a?(Hash)
 
           raw.to_h { |name, span| [name.to_s, { ms: span["ms"].to_f, count: span["count"].to_i }] }
+        end
+
+        # The event that IS the request on the target's stack, where it has one.
+        def wrapper_from(detail)
+          raw = detail && detail["wrapper_span"]
+          return nil unless raw.is_a?(Hash) && raw["name"]
+
+          { name: raw["name"], ms: raw["ms"].to_f, count: raw["count"].to_i }
         end
 
         def timing(raw_response, detail, header, detail_key)

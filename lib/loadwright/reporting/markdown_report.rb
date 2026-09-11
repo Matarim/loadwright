@@ -309,12 +309,31 @@ module Loadwright
            span[:share] ? "#{(span[:share].to_f * 100).round(1)}%" : "—",
            calls_per_request(span), span[:per_call_ms] ? "#{span[:per_call_ms].to_f.round(3)}ms" : "—"]
         end
-        return ["", "_#{attribution[:unavailable_reason]}_"].join("\n") if rows.empty? && attribution[:unavailable_reason]
-        return "" if rows.empty?
+        if rows.empty?
+          reason = attribution[:unavailable_reason]
+          return "" if reason.nil?
+
+          return ["", "_#{reason}#{wrapper_sentence(attribution)}_"].join("\n")
+        end
 
         ["", "**Inside \"everything else\"** — the largest spans the application announced, per request:", "",
          table(["Event", "Time", "Share of request", "Calls/req", "Per call"], rows), "",
          unattributed_note(attribution)].compact.join("\n")
+      end
+
+      # WHAT THE OUTER LAYER WAS, when the stack has one. A mounted framework's endpoint
+      # wrapper is the request rather than a part of it, so it is kept out of the ranking
+      # -- but saying "the handler body was 98% of this and nothing inside it announced
+      # itself" points a reader at where to put an `instrument` call, where "nothing
+      # announced itself" reads as the tool having seen nothing at all.
+      def wrapper_sentence(attribution)
+        wrapper = attribution[:wrapper]
+        return "" if wrapper.nil?
+
+        share = wrapper[:share] ? " (#{(wrapper[:share].to_f * 100).round(1)}% of the request)" : ""
+        " The outer layer `#{wrapper[:name]}` covered #{wrapper[:ms].to_f.round(2)}ms#{share} and is " \
+          "excluded from the ranking because it IS the request rather than a part of it — so what is " \
+          "unnamed here is what happened inside your handler."
       end
 
       # PER REQUEST, LIKE THE TIME BESIDE IT. The column used to print the run total next
@@ -341,7 +360,7 @@ module Loadwright
         if remainder.nil?
           reason = attribution[:unattributed_reason]
           return "_These spans can nest inside one another, so they do not add up to `other`." \
-                 "#{reason ? " #{reason.tr('`', "'")}" : ''}_"
+                 "#{reason ? " #{reason.tr('`', "'")}" : ''}#{wrapper_sentence(attribution)}_"
         end
 
         basis = attribution[:unattributed_basis]
@@ -356,7 +375,7 @@ module Loadwright
         "_At least #{remainder.to_f.round(2)}ms of `other` is announced by nothing at all#{arithmetic}. " \
           "That is ordinarily Ruby doing work: serialisation, object building, computation in the " \
           "controller. These spans can nest, so they are observed durations rather than a partition " \
-          "of `other`._"
+          "of `other`.#{wrapper_sentence(attribution)}_"
       end
 
       def latency_block(endpoint)

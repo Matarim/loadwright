@@ -528,14 +528,46 @@ large remainder on a slow endpoint points at computation, not at anything the fr
 is doing. The `Calls` column is what separates one slow call from four hundred cheap
 ones, which have entirely different fixes.
 
-**A span that IS the request is not a part of it.** Rails' `process_action` is excluded
-from this table for that reason, and so are the render events and Grape's `endpoint_run`
-and `endpoint_render`. If your framework emits its own equivalent, name it in
+**A span that IS the request is not a part of it**, so it is excluded from the ranking
+and named in the note underneath instead — "the outer layer `endpoint_run.grape` covered
+188.8ms (93.3% of the request)", which tells you the unnamed time is inside your own
+handler. Excluded by default:
+
+| Event | What it is |
+|---|---|
+| `process_action.action_controller` | the Rails request |
+| `render_template` / `render_partial` / `render_collection` / `render_layout` | already counted as `view` |
+| `sql.active_record` | already counted as `db` |
+| `endpoint_run.grape`, `endpoint_render.grape`, `endpoint_run_filters.grape`, `endpoint_run_validators.grape`, `format_response.grape` | the Grape request and its phases |
+| `process_middleware.action_dispatch` | each middleware wraps the rest of the stack |
+| `graphql.execute_multiplex`, `graphql.execute_query`, `graphql.execute_query_lazy` | the GraphQL request and operation (per-*field* events stay rankable) |
+| `start_processing.action_controller` | a lifecycle marker with no work in it |
+
+If your framework emits its own equivalent — Sinatra, Roda, Hanami and most mounted Rack
+apps emit nothing at all, but any of them can be instrumented — name it in
 `accounted_span_events`. The symptom is unmistakable: a span sitting at 90–100% of every
-request, on every endpoint, holding a permanent seat in the top offenders — and taking the
-unattributed remainder with it, because a span the size of the request is always larger
-than the residual inside it. This is matched by name and never by size, because a genuine
+request, on every endpoint, holding a permanent seat in the top offenders, and taking the
+unattributed remainder with it. Matched by **name and never by size**, because a genuine
 single span at 95% of a request is exactly what this feature exists to find.
+
+**Nested occurrences of one event are unioned, not summed.** `process_middleware` fires
+once per middleware, each wrapping the rest; a cache read around a cache read, or a
+serializer that recurses, does the same. Summed, three nested levels of a 50ms event
+report 150ms — so what is reported is the wall time the event actually covered, while
+`Calls/req` still counts every occurrence.
+
+**What this cannot do.** `ActiveSupport::Notifications` is the ceiling: it can only name
+work that announced itself. If the unattributed remainder is most of your residual, the
+time is in plain Ruby no notification sees, and the way to name it is to wrap the
+suspected call:
+
+```ruby
+ActiveSupport::Notifications.instrument("calculate_payoff.my_app") { expensive_thing }
+```
+
+One integration had a calculation whose cost existed only in a log line; three lines of
+that made it a ranked span with a per-call cost. That is the intended workflow — the tool
+narrows `other` to "inside your handler, unannounced", and you decide what to name next.
 
 **The share is of the whole request, not of `other`.** A span nests inside the request
 by construction; it does not nest inside the residual, which excludes database and view
