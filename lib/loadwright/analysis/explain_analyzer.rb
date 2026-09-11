@@ -380,7 +380,9 @@ module Loadwright
             kind: :stale_statistics, confidence: :medium,
             detail: "the planner estimated #{estimated.round} row(s) and got #{actual}; " \
                     "the table statistics are stale. Run ANALYZE on #{node['Relation Name'] || 'the table'} " \
-                    "before trusting a plan-based conclusion here.",
+                    "before trusting a plan-based conclusion here. This one is about the DATABASE's " \
+                    "state rather than your code -- it tracks when statistics were last refreshed, so " \
+                    "it can appear and disappear between runs of identical code.",
             evidence: { endpoint: plan.endpoint_key, fingerprint: plan.fingerprint,
                         estimated_rows: estimated, actual_rows: actual, node: node["Node Type"] }
           )

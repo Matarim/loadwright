@@ -140,7 +140,10 @@ module Loadwright
         return nil if unresolvable_parameter?(name)
 
         by_parameter = Array(@seeded_ids[name.to_s] || @seeded_ids[name.to_sym])
-        return by_parameter[index % by_parameter.length] unless by_parameter.empty?
+        unless by_parameter.empty?
+          note_lookup(name.to_s, name)
+          return by_parameter[index % by_parameter.length]
+        end
 
         resource = resource_from_name(name)
         return nil if resource.nil?
@@ -221,6 +224,11 @@ module Loadwright
 
       def unresolvable_parameter?(name) = @unresolvable_parameters.include?(name.to_s)
 
+      def note_lookup(name, endpoint)
+        (@looked_up[name] ||= []) << endpoint.to_s
+        @looked_up[name].uniq!
+      end
+
       # `/api/v1/posts/{id}/comments` with param :id resolves against the "post"
       # resource — the segment immediately preceding the parameter, singularised.
       # `{post_id}` resolves against "post" directly.
@@ -230,7 +238,16 @@ module Loadwright
         # through to its resource's shared value, so this cannot disturb what already
         # works.
         by_parameter = Array(@seeded_ids[param.to_s] || @seeded_ids[param.to_sym])
-        return by_parameter[index % by_parameter.length] unless by_parameter.empty?
+        unless by_parameter.empty?
+          # RECORDED AS ASKED FOR, and it was not. This branch returned before the
+          # bookkeeping below, so a `values:` key spelled as the literal parameter name
+          # resolved endpoints all run and was then reported by the unconsumed-key audit
+          # as having matched nothing -- a warning telling the user to change a key that
+          # was working. The audit's remedy was right and its diagnosis was wrong, which
+          # is the more dangerous half to get wrong: the user acts on the diagnosis.
+          note_lookup(param.to_s, endpoint)
+          return by_parameter[index % by_parameter.length]
+        end
 
         resource = resource_for(endpoint, param)
         return nil if resource.nil?
@@ -242,8 +259,7 @@ module Loadwright
         # looks exactly like one with no factory_map entry at all. One integration
         # configured `value:` correctly, watched 100 rows get seeded, saw no warning,
         # and had the recorded literal sent anyway.
-        (@looked_up[resource] ||= []) << endpoint.to_s
-        @looked_up[resource].uniq!
+        note_lookup(resource, endpoint)
 
         ids = Array(@seeded_ids[resource] || @seeded_ids[resource.to_sym])
         return nil if ids.empty?

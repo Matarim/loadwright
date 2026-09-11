@@ -93,6 +93,8 @@ module Loadwright
         @errors_by_endpoint = Hash.new(0)
         @observations_by_endpoint = Hash.new(0)
         @quarantine_reasons = {}
+        # Errors an endpoint produced AFTER it was set aside: real, and not the run's.
+        @post_quarantine_errors = Hash.new(0)
         @endpoints_seen = []
         @quarantined = []
         @trip = nil
@@ -101,6 +103,8 @@ module Loadwright
 
       def record_success(endpoint_key = nil)
         @mutex.synchronize do
+          next if quarantined_key?(endpoint_key)
+
           @observations += 1
           @observations_by_endpoint[endpoint_key] += 1 if endpoint_key
           note_endpoint(endpoint_key)
@@ -110,8 +114,32 @@ module Loadwright
 
       # An endpoint-level failure: bad status, unexpected exception, anything the
       # guard did not claim.
+      #
+      # A QUARANTINED ENDPOINT IS NO LONGER BEING MEASURED, so it no longer contributes
+      # to the global rate -- and that has to hold for every request it makes AFTER the
+      # quarantine, not just for the ones already counted at the moment of it.
+      #
+      # THE BUG THIS FIXES, because it looked like the opposite of what it was.
+      # `quarantine!` subtracts the endpoint's errors and clears the trip, correctly. But
+      # quarantine takes effect between CELLS, so the rest of the cell that triggered it
+      # kept erroring and kept calling this method -- refilling the numerator it had just
+      # been emptied of, from zero, for an endpoint already set aside. Worse, the refill
+      # could no longer be deferred: `concentrated_endpoint` subtracts the quarantine list
+      # from the endpoints it has seen, so with two endpoints seen and one quarantined it
+      # judged there was nothing to carry on with and stopped deferring.
+      #
+      # The observable result was a run that printed "quarantining it and continuing with
+      # the rest of the run" and died one log line later on the very errors quarantine had
+      # just handled -- 26 of 126 requests, from the one endpoint it had already retired.
       def record_error(endpoint_key = nil)
         @mutex.synchronize do
+          if quarantined_key?(endpoint_key)
+            # Still counted for the endpoint's own record, so the report can say how badly
+            # it failed. Just not against the run.
+            @post_quarantine_errors[endpoint_key] += 1
+            next
+          end
+
           @observations += 1
           @errors += 1
           if endpoint_key
@@ -196,13 +224,25 @@ module Loadwright
             error_rate: @observations.zero? ? 0.0 : @errors.fdiv(@observations),
             contention_events: @contention_events,
             contention_excluded_from_error_rate: true,
+            errors_after_quarantine: @post_quarantine_errors.dup,
             tripped: !@trip.nil?,
-            trip_reason: @trip&.message
+            trip_reason: @trip&.message,
+            # THE NUMBERS THE DECISION WAS MADE ON, frozen at the moment it was made.
+            # The three above are end-of-run totals and kept moving after the trip, so an
+            # auditor reading the record computed a rate that matched neither the abort
+            # message nor the threshold -- for the same event. A decision has to be
+            # reconstructible from the artifact that records it.
+            trip_observations: @trip&.observations,
+            trip_errors: @trip&.errors,
+            trip_error_rate: @trip&.error_rate
           }
         end
       end
 
       private
+
+      # Called with the mutex held.
+      def quarantined_key?(endpoint_key) = !endpoint_key.nil? && @quarantined.include?(endpoint_key)
 
       # Called with the mutex held.
       def evaluate
@@ -241,8 +281,14 @@ module Loadwright
       # The RATE rule catches it directly: an endpoint failing on nearly every request
       # is broken whatever anything else is doing, which is what the breaker's own
       # "this endpoint is broken" half is supposed to mean.
+      # ENOUGH SURFACE TO CARRY ON WITH, measured against the surface the engine DECLARED
+      # rather than against what has been seen minus what has been quarantined. The latter
+      # made the check depend on how far the run had got: two endpoints seen and one
+      # quarantined read as "nothing left to measure" in a run with eighty-five endpoints
+      # still ahead of it, so deferral stopped and the run aborted on an endpoint it had
+      # already set aside.
       def concentrated_endpoint
-        return nil if (@endpoints_seen - @quarantined).length < 2
+        return nil if remaining_surface < 2
 
         by_share = endpoint_owning_most_errors
         return by_share if by_share
@@ -276,6 +322,9 @@ module Loadwright
       def surface_size
         [expected_endpoints.to_i, @endpoints_seen.length].max
       end
+
+      # What is left to measure if one more endpoint is set aside.
+      def remaining_surface = surface_size - @quarantined.length
     end
   end
 end

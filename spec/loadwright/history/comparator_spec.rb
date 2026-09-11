@@ -445,6 +445,21 @@ RSpec.describe Loadwright::History::Comparator do
       expect(resolved[:resolved]).to be(true)
     end
 
+    # A PLANNER-ESTIMATE FINDING TRACKS THE DATABASE, NOT THE CODE. It appears and
+    # disappears between runs of identical code depending on when ANALYZE last ran -- one
+    # did exactly that across two runs an integration had every reason to expect to
+    # match. Called "resolved", it reads as a fix that never happened.
+    it "refuses to call an environment-dependent finding fixed" do
+      before = record(endpoints: [endpoint("GET /a", state: "has_findings", findings: [:stale_statistics])])
+      after = record(endpoints: [endpoint("GET /a")])
+
+      resolved = comparator.compare(before, after).resolved_findings.first
+
+      expect(resolved[:resolved]).to be(false)
+      expect(resolved[:environment_dependent]).to be(true)
+      expect(resolved[:note]).to include("not evidence of a fix")
+    end
+
     it "reports the same finding at a different magnitude" do
       before = record(endpoints: [endpoint("GET /a", state: "has_findings",
                                            findings: [{ "kind" => "n_plus_one_slope", "detail" => "3x" }])])

@@ -388,6 +388,13 @@ module Loadwright
 
       # -------------------------------------------------------------- findings & state
 
+      # FINDINGS THAT TRACK THE ENVIRONMENT, NOT THE CODE. A planner-estimate finding
+      # says when ANALYZE last ran; it appears and disappears between runs of identical
+      # code, and one did exactly that across two runs an integration had every reason to
+      # expect to match. Reported without that label it reads as a fix on one side and a
+      # regression on the other, and neither happened.
+      ENVIRONMENT_DEPENDENT_KINDS = %w[stale_statistics].freeze
+
       def findings_diff(before, after, shared, direction)
         shared.flat_map do |key|
           old_kinds = finding_kinds(before, key)
@@ -413,6 +420,12 @@ module Loadwright
             { endpoint: key, finding: kind, resolved: false,
               note: "this finding is absent because the endpoint became INCONCLUSIVE, not because it " \
                     "was fixed -- nothing was measured to fix. See its transition below." }
+          elsif ENVIRONMENT_DEPENDENT_KINDS.include?(kind.to_s)
+            { endpoint: key, finding: kind, resolved: false, environment_dependent: true,
+              note: "this finding tracks the DATABASE's state rather than the application's code -- " \
+                    "when the planner's statistics were last refreshed, not what the endpoint does. It " \
+                    "comes and goes between runs of identical code, so its disappearance is not " \
+                    "evidence of a fix and its appearance is not evidence of a regression." }
           else
             { endpoint: key, finding: kind, resolved: true }
           end
@@ -685,8 +698,39 @@ module Loadwright
 
       # ------------------------------------------------------------------ record access
 
+      # NORMALISED THE SAME WAY THE FINGERPRINT NORMALISES, or the two disagree. The
+      # persisted snapshot holds whatever `inspect` made of a lambda, which carries a
+      # memory address -- so two runs of an identical config would report a `factory_map`
+      # divergence while their fingerprints matched, which is a false alarm in the one
+      # place a reader is relying on the tool to be precise.
+      #
+      # And for the keys that may hold credentials, only the shape is compared and only
+      # the shape is ever shown: a comparison report must not print a token in a
+      # before/after column.
+      CALLABLE_IN_SNAPSHOT = /\A#<(Proc|Method)[: ]/
+
       def comparability_value(record, key)
-        record.metadata.dig("config", key.to_s, "value")
+        value = record.metadata.dig("config", key.to_s, "value")
+        return shape_of(value) if Configuration::SHAPE_ONLY_COMPARABILITY_KEYS.include?(key)
+
+        normalise(value)
+      end
+
+      def shape_of(value)
+        case value
+        when Hash then value.keys.map(&:to_s).sort
+        when Array then value.length
+        else value.nil? ? nil : "<set>"
+        end
+      end
+
+      def normalise(value)
+        case value
+        when String then value.match?(CALLABLE_IN_SNAPSHOT) ? "<callable>" : value
+        when Hash then value.to_h { |k, v| [k.to_s, normalise(v)] }.sort.to_h
+        when Array then value.map { |element| normalise(element) }
+        else value
+        end
       end
 
       def observed_page_sizes(record)

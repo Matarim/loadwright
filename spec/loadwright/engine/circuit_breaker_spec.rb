@@ -181,6 +181,80 @@ RSpec.describe Loadwright::Engine::CircuitBreaker do
       expect(subject).to be_tripped
     end
 
+    # THE RUN THAT DIED ON ERRORS IT HAD ALREADY HANDLED. Quarantine takes effect
+    # between cells, so the rest of the cell that triggered it kept erroring and kept
+    # recording -- refilling the numerator it had just been emptied of, from zero, for an
+    # endpoint already set aside. The observable result: "quarantining it and continuing
+    # with the rest of the run", then an abort one log line later on the same endpoint's
+    # failures. Reproduced to the digit at 26 of 126 requests (20.6%).
+    it "ignores a quarantined endpoint's later requests entirely" do
+      subject = described_class.new(config: config)
+      subject.expected_endpoints = 87
+      100.times { subject.record_success("GET /a/details") }
+      subject.record_error("GET /a/calculate_tax")
+      subject.quarantine!(subject.quarantine_candidate)
+
+      26.times { subject.record_error("GET /a/calculate_tax") }
+
+      expect(subject.errors).to eq(0)
+      expect(subject.observations).to eq(100)
+      expect(subject).not_to be_tripped
+    end
+
+    it "still records what a quarantined endpoint did, for the endpoint's own account" do
+      subject = described_class.new(config: config)
+      subject.expected_endpoints = 87
+      6.times { subject.record_success("GET /fine") }
+      subject.record_error("GET /broken")
+      subject.quarantine!("GET /broken")
+
+      5.times { subject.record_error("GET /broken") }
+
+      expect(subject.to_h[:errors_after_quarantine]).to eq("GET /broken" => 5)
+    end
+
+    # "ENOUGH LEFT TO CARRY ON WITH" MEASURED AGAINST THE DECLARED SURFACE, not against
+    # what has been seen minus what has been quarantined. The latter made deferral depend
+    # on how far the run had got: two endpoints seen and one quarantined read as "nothing
+    # left to measure" in a run with eighty-five endpoints still ahead of it.
+    it "keeps deferring to quarantine while the declared surface has endpoints left" do
+      subject = described_class.new(config: config, minimum_observations: 4)
+      subject.expected_endpoints = 87
+      # Two endpoints reached so far, one of them already set aside -- and eighty-five
+      # the sweep has not got to yet.
+      6.times { subject.record_success("GET /reached-first") }
+      4.times { subject.record_error("GET /broken-1") }
+      subject.quarantine!("GET /broken-1")
+
+      6.times { subject.record_error("GET /reached-first") }
+
+      expect(subject.quarantine_candidate).to eq("GET /reached-first")
+      expect(subject).not_to be_tripped
+    end
+
+    # A DECISION MUST BE RECONSTRUCTIBLE FROM THE RECORD OF IT. The running totals keep
+    # moving after the trip, so an auditor reading the persisted block computed a rate
+    # that matched neither the abort message nor the threshold, for the same event.
+    it "persists the numbers the trip was decided on, not just the end-of-run totals" do
+      subject = described_class.new(config: config, minimum_observations: 4)
+      6.times { subject.record_success("GET /fine") }
+      3.times { subject.record_error("GET /a") }
+      subject.record_error("GET /b")
+      at_decision = subject.to_h
+      # The run keeps going until the engine reaches its next check, so the running
+      # totals move away from the numbers the decision was made on.
+      5.times { subject.record_error("GET /b") }
+      record = subject.to_h
+
+      expect(at_decision[:trip_observations]).to eq(10)
+      expect(record[:tripped]).to be(true)
+      expect(record[:observations]).to eq(15)
+      expect(record[:trip_observations]).to eq(10)
+      expect(record[:trip_errors]).to eq(4)
+      expect(record[:trip_error_rate]).to be_within(0.001).of(0.4)
+      expect(record[:trip_reason]).to include("4 of 10")
+    end
+
     # A run against a SINGLE endpoint has nothing to protect by carrying on.
     it "trips normally when there is only one endpoint in the run" do
       subject = breaker

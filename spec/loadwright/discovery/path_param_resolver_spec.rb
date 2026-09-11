@@ -308,6 +308,29 @@ RSpec.describe Loadwright::Discovery::PathParamResolver do
       expect(resolver.resolve_query_param("resource_number", index: 1)).to eq("num-2")
     end
 
+    # THE AUDIT TOLD A USER TO CHANGE A KEY THAT WAS WORKING. A `values:` key spelled as
+    # the literal parameter name resolves through the branch above, which returned before
+    # the bookkeeping -- so the unconsumed-key warning reported it as having matched
+    # nothing while it was serving an endpoint every request of the run. The remedy it
+    # printed was correct; the diagnosis was not, and the diagnosis is the half a user
+    # acts on.
+    it "counts a parameter-keyed hit as the key having been asked for" do
+      resolver = described_class.new(config: config, seeded_ids: seeded)
+
+      resolver.resolve(endpoint)
+
+      expect(resolver.looked_up).to have_key("resource_id")
+      expect(resolver.unconsumed_resources).not_to include("resource_id")
+    end
+
+    it "counts a parameter-keyed query hit too" do
+      resolver = described_class.new(config: config, seeded_ids: seeded)
+
+      resolver.resolve_query_param("resource_number")
+
+      expect(resolver.unconsumed_resources).not_to include("resource_number")
+    end
+
     it "falls through to the resource's shared value for a parameter with no entry" do
       resolver = described_class.new(config: config, seeded_ids: { "resource" => %w[shared-1] })
 

@@ -141,6 +141,7 @@ module Loadwright
     setting :attribute_other_time, true, section: :instrumentation
     setting :other_time_top_n, 3, section: :instrumentation
 
+
     setting :require_successful_response, true, section: :response_analysis
     setting :require_schema_valid_response, true, section: :response_analysis
     setting :warn_on_empty_response_with_seeded_data, true, section: :response_analysis
@@ -433,6 +434,17 @@ module Loadwright
     # The dimensions run-comparison.md requires to match before two runs may be
     # compared. Anything affecting what was measured belongs here; anything
     # affecting only presentation does not.
+    #
+    # THE LIST SAID THAT AND DID NOT DO IT. It covered load shape and containment -- how
+    # hard the API was driven -- and nothing that decides WHICH ENDPOINTS ARE REQUESTED AT
+    # ALL. So a config edit that silently stopped a path parameter resolving produced the
+    # same fingerprint as the config before it, and `loadwright compare` was willing to
+    # diff a run that measured 87 endpoints against one that measured none and stopped
+    # after fifteen seconds. The fingerprint is the only automated guard against comparing
+    # incomparable runs, and a stale config is precisely what it exists to catch.
+    #
+    # The second group is those keys. `allow_mutating_requests` belongs with them because
+    # it decides whether a whole verb class is ever sent -- 76 endpoints in one real run.
     COMPARABILITY_KEYS = %i[
       execution_mode
       scale_factors
@@ -446,7 +458,20 @@ module Loadwright
       outbound_http_allowlist
       disable_query_cache_during_run
       seed_cleanup_strategy
+      factory_map
+      path_param_overrides
+      included_paths
+      excluded_paths
+      auth_overrides
+      allow_mutating_requests
+      max_error_rate_before_abort
     ].freeze
+
+    # Keys whose VALUES may be credentials. They change what was measured, so they belong
+    # in the fingerprint; their contents must never appear in a digest input that could be
+    # brute-forced from a short token, nor in a comparison report's before/after columns.
+    # Only the shape is compared: which entries exist, not what they hold.
+    SHAPE_ONLY_COMPARABILITY_KEYS = %i[auth_overrides path_param_overrides].freeze
 
     def initialize
       @assigned = {}
@@ -512,8 +537,41 @@ module Loadwright
     # Stable digest over resolved comparability dimensions only.
     def comparability_fingerprint
       require "digest"
-      material = COMPARABILITY_KEYS.map { |k| [k, resolved.fetch(k)].inspect }.join("\n")
+      material = COMPARABILITY_KEYS.map { |k| [k, comparability_value(k)].inspect }.join("\n")
       Digest::SHA256.hexdigest(material)[0, 16]
+    end
+
+    # STABLE ACROSS PROCESSES, which is the whole requirement for a fingerprint. A raw
+    # `inspect` of `factory_map` prints each lambda's memory address, so two runs of an
+    # IDENTICAL config would fingerprint differently and nothing would ever compare. A
+    # callable is therefore reduced to the fact that a callable is there -- which still
+    # catches the case that matters, a key appearing, disappearing or being renamed.
+    #
+    # And for the keys that may hold credentials, only the shape crosses: the entry names,
+    # never their contents.
+    def comparability_value(key)
+      value = resolved.fetch(key)
+      return shape_of(value) if SHAPE_ONLY_COMPARABILITY_KEYS.include?(key)
+
+      normalise_comparability(value)
+    end
+
+    def shape_of(value)
+      case value
+      when Hash then value.keys.map(&:to_s).sort
+      when Array then value.length
+      else value.nil? ? nil : "<set>"
+      end
+    end
+
+    def normalise_comparability(value)
+      case value
+      when Proc, Method then "<callable>"
+      when Hash then value.to_h { |k, v| [k.to_s, normalise_comparability(v)] }.sort.to_h
+      when Array then value.map { |element| normalise_comparability(element) }
+      when Regexp then value.source
+      else value
+      end
     end
 
     # Cross-key checks that must fail at startup rather than mid-run.

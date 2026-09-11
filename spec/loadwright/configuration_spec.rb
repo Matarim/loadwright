@@ -256,4 +256,61 @@ RSpec.describe Loadwright::Configuration do
       expect(Loadwright.config.scale_factors).to eq([1, 2])
     end
   end
+
+  # THE FINGERPRINT IS THE ONLY AUTOMATED GUARD AGAINST COMPARING INCOMPARABLE RUNS, and
+  # it covered how hard the API was driven while ignoring everything that decides WHICH
+  # ENDPOINTS ARE REQUESTED. A config edit that stopped one path parameter resolving
+  # produced an identical fingerprint, and `compare` was willing to diff a run that
+  # measured 87 endpoints against one that measured none and stopped after 15 seconds.
+  describe "the comparability fingerprint" do
+    it "changes when factory_map changes what can be resolved" do
+      before = described_class.new
+      before.factory_map = { "customer" => { factory: :customer, value: ->(c) { c.phone } } }
+      after = described_class.new
+      after.factory_map = { "customer" => { factory: :customer,
+                                            values: { customer_guid: :guid, phone: ->(c) { c.phone } } } }
+
+      expect(before.comparability_fingerprint).not_to eq(after.comparability_fingerprint)
+    end
+
+    # A LAMBDA'S `inspect` CARRIES ITS ADDRESS, so a naive digest would differ between two
+    # runs of an identical config and nothing would ever compare again. Reducing a
+    # callable to the fact of being one still catches a key appearing or being renamed.
+    it "is stable across processes for a config full of lambdas" do
+      first = described_class.new
+      first.factory_map = { "customer" => { factory: :customer, value: ->(c) { c.phone } } }
+      second = described_class.new
+      second.factory_map = { "customer" => { factory: :customer, value: ->(c) { c.phone } } }
+
+      expect(first.comparability_fingerprint).to eq(second.comparability_fingerprint)
+    end
+
+    it "changes when the paths under test change" do
+      before = described_class.new
+      after = described_class.new
+      after.included_paths = [%r{^/api/v2/}]
+
+      expect(before.comparability_fingerprint).not_to eq(after.comparability_fingerprint)
+    end
+
+    it "changes when a whole verb class starts or stops being sent" do
+      before = described_class.new
+      after = described_class.new
+      after.allow_mutating_requests = true
+
+      expect(before.comparability_fingerprint).not_to eq(after.comparability_fingerprint)
+    end
+
+    # KEYS THAT MAY HOLD CREDENTIALS ARE COMPARED BY SHAPE. They change what was measured,
+    # so they belong in the fingerprint; their contents must not reach a digest input or a
+    # comparison report's before/after column.
+    it "notices an auth override appearing without digesting what it holds" do
+      before = described_class.new
+      after = described_class.new
+      after.auth_overrides = [{ paths: [%r{^/api/}], strategy: :bearer, token_provider: -> { "secret" } }]
+
+      expect(before.comparability_fingerprint).not_to eq(after.comparability_fingerprint)
+      expect(after.send(:comparability_value, :auth_overrides)).to eq(1)
+    end
+  end
 end
