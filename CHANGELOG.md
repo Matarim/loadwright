@@ -5,6 +5,107 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.16] — 2026-09-11
+
+Rounds 14 and 15. Round 14's finding is in the newest surface and is a false statement
+about the reader's own code; round 15's two are in surface that has been here for many
+releases, which breaks the pattern the previous round was confident about.
+
+### Fixed
+
+- **`Per call` was understated by exactly the request count, which inverted the
+  diagnosis it exists to give.** The span's duration was divided by the requests that
+  produced it and its call count was not, so a calculation running **once per request at
+  ~65ms** was reported as **600 calls at 0.108ms**.
+
+  The size of the error is not the point. The column exists because 40ms over 300 calls
+  and 40ms over one are different problems with different fixes — a loop to hoist, or
+  caching and a better algorithm — and it returned the wrong one of the two, about the
+  reader's code, in a column they had no independent way to check. It was caught in the
+  field only because that application logs the same quantity itself. The count is now per
+  request like the duration beside it, the run total is kept alongside so the arithmetic
+  reconciles, and the header reads `Calls/req`.
+
+- **A mounted framework's own wrapper spans were not treated as accounted-for.** Rails'
+  `process_action` is excluded from the span table because it *is* the request; Grape's
+  `endpoint_run` and `endpoint_render` were not. Left in, they sat at 93% of every
+  request, took 91 of ~189 ranking rows across 63 endpoints, and caused **all four** of a
+  run's remainder refusals — a span the size of the request is always larger than the
+  residual inside it. The one span that application had instrumented itself reached a
+  table once in a full run.
+
+  Both are excluded by name, and `accounted_span_events` covers a framework this gem does
+  not know. Matched by name and never by size: a genuine single span at 95% of a request
+  is exactly what this feature exists to surface, so a size heuristic would hide the
+  finding it is for. **110 config keys.**
+
+- **A quarantined endpoint's later requests kept counting against the run.** `quarantine!`
+  subtracts a quarantined endpoint's errors and clears the trip — correctly — but
+  quarantine takes effect between *cells*, so the rest of the cell that triggered it kept
+  erroring and kept recording, refilling from zero the numerator it had just been emptied
+  of. The refill could not be deferred either, because the "is there enough left to carry
+  on with" check subtracted the quarantine list from the endpoints seen so far: two seen,
+  one quarantined, and it concluded nothing remained in a run with eighty-five endpoints
+  still ahead.
+
+  The observable result was a run that printed *"quarantining it and continuing with the
+  rest of the run"* and died one log line later on those exact failures — **26 of 126
+  requests (20.6%)**, reproduced to the digit. A quarantined endpoint's later requests are
+  now ignored entirely (still recorded against the endpoint, for the report), and the
+  remaining-surface check is measured against the surface the engine declared.
+
+- **`config_fingerprint` ignored everything that decides which endpoints get requested.**
+  `COMPARABILITY_KEYS` covered load shape and containment while its own comment said
+  "anything affecting what was measured belongs here". It produced the same fingerprint
+  for a run that measured 87 endpoints over 42.7 minutes and a run that measured none and
+  stopped after fifteen seconds, and `compare` gates on exactly that equality.
+
+  Added: `factory_map`, `path_param_overrides`, `included_paths`, `excluded_paths`,
+  `auth_overrides`, `allow_mutating_requests` (it decides whether a whole verb class is
+  ever sent) and `max_error_rate_before_abort`. Callables reduce to the fact of being one,
+  because a lambda's `inspect` carries its address and a naive digest would differ between
+  two runs of an identical config. Keys that may hold credentials are compared by shape
+  only — they change what was measured, so they belong in the fingerprint, but their
+  contents must never reach a digest input or a comparison report's columns.
+
+- **The unconsumed-key audit told a user to change a key that was working.** A `values:`
+  key spelled as the literal parameter name resolves through a branch that returned before
+  the bookkeeping, so it was reported as having matched nothing while serving an endpoint
+  on every request of the run. The remedy it printed was right and only the diagnosis was
+  wrong, which is the worse half: the diagnosis is what a user acts on.
+
+### Changed
+
+- **"No findings" is now a claim the tool only makes about an API it measured.** A run
+  that aborted before reaching a single endpoint rendered the same two words a clean sweep
+  renders. Both reports and the console now say that nothing was measured and that it is
+  not a clean result.
+
+- **The console says how many findings it did not print.** It printed three under a
+  headline reading "4 with findings", and the one it dropped was the worst endpoint in the
+  run.
+
+- **The run reconciles its own endpoint counts.** It opened with "87 endpoint(s) to
+  exercise" and closed with "163 endpoint(s)" and never joined the two.
+
+- **A cell records what it sent, not what it planned.** An endpoint that resolved nothing
+  and sent nothing reported its full planned request count with an empty status map, which
+  is what made an abort unauditable from the run record. The planned figure is kept as
+  `requests_planned`.
+
+- **The circuit breaker persists the numbers its decision was made on.** The running
+  totals keep moving after a trip, so the stored block and the abort message described the
+  same event with different denominators.
+
+- **The runtime estimate is restated once real latencies exist.** The pre-run figure has
+  to assume a per-request cost and was low by about half on a real API. It is restated
+  once, and only when it moved enough to change a decision about waiting.
+
+- **`stale_statistics` is labelled as tracking the database rather than the code**, and a
+  comparison refuses to call it "resolved". It appears and disappears between runs of
+  identical code depending on when `ANALYZE` last ran, and reporting that as a fix is the
+  same class of false statement as reporting a defect that was never there.
+
 ## [0.0.15] — 2026-09-09
 
 Round 13, and both findings are the same shape: something stated confidently that was

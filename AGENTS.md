@@ -1389,6 +1389,97 @@ DIAG-51:
     same place. If a user reports growing memory on 0.0.14 with a mounted API, that is
     a real cause.
 
+DIAG-53:
+  symptom: >
+    "loadwright says this span runs hundreds of times per request" / "the per-call cost
+    looks far too small" / "the tool says many cheap calls, our own timing says one
+    expensive one"
+  cause: >
+    A bug in 0.0.15 only. The span's duration was divided by the requests that produced
+    it and its call count was not, so per-call cost was understated by exactly the
+    request count.
+  fix: >
+    0.0.16+: the count is per request like the duration beside it, the run total is kept
+    alongside as `calls`, and the column reads Calls/req.
+  do_not: >
+    Do NOT advise hoisting a loop on the strength of a 0.0.15 per-call figure. The column
+    inverts the diagnosis it exists to give: one expensive call reads as hundreds of cheap
+    ones, and those want opposite fixes. Multiply the per-call figure by the request count
+    before believing it.
+
+DIAG-54:
+  symptom: >
+    "the same two spans are at the top of every endpoint" / "my own instrumented method
+    never appears in the table" / "every endpoint refuses the unattributed remainder"
+  cause: >
+    A framework's own endpoint wrapper is being ranked as if it were a part of the
+    request. It is the request: it sits at 90-100% of every one, holds permanent ranking
+    slots, and is always larger than the residual it is shown inside -- which is why the
+    remainder cannot be computed.
+  fix: |
+    0.0.16+ excludes Grape's `endpoint_run` and `endpoint_render` alongside Rails'
+    `process_action`. For any other framework:
+      config.accounted_span_events = ["endpoint_run.my_framework"]
+  do_not: >
+    Do NOT suggest a size threshold instead. A genuine single span at 95% of a request is
+    exactly the finding this feature exists to surface; matching on size would hide it.
+    Only the name distinguishes a wrapper from a discovery.
+
+DIAG-55:
+  symptom: >
+    "the report says No findings" / "0 healthy, 0 with findings, N inconclusive" / "the
+    run finished in seconds and found nothing"
+  rule: |
+    "No findings" is a claim about an API and is only true if the API was measured. Before
+    reading it as good news, check that something reached a verdict: healthy + has_findings
+    must be greater than zero. On 0.0.16+ the report and the console say so outright when
+    nothing was measured. On earlier versions they do not, and a 15-second aborted run
+    prints the same two words a clean sweep prints.
+  say_this: >
+    An aborted run is not a clean run. Say which endpoints were measured, not how many
+    findings there were.
+
+DIAG-56:
+  symptom: >
+    "the run aborted on the circuit breaker right after quarantining an endpoint" /
+    "it said it would continue and then stopped" / "my error rate rose when an unrelated
+    endpoint stopped resolving"
+  cause: >
+    Two things on 0.0.15 and earlier. A quarantined endpoint kept recording errors against
+    the run for the rest of the cell that triggered the quarantine, refilling the numerator
+    that quarantine had just emptied. And the error RATE is over requests actually
+    attempted, so an endpoint that stops resolving contributes nothing to the denominator
+    and thereby raises the rate -- identical application, 11.5% one round and 20.6% the
+    next.
+  fix: >
+    0.0.16+ ignores a quarantined endpoint's later requests entirely and measures
+    remaining surface against the declared endpoint count. The denominator is unchanged
+    and is correct: a rate over requests attempted is the right question for a mechanism
+    whose job is to stop a broken run early.
+  do_not: >
+    Do NOT advise raising max_error_rate_before_abort to work around this. That guidance
+    was withdrawn for contention and it is wrong here too: it hides the endpoint that is
+    actually broken.
+
+DIAG-57:
+  symptom: >
+    "compare says these two runs are comparable and they clearly are not" / "our config
+    changed and the fingerprint did not"
+  cause: >
+    Before 0.0.16 `COMPARABILITY_KEYS` covered load shape and containment only -- nothing
+    that decides WHICH ENDPOINTS ARE REQUESTED. A `factory_map` edit that stopped one path
+    parameter resolving produced an identical fingerprint, and one real pair of runs
+    measuring 87 endpoints and 0 endpoints shared a fingerprint.
+  fix: >
+    0.0.16+ includes factory_map, path_param_overrides, included_paths, excluded_paths,
+    auth_overrides, allow_mutating_requests and max_error_rate_before_abort. Callables are
+    reduced to "<callable>" so an identical config fingerprints identically; keys that may
+    hold credentials are compared by shape only.
+  note: >
+    On an earlier version, check the config file's mtime against the run's start time
+    before trusting a comparison. That is how one round's conclusions came to be written
+    against a config edited 48 minutes after the sweep that supposedly validated them.
+
 DIAG-52:
   symptom: >
     "loadwright reported no findings for this endpoint and no reason either" / "is the
